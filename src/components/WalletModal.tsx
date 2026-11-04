@@ -62,9 +62,9 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     }
   }, [initialMode]);
 
-  // Deposit Form State
-  const [depositAmt, setDepositAmt] = useState<number>(50000);
-  const [depositAmtInput, setDepositAmtInput] = useState<string>('50000');
+  // Deposit Form State — starts empty so users can freely type/edit any custom amount (e.g. 35000, 140000) or tap a preset
+  const [depositAmt, setDepositAmt] = useState<number>(0);
+  const [depositAmtInput, setDepositAmtInput] = useState<string>('');
   const [depositMethod, setDepositMethod] = useState<string>('MTN MOBILE MONEY');
   const [depositPhone, setDepositPhone] = useState<string>(user?.phone_number || '');
   const [depositRefInput, setDepositRefInput] = useState<string>('');
@@ -77,6 +77,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
   // Withdraw Form State (Rules: Mon-Fri, 10% fee, Min 3k, Max 5M, 3k eligible for customers only)
   const [withdrawAmt, setWithdrawAmt] = useState<number>(3000);
+  const [withdrawAmtInput, setWithdrawAmtInput] = useState<string>('3000');
   const [withdrawMethod, setWithdrawMethod] = useState<string>('MTN Mobile Money');
   const [withdrawPhone, setWithdrawPhone] = useState<string>(user?.phone_number || '');
   const [accountName, setAccountName] = useState<string>(user?.full_name || '');
@@ -233,13 +234,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     setTimeout(() => setCopiedField(null), 2500);
   };
 
-  // Step 3 -> Step 4 handler: Validates amount & sender phone, then reveals Company Payment Information
+  // Step 3 -> Step 4 handler: Validates any custom amount (>= 5,000 UGX) & sender phone, then reveals Company Payment Information
   const handleProceedToPaymentInfo = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage(null);
-    const numAmt = Number(depositAmtInput || depositAmt);
-    if (isNaN(numAmt) || numAmt < 5000) {
-      setMessage({ type: 'error', text: 'MINIMUM DEPOSIT: UGX 5,000. Please enter at least 5,000 UGX.' });
+    const cleanDigits = String(depositAmtInput || depositAmt || '').replace(/[^0-9]/g, '');
+    const numAmt = Number(cleanDigits);
+    if (!cleanDigits || isNaN(numAmt) || numAmt < 5000) {
+      setMessage({ type: 'error', text: 'MINIMUM DEPOSIT: UGX 5,000. Please enter any amount of 5,000 UGX or more (e.g. 35,000 or 140,000).' });
       return;
     }
     if (!depositPhone.trim() || depositPhone.replace(/\D/g, '').length < 7) {
@@ -250,6 +252,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       return;
     }
     setDepositAmt(numAmt);
+    setDepositAmtInput(String(numAmt));
     await fetchActiveReceiver(false);
     setPaymentCountdown(1795); // 00:29:55
     setDepositStep('PAYMENT_INFO');
@@ -691,27 +694,47 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Enter the Amount You Wish to Deposit (UGX) */}
+                  {/* Enter the Amount You Wish to Deposit (UGX) — Freely Editable for Any Custom Amount */}
                   <div className="space-y-2">
-                    <label className="block text-xs font-extrabold text-slate-200 uppercase tracking-wider">
-                      ENTER THE AMOUNT YOU WISH TO DEPOSIT (UGX)
-                    </label>
-                    <input
-                      type="number"
-                      min="5000"
-                      step="1000"
-                      placeholder="Enter the amount you wish to deposit"
-                      value={depositAmtInput}
-                      onChange={(e) => {
-                        setDepositAmtInput(e.target.value);
-                        const parsed = Number(e.target.value);
-                        if (!isNaN(parsed)) setDepositAmt(parsed);
-                      }}
-                      className="w-full px-4 py-3.5 bg-[#070e1f] border border-blue-900/80 focus:border-blue-500 rounded-2xl text-sm font-bold text-white outline-none font-mono placeholder:text-slate-400"
-                      required
-                    />
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="block text-xs font-extrabold text-slate-200 uppercase tracking-wider">
+                        ENTER THE AMOUNT YOU WISH TO DEPOSIT (UGX)
+                      </label>
+                      {Number(depositAmtInput) > 0 && (
+                        <span className="text-[11px] font-mono font-black text-sky-400">
+                          UGX {Number(depositAmtInput).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="Enter any amount you wish to deposit (e.g. 35000, 140000)"
+                        value={depositAmtInput}
+                        onChange={(e) => {
+                          const rawDigits = e.target.value.replace(/[^0-9]/g, '');
+                          setDepositAmtInput(rawDigits);
+                          setDepositAmt(rawDigits ? Number(rawDigits) : 0);
+                        }}
+                        className="w-full pl-4 pr-20 py-3.5 bg-[#070e1f] border border-blue-700/80 focus:border-sky-400 focus:ring-1 focus:ring-sky-400/40 rounded-2xl text-sm sm:text-base font-bold text-white outline-none font-mono placeholder:text-slate-400"
+                        required
+                      />
+                      {depositAmtInput && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDepositAmtInput('');
+                            setDepositAmt(0);
+                          }}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-lg bg-[#0b1d42] hover:bg-blue-700 text-sky-300 hover:text-white text-[10px] font-black uppercase tracking-wider border border-blue-500/40 transition-all cursor-pointer"
+                        >
+                          CLEAR
+                        </button>
+                      )}
+                    </div>
 
-                    {/* Preset Amount Pills */}
+                    {/* Quick Amount Buttons (Users can also type/edit any custom amount above like 35,000 or 140,000) */}
                     <div className="grid grid-cols-5 gap-2 pt-1">
                       {[20000, 50000, 100000, 250000, 500000].map((preset) => {
                         const isPresetActive = Number(depositAmtInput) === preset;
@@ -735,9 +758,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                       })}
                     </div>
 
-                    <p className="text-[11px] font-extrabold text-sky-300 uppercase tracking-wider pt-0.5">
-                      MINIMUM DEPOSIT: UGX 5,000
-                    </p>
+                    <div className="flex flex-wrap items-center justify-between gap-1 pt-0.5">
+                      <p className="text-[11px] font-extrabold text-sky-300 uppercase tracking-wider">
+                        MINIMUM DEPOSIT: UGX 5,000
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
+                        TYPE OR EDIT ANY AMOUNT ABOVE (E.G. 35,000 • 140,000)
+                      </p>
+                    </div>
                   </div>
 
                   {/* Your Phone Number */}
@@ -844,23 +872,32 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                         {depositAmt.toLocaleString()}
                       </span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => copyToClipboard(String(depositAmt), 'amount')}
-                      className="px-3.5 py-2 rounded-xl bg-[#0b1936] hover:bg-[#10244d] border border-blue-500/40 text-white font-bold text-xs uppercase flex items-center gap-1.5 cursor-pointer transition-all shrink-0"
-                    >
-                      {copiedField === 'amount' ? (
-                        <>
-                          <Check className="w-4 h-4 text-sky-400" />
-                          <span>COPIED</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-4 h-4 text-sky-300" />
-                          <span>COPY</span>
-                        </>
-                      )}
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setDepositStep('ENTER_DETAILS')}
+                        className="px-3 py-2 rounded-xl bg-[#0b1936] hover:bg-[#10244d] border border-blue-500/40 text-sky-300 font-bold text-xs uppercase cursor-pointer transition-all"
+                      >
+                        EDIT
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(String(depositAmt), 'amount')}
+                        className="px-3.5 py-2 rounded-xl bg-[#0b1936] hover:bg-[#10244d] border border-blue-500/40 text-white font-bold text-xs uppercase flex items-center gap-1.5 cursor-pointer transition-all"
+                      >
+                        {copiedField === 'amount' ? (
+                          <>
+                            <Check className="w-4 h-4 text-sky-400" />
+                            <span>COPIED</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4 text-sky-300" />
+                            <span>COPY</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
 
                   {/* 4. MOBILE MONEY PAYMENT GUIDE Card */}
@@ -1044,13 +1081,16 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                   <span className="text-blue-400 font-mono text-[11px]">Min: 3k • Max: 5M UGX</span>
                 </label>
                 <input
-                  type="number"
-                  min="3000"
-                  max="5000000"
-                  step="500"
-                  value={withdrawAmt}
-                  onChange={(e) => setWithdrawAmt(Number(e.target.value))}
-                  className="w-full px-3.5 py-3 bg-[#070e1f] border border-blue-950/80 rounded-lg text-sm font-bold text-white outline-none focus:border-blue-500 font-mono"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="Enter withdrawal amount (e.g. 35000, 140000)"
+                  value={withdrawAmtInput}
+                  onChange={(e) => {
+                    const rawDigits = e.target.value.replace(/[^0-9]/g, '');
+                    setWithdrawAmtInput(rawDigits);
+                    setWithdrawAmt(rawDigits ? Number(rawDigits) : 0);
+                  }}
+                  className="w-full px-3.5 py-3 bg-[#070e1f] border border-blue-950/80 rounded-lg text-sm font-bold text-white outline-none focus:border-blue-500 font-mono placeholder:text-slate-400"
                   required
                 />
                 {/* Quick amount presets (3k to 5M) */}
@@ -1078,9 +1118,12 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     <button
                       key={amt}
                       type="button"
-                      onClick={() => setWithdrawAmt(amt)}
+                      onClick={() => {
+                        setWithdrawAmt(amt);
+                        setWithdrawAmtInput(String(amt));
+                      }}
                       className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer ${
-                        withdrawAmt === amt
+                        Number(withdrawAmtInput) === amt
                           ? 'bg-blue-600 text-white border border-blue-400'
                           : 'bg-[#091329] hover:bg-[#0f1f42] text-slate-300 border border-blue-950'
                       }`}
