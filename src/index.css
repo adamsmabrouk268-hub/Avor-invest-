@@ -1,0 +1,554 @@
+@import "tailwindcss";
+
+:root {
+  --color-pure-black: #01080e;
+  --color-obsidian: #020f18;
+  --color-midnight-blue: #041926;
+  --color-ocean-deep: #062232;
+  --color-ocean-cyan: #00d2c4;
+  --color-electric-cyan: #00e5ff;
+  --color-ocean-blue: #0091ea;
+  --color-seafoam-green: #00e676;
+  --primary: #00b4d8;
+  --success: #00e676;
+  --whatsapp: #25d366;
+  --bg-color: #020e18;
+  --card-bg: rgba(6, 28, 42, 0.8);
+  --text-main: #f0fdfa;
+  --text-muted: #7ba3b0;
+  --border: rgba(0, 210, 200, 0.32);
+}
+
+body {
+  background: radial-gradient(circle at 50% 0%, #032b38 0%, #041926 40%, #010a12 100%) fixed;
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Neo Glass Ocean Frosted Cards */
+.shining-card {
+  background: linear-gradient(145deg, rgba(8, 30, 46, 0.85) 0%, rgba(4, 18, 28, 0.95) 100%);
+  border: 1px solid rgba(0, 210, 200, 0.28);
+  box-shadow: 
+    0 16px 40px -5px rgba(0, 8, 16, 0.9),
+    0 0 25px -5px rgba(0, 210, 200, 0.15),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.shining-card-glow {
+  background: linear-gradient(145deg, rgba(10, 36, 54, 0.92) 0%, rgba(5, 20, 32, 0.98) 100%);
+  border: 1px solid rgba(0, 229, 255, 0.45);
+  box-shadow: 
+    0 0 35px rgba(0, 210, 200, 0.25),
+    0 20px 50px -10px rgba(0, 8, 16, 0.95),
+    inset 0 1px 2px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.blue-midnight-surface {
+  background: linear-gradient(135deg, #062232 0%, #031420 50%, #010910 100%);
+  border: 1px solid rgba(0, 210, 200, 0.35);
+}
+
+.blue-pill {
+  background: rgba(0, 119, 145, 0.35);
+  border: 1px solid rgba(0, 229, 255, 0.5);
+  color: #80deea;
+}
+
+.black-pill {
+  background: rgba(2, 15, 24, 0.85);
+  border: 1px solid rgba(0, 119, 145, 0.45);
+  color: #ffffff;
+}
+
+/* Custom scrollbar for Neo Glass Ocean theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #010a12;
+}
+::-webkit-scrollbar-thumb {
+  background: #005f73;
+  border-radius: 9999px;
+  border: 1px solid #00d2c4;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #00b4d8;
+}
+
+/* =========================================================================
+   USER DASHBOARD LAYOUT (LEMON GREEN & BLUE THEME)
+   ========================================================================= */
+.dashboard {
+  display: grid;
+  gap: 12px;
+  background: rgba(4, 24, 38, 0.78);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  padding: 18px;
+  border-radius: 24px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  border: 1.5px solid rgba(0, 210, 200, 0.42);
+  box-shadow: 
+    0 20px 50px rgba(0, 8, 16, 0.85),
+    0 0 32px rgba(0, 145, 234, 0.28),
+    0 0 55px rgba(163, 230, 53, 0.12),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+/* 2-Column Rows */
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* 3-Column Row */
+.grid-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+
+/* Card Component (Lemon Green & Blue Theme) */
+.dashboard .card {
+  background: linear-gradient(180deg, rgba(8, 34, 52, 0.88) 0%, rgba(3, 18, 30, 0.96) 100%);
+  border: 1px solid rgba(0, 210, 200, 0.32);
+  border-radius: 14px;
+  overflow: hidden;
+  text-align: center;
+  box-shadow: 0 4px 16px rgba(0, 8, 16, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding-bottom: 5px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.dashboard .card:hover {
+  transform: translateY(-2px);
+  border-color: #00e5ff;
+  box-shadow: 0 8px 24px rgba(0, 8, 16, 0.8), 0 0 22px rgba(0, 229, 255, 0.35);
+}
+
+.dashboard .card .value {
+  padding: 14px 8px 10px 8px;
+  font-size: 19px;
+  font-weight: 800;
+  color: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 0 14px rgba(0, 229, 255, 0.35);
+}
+
+.dashboard .card .label {
+  margin: 0 6px 4px 6px;
+  padding: 6px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border-radius: 8px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.2);
+  transition: all 0.2s ease;
+}
+
+/* Electric Blue Pill Label */
+.dashboard .card .label-blue {
+  background: linear-gradient(180deg, #0077b6 0%, #0091ea 100%);
+  border: 1px solid rgba(0, 229, 255, 0.65);
+  color: #e0f7fa;
+  box-shadow: 0 0 12px rgba(0, 145, 234, 0.35);
+}
+
+/* Lemon Green Pill Label */
+.dashboard .card .label-lemon {
+  background: linear-gradient(180deg, #4d7c0f 0%, #65a30d 100%);
+  border: 1px solid rgba(190, 242, 100, 0.8);
+  color: #f7fee7;
+  box-shadow: 0 0 12px rgba(163, 230, 53, 0.35);
+}
+
+/* Dual Combo Pill Label */
+.dashboard .card .label-combo {
+  background: linear-gradient(135deg, #0077b6 0%, #4d7c0f 100%);
+  border: 1px solid rgba(163, 230, 53, 0.65);
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.25);
+}
+
+/* Action Buttons - Lemon Green & Electric Blue */
+.btn-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.btn {
+  padding: 14px;
+  border: none;
+  border-radius: 14px;
+  color: white;
+  font-weight: 800;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+/* Deposit Button: Electric Blue 💙 */
+.btn-deposit {
+  background: linear-gradient(180deg, #0091ea 0%, #0077b6 100%);
+  border: 1.5px solid rgba(0, 229, 255, 0.85);
+  box-shadow: 0 0 26px rgba(0, 145, 234, 0.6), inset 0 1px 2px rgba(255, 255, 255, 0.45);
+}
+
+.btn-deposit:hover {
+  background: linear-gradient(180deg, #00a0ff 0%, #0088d6 100%);
+  box-shadow: 0 0 34px rgba(0, 229, 255, 0.8);
+}
+
+/* Withdraw Button: Lemon Green 🍋💚 */
+.btn-withdraw {
+  background: linear-gradient(180deg, #84cc16 0%, #4d7c0f 100%);
+  border: 1.5px solid rgba(217, 249, 157, 0.9);
+  color: #ffffff;
+  box-shadow: 0 0 26px rgba(163, 230, 53, 0.6), inset 0 1px 2px rgba(255, 255, 255, 0.45);
+}
+
+.btn-withdraw:hover {
+  background: linear-gradient(180deg, #a3e635 0%, #65a30d 100%);
+  box-shadow: 0 0 34px rgba(190, 242, 100, 0.8);
+}
+
+/* =========================================================================
+   AVOR PLATFORM MVP SPECIFIED STYLES
+   ========================================================================= */
+
+/* Top WhatsApp Support Icon */
+.whatsapp-btn {
+  background-color: #25d366;
+  color: #ffffff !important;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  font-size: 1.25rem;
+  box-shadow: 0 4px 12px rgba(37, 211, 102, 0.35);
+  transition: all 0.2s ease;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  flex-shrink: 0;
+}
+
+.whatsapp-btn:hover {
+  transform: scale(1.08);
+  box-shadow: 0 6px 18px rgba(37, 211, 102, 0.55);
+  color: #ffffff;
+}
+
+/* Profile Card & Clean Class Requirements (Cinematic Black & Blue Movie Theme) */
+.profile-card {
+  background: linear-gradient(145deg, rgba(8, 16, 38, 0.88) 0%, rgba(4, 9, 22, 0.95) 100%);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 14px;
+  padding: 1.5rem;
+  box-shadow: 0 10px 35px -5px rgba(0, 0, 0, 0.85), 0 0 25px -5px rgba(37, 99, 235, 0.22);
+  color: #f8fafc;
+}
+
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.profile-header .avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background-color: #0b1836;
+  border: 1px solid #2563eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  color: #38bdf8;
+  flex-shrink: 0;
+  box-shadow: 0 0 15px rgba(37, 99, 235, 0.3);
+}
+
+.user-role {
+  font-size: 0.9rem;
+  color: #94a3b8;
+  margin-top: 0.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.badge {
+  background-color: #0f2766;
+  color: #38bdf8;
+  border: 1px solid #2563eb;
+  padding: 0.2rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.25);
+}
+
+.class-requirements {
+  background-color: rgba(3, 8, 22, 0.85);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  padding: 1.25rem;
+  border-radius: 12px;
+  margin-top: 0.5rem;
+}
+
+.class-requirements h3 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin-bottom: 0.75rem;
+}
+
+.req-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin: 0.5rem 0;
+}
+
+.req-item {
+  display: flex;
+  flex-direction: column;
+  background: #08132f;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  border: 1px solid rgba(59, 130, 246, 0.32);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.req-item .label {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  font-weight: 600;
+}
+
+.req-item .value {
+  font-weight: 800;
+  font-size: 1.15rem;
+  color: #ffffff;
+  margin-top: 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.req-item .value.active {
+  color: #00f0ff;
+  text-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
+}
+
+.note {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin-top: 0.75rem;
+  line-height: 1.4;
+}
+
+/* Machine Cards Grid & Styling (Cinematic Black & Blue) */
+.machine-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin-top: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.machine-card {
+  border: 1px solid rgba(59, 130, 246, 0.32);
+  border-radius: 12px;
+  padding: 1.25rem;
+  background: linear-gradient(145deg, rgba(10, 19, 44, 0.92) 0%, rgba(5, 9, 22, 0.96) 100%);
+  color: #ffffff;
+  transition: all 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+}
+
+.machine-card:hover {
+  transform: translateY(-2px);
+  border-color: #38bdf8;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 240, 255, 0.25);
+}
+
+.machine-card.modified {
+  border-color: #00f0ff;
+  background: linear-gradient(145deg, rgba(13, 26, 60, 0.94) 0%, rgba(6, 13, 30, 0.98) 100%);
+  box-shadow: 0 0 22px rgba(0, 240, 255, 0.2), 0 8px 24px rgba(0, 0, 0, 0.7);
+}
+
+.machine-card h4 {
+  font-size: 1rem;
+  font-weight: 800;
+  color: #ffffff;
+  margin-bottom: 0.35rem;
+}
+
+.machine-card p {
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.machine-card .price {
+  font-weight: 800;
+  font-size: 1.15rem;
+  margin-top: 0.75rem;
+  color: #00f0ff;
+  text-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.primary-btn {
+  background-color: #2563eb;
+  background-image: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+  color: #ffffff !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.35rem;
+  border-radius: 10px;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 0.9rem;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  box-shadow: 0 4px 18px rgba(37, 99, 235, 0.45);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.primary-btn:hover {
+  background-color: #1d4ed8;
+  box-shadow: 0 6px 24px rgba(37, 99, 235, 0.65), 0 0 15px rgba(0, 240, 255, 0.4);
+  transform: translateY(-1px);
+}
+
+/* =========================================================================
+   CINEMATIC BLACK & BLUE MOVIE SCENE LIVE WALLPAPER
+   ========================================================================= */
+
+.video-background {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -10;
+  overflow: hidden;
+  pointer-events: none;
+  background-color: #01040a;
+  isolation: isolate;
+}
+
+.video-background.black-blue-theme {
+  background: radial-gradient(ellipse at 50% 30%, #061338 0%, #03081a 50%, #010409 100%);
+}
+
+#bg-video {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  min-width: 100%;
+  min-height: 100%;
+  width: 100vw;
+  height: 100vh;
+  transform: translate(-50%, -50%);
+  object-fit: cover;
+  opacity: 0.88;
+  filter: contrast(1.25) brightness(1.1) saturate(1.4);
+  pointer-events: none;
+}
+
+.live-wallpaper-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.video-overlay-movie {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 35%, rgba(0, 240, 255, 0.02) 0%, rgba(3, 8, 26, 0.4) 60%, rgba(1, 4, 10, 0.8) 100%);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Widescreen 2.39:1 Cinema Letterbox Bands */
+.cinema-letterbox-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: clamp(12px, 2vh, 24px);
+  background: linear-gradient(180deg, #000000 80%, rgba(0, 0, 0, 0) 100%);
+  z-index: 3;
+  pointer-events: none;
+}
+
+.cinema-letterbox-bottom {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: clamp(12px, 2vh, 24px);
+  background: linear-gradient(0deg, #000000 80%, rgba(0, 0, 0, 0) 100%);
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* Foreground Content sitting smoothly above the moving machines in all sections */
+.content, #root, main {
+  position: relative;
+  z-index: 1;
+}
+
+/* Glassmorphism for cards in all sections so moving machines shine through */
+.shining-card, .profile-card, .machine-card, .dashboard {
+  backdrop-filter: blur(14px) saturate(1.1);
+  -webkit-backdrop-filter: blur(14px) saturate(1.1);
+}
+
+

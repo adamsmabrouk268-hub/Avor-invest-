@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Avor invest</title>
+    <meta name="description" content="Avor invest - Hardware and node infrastructure machine marketplace with time-locked contracts and daily payout management." />
+    <meta name="theme-color" content="#020e18" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Avor invest" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <meta property="og:title" content="Avor invest" />
+    <meta property="og:description" content="Avor invest - Hardware and node infrastructure machine marketplace with time-locked contracts and daily payout management." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <!-- FontAwesome for standard icons and WhatsApp icon -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <script>
+      (function () {
+        // Prevent @vite/client from throwing "WebSocket closed without opened" in environments where HMR is disabled
+        var NativeWebSocket = window.WebSocket;
+        if (NativeWebSocket) {
+          var WrappedWebSocket = function (url, protocols) {
+            var isViteHmr =
+              protocols === 'vite-hmr' ||
+              (Array.isArray(protocols) && protocols.indexOf('vite-hmr') !== -1);
+            if (isViteHmr) {
+              var target = new EventTarget();
+              target.url = String(url || '');
+              target.protocol = 'vite-hmr';
+              target.readyState = 1; // OPEN
+              target.send = function () {};
+              target.close = function () {
+                target.readyState = 3; // CLOSED
+              };
+              setTimeout(function () {
+                var openEvt = new Event('open');
+                if (typeof target.onopen === 'function') target.onopen(openEvt);
+                target.dispatchEvent(openEvt);
+              }, 0);
+              return target;
+            }
+            return protocols !== undefined
+              ? new NativeWebSocket(url, protocols)
+              : new NativeWebSocket(url);
+          };
+          WrappedWebSocket.prototype = NativeWebSocket.prototype;
+          WrappedWebSocket.CONNECTING = NativeWebSocket.CONNECTING;
+          WrappedWebSocket.OPEN = NativeWebSocket.OPEN;
+          WrappedWebSocket.CLOSING = NativeWebSocket.CLOSING;
+          WrappedWebSocket.CLOSED = NativeWebSocket.CLOSED;
+          window.WebSocket = WrappedWebSocket;
+        }
+
+        window.addEventListener(
+          'unhandledrejection',
+          function (e) {
+            var msg = e && e.reason && (e.reason.message || String(e.reason));
+            if (
+              typeof msg === 'string' &&
+              (msg.indexOf('WebSocket closed without opened') !== -1 ||
+                msg.indexOf('failed to connect to websocket') !== -1)
+            ) {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+            }
+          },
+          true
+        );
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

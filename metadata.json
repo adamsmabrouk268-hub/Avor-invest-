@@ -1,0 +1,6 @@
+{
+  "name": "Avor invest",
+  "description": "Hardware and node infrastructure machine marketplace with time-locked contracts and daily payout management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

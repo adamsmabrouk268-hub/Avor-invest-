@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stopColor="#020e18" />
+      <stop offset="50%" stopColor="#041e34" />
+      <stop offset="100%" stopColor="#020b14" />
+    </linearGradient>
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stopColor="#00e5ff" />
+      <stop offset="50%" stopColor="#0091ea" />
+      <stop offset="100%" stopColor="#0064b7" />
+    </linearGradient>
+    <linearGradient id="limeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stopColor="#a3e635" />
+      <stop offset="100%" stopColor="#4ade80" />
+    </linearGradient>
+  </defs>
+
+  <!-- Full-bleed rounded app icon background -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+
+  <!-- Outer glowing tech border -->
+  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="url(#cyanGrad)" strokeWidth="8" opacity="0.85" />
+
+  <!-- Hexagonal Hardware Core Emblem -->
+  <polygon
+    points="256,76 392,154 392,310 256,388 120,310 120,154"
+    fill="#031626"
+    stroke="url(#cyanGrad)"
+    strokeWidth="12"
+    strokeLinejoin="round"
+  />
+
+  <!-- Inner circuit nodes -->
+  <circle cx="256" cy="76" r="10" fill="#a3e635" />
+  <circle cx="392" cy="154" r="10" fill="#00e5ff" />
+  <circle cx="392" cy="310" r="10" fill="#00e5ff" />
+  <circle cx="256" cy="388" r="10" fill="#a3e635" />
+  <circle cx="120" cy="310" r="10" fill="#00e5ff" />
+  <circle cx="120" cy="154" r="10" fill="#00e5ff" />
+
+  <!-- Bold "AV" Monogram inside Hexagon -->
+  <path
+    d="M162 292 L208 164 L236 164 L282 292 L252 292 L242 262 L202 262 L192 292 Z M210 236 L234 236 L222 196 Z"
+    fill="#ffffff"
+  />
+  <path
+    d="M266 164 L296 164 L322 252 L348 164 L378 164 L336 292 L308 292 Z"
+    fill="url(#cyanGrad)"
+  />
+
+  <!-- Bottom Brand Pill: AVOR INVEST -->
+  <rect x="106" y="412" width="300" height="48" rx="24" fill="#041e34" stroke="url(#limeGrad)" strokeWidth="4" />
+  <text
+    x="256"
+    y="444"
+    fontFamily="system-ui, -apple-system, sans-serif"
+    fontSize="26"
+    fontWeight="900"
+    fill="#a3e635"
+    textAnchor="middle"
+    letterSpacing="4"
+  >
+    AVOR INVEST
+  </text>
+</svg>

@@ -1,0 +1,1122 @@
+import React, { useState, useEffect } from 'react';
+import { User, Investment, Transaction, Currency } from '../types';
+import { CURRENCY_MAP } from '../data/defaultMachines';
+import {
+  X,
+  Copy,
+  Check,
+  ChevronDown,
+  LogOut,
+  CheckCircle2,
+  AlertCircle,
+  ExternalLink,
+  Lock,
+  Gift,
+  Cpu,
+  Save,
+} from 'lucide-react';
+import { WhatsAppIcon } from './WhatsAppIcon';
+import { VipClassTaskTable } from './VipClassTaskTable';
+import { usePWAInstall } from '../hooks/usePWAInstall';
+
+interface AccountViewProps {
+  user: User | null;
+  investments: Investment[];
+  currency: Currency;
+  onCurrencyChange?: (c: Currency) => void;
+  onLogout?: () => void;
+  initialTab?: string;
+  onClaimYield?: (investmentId?: string) => void;
+  onOpenWalletModal: (mode: 'deposit' | 'withdraw') => void;
+  onUpdateUser?: (updated: User) => void;
+  onOpenAuth?: () => void;
+  onNavigateToMarketplace?: () => void;
+}
+
+export const AccountView: React.FC<AccountViewProps> = ({
+  user,
+  investments,
+  currency,
+  onCurrencyChange,
+  onLogout,
+  initialTab,
+  onOpenWalletModal,
+  onUpdateUser,
+  onOpenAuth,
+  onNavigateToMarketplace,
+}) => {
+  const currencyInfo = CURRENCY_MAP[currency];
+  const { isInstallable, isInstalled, isIOS, isInIframe, install } = usePWAInstall();
+
+  // Active sub-modals for the 9 profile icons
+  const [activeModal, setActiveModal] = useState<
+    'bill' | 'invite' | 'team' | 'reward' | 'download' | 'manager' | 'settings' | null
+  >(initialTab === 'invite' ? 'invite' : null);
+
+  // Chevron dropdown state in Card 1
+  const [showBalanceDetails, setShowBalanceDetails] = useState<boolean>(false);
+
+  // Dashboard summary data
+  const [dashboardSummary, setDashboardSummary] = useState<any>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [copiedLink, setCopiedLink] = useState<boolean>(false);
+  const [copiedCode, setCopiedCode] = useState<boolean>(false);
+
+  // Settings form state
+  const [editName, setEditName] = useState<string>(user?.full_name || '');
+  const [editPhone, setEditPhone] = useState<string>(user?.phone_number || '');
+  const [editPassword, setEditPassword] = useState<string>('');
+  const [settingsSavedMsg, setSettingsSavedMsg] = useState<string | null>(null);
+  const [downloadConfirmMsg, setDownloadConfirmMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEditName(user?.full_name || '');
+    setEditPhone(user?.phone_number || '');
+  }, [user]);
+
+  useEffect(() => {
+    if (user?.id) {
+      fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}`)
+        .then((r) => (r.ok && (r.headers.get('content-type') || '').includes('application/json') ? r.json() : null))
+        .then((data) => {
+          if (data) setDashboardSummary(data);
+        })
+        .catch(() => {});
+
+      fetch(`/api/transactions/${encodeURIComponent(user.id)}`)
+        .then((r) => (r.ok && (r.headers.get('content-type') || '').includes('application/json') ? r.json() : null))
+        .then((data) => {
+          if (Array.isArray(data)) setTransactions(data);
+        })
+        .catch(() => {});
+    }
+  }, [user?.id, investments.length]);
+
+  const hasBoughtMachine =
+    investments.some((i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') ||
+    !!dashboardSummary?.has_bought_machine;
+
+  const referralCode = user?.referral_code || 'AVOR-7789';
+  const referralLink =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}/reg?AvorInvest=${referralCode}`
+      : `https://avor.invest/reg?AvorInvest=${referralCode}`;
+
+  const handleCopyLink = () => {
+    if (!hasBoughtMachine) return;
+    navigator.clipboard.writeText(referralLink);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2500);
+  };
+
+  const handleCopyCode = () => {
+    if (!hasBoughtMachine) return;
+    navigator.clipboard.writeText(referralCode);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2500);
+  };
+
+  // Card 1: Wallet & Balance
+  const totalDeposited = dashboardSummary?.deposit_details?.total_deposited || 0;
+  const displayWallet = totalDeposited.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const displayBalance = (user?.balance ?? 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+  const invitedThisMonth =
+    dashboardSummary?.team_size_details?.total_joined ??
+    dashboardSummary?.team_size ??
+    0;
+  const activeInvitedCustomersCount =
+    dashboardSummary?.team_size_details?.team_size ??
+    dashboardSummary?.team_size ??
+    0;
+  const totalTeamCommission =
+    dashboardSummary?.team_size_details?.total_commissions_earned ?? 0;
+  const teamMembersList =
+    dashboardSummary?.team_size_details?.team_members || [];
+  const totalInvitedMachinesPrice =
+    dashboardSummary?.team_size_details?.total_invited_machines_price ??
+    teamMembersList.reduce((sum: number, m: any) => sum + (Number(m.total_invested) || 0), 0);
+  const lastMonthReward5Pct =
+    dashboardSummary?.team_size_details?.last_month_reward_5pct ??
+    Math.round(totalInvitedMachinesPrice * 0.05);
+  const [rewardStatusMsg, setRewardStatusMsg] = useState<{ type: 'success' | 'info'; text: string } | null>(null);
+  const [isClaimingLastMonthReward, setIsClaimingLastMonthReward] = useState<boolean>(false);
+
+  const handleClaimLastMonthReward = async () => {
+    if (!user) {
+      if (onOpenAuth) onOpenAuth();
+      return;
+    }
+    setIsClaimingLastMonthReward(true);
+    setRewardStatusMsg(null);
+    try {
+      const res = await fetch('/api/user/claim-class-reward', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: user.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRewardStatusMsg({
+          type: 'info',
+          text:
+            data.error ||
+            'Last month\'s reward requires 4 or more invited customers who have bought machines (5% of total machine price).',
+        });
+      } else {
+        setRewardStatusMsg({
+          type: 'success',
+          text:
+            data.message ||
+            `Successfully collected ${currencyInfo.format(data.amount_claimed || lastMonthReward5Pct)} (5% of invited customers' machine price) into your balance!`,
+        });
+        if (onUpdateUser && data.new_balance !== undefined) {
+          onUpdateUser({ ...user, balance: data.new_balance });
+        }
+      }
+    } catch {
+      setRewardStatusMsg({
+        type: 'info',
+        text: 'Unable to process reward settlement right now. Please try again.',
+      });
+    } finally {
+      setIsClaimingLastMonthReward(false);
+    }
+  };
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) {
+      if (onOpenAuth) onOpenAuth();
+      return;
+    }
+
+    const updatedUser: User = {
+      ...user,
+      full_name: editName.trim() || user.full_name,
+      name: editName.trim() || user.name,
+      phone_number: editPhone.trim() || user.phone_number,
+    };
+
+    try {
+      await fetch('/api/user/update-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user.id,
+          full_name: updatedUser.full_name,
+          phone_number: updatedUser.phone_number,
+          password: editPassword.trim() || undefined,
+        }),
+      });
+    } catch (err) {
+      // Soft fallback to local update
+    }
+
+    try {
+      localStorage.setItem('avor_invest_user', JSON.stringify(updatedUser));
+    } catch (err) {}
+
+    if (onUpdateUser) {
+      onUpdateUser(updatedUser);
+    }
+
+    setEditPassword('');
+    setSettingsSavedMsg('Account settings updated and saved successfully!');
+    setTimeout(() => setSettingsSavedMsg(null), 3500);
+  };
+
+  return (
+    <div className="w-full max-w-md mx-auto py-2 sm:py-4 px-2.5 sm:px-3 text-white space-y-3.5 select-none animate-fade-in font-sans">
+      {/* =========================================================================
+          CARD 1: TOP WALLET & BALANCE
+          Wallet: Deposited Capital   |   Balance: Available Balance
+          Double Chevron ︾ in bottom center
+         ========================================================================= */}
+      <div className="bg-[#03081a] border border-[#0091ea]/60 rounded-2xl p-4 sm:p-5 shadow-[0_0_25px_rgba(0,145,234,0.14)] relative">
+        <div className="grid grid-cols-2 text-center items-center">
+          {/* Left Column: Wallet */}
+          <div>
+            <span className="text-xs sm:text-sm text-slate-400 font-medium tracking-wide block">
+              Wallet
+            </span>
+            <span className="text-2xl sm:text-3xl font-black text-white font-mono mt-1 block">
+              {displayWallet}
+            </span>
+          </div>
+
+          {/* Right Column: Balance */}
+          <div>
+            <span className="text-xs sm:text-sm text-slate-400 font-medium tracking-wide block">
+              Balance
+            </span>
+            <span className="text-2xl sm:text-3xl font-black text-white font-mono mt-1 block">
+              {displayBalance}
+            </span>
+          </div>
+        </div>
+
+        {/* Center Double Chevron ︾ Icon (Clickable to show user info details) */}
+        <button
+          type="button"
+          onClick={() => setShowBalanceDetails(!showBalanceDetails)}
+          className="w-full flex items-center justify-center pt-2 mt-1 cursor-pointer group focus:outline-none"
+          title="Toggle account details"
+        >
+          <div className="flex flex-col items-center -space-y-1 text-[#0091ea] group-hover:text-cyan-300 transition-colors">
+            <ChevronDown
+              className={`w-4 h-4 transition-transform duration-300 ${
+                showBalanceDetails ? 'rotate-180 text-cyan-300' : ''
+              }`}
+            />
+            <ChevronDown
+              className={`w-4 h-4 -mt-2.5 transition-transform duration-300 ${
+                showBalanceDetails ? 'rotate-180 text-cyan-300' : ''
+              }`}
+            />
+          </div>
+        </button>
+
+        {/* Collapsible Details Drawer */}
+        {showBalanceDetails && (
+          <div className="mt-3 pt-3 border-t border-[#0091ea]/30 text-xs space-y-2 animate-fade-in">
+            <div className="flex justify-between text-slate-300 font-mono">
+              <span className="text-slate-400">Account ID:</span>
+              <span className="font-bold text-white">{user?.id?.slice(0, 14) || 'AVOR-INVESTOR'}</span>
+            </div>
+            <div className="flex justify-between text-slate-300 font-mono">
+              <span className="text-slate-400">Phone Number:</span>
+              <span className="font-bold text-sky-400">{user?.phone_number || 'Not Set'}</span>
+            </div>
+            <div className="flex justify-between text-slate-300 font-mono">
+              <span className="text-slate-400">Customer Status:</span>
+              <span className={`font-bold ${hasBoughtMachine ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {hasBoughtMachine ? `Active Customer (${investments.length} Units)` : 'No Machine Purchased Yet'}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* =========================================================================
+          CARD 2: 9 ACTION ICONS GRID (VIP icon removed per Item 10;
+                  Deposit & Withdraw placed in Profile page per Item 15;
+                  All icons responsive per Item 6)
+          Row 1: Deposit, Withdraw, Bill, Invite
+          Row 2: My team, Reward, Download App, Manager
+          Row 3: Settings
+         ========================================================================= */}
+      <div className="bg-[#03081a] border border-[#0091ea]/60 rounded-2xl p-4 sm:p-5 shadow-[0_0_25px_rgba(0,145,234,0.14)]">
+        <div className="grid grid-cols-4 gap-y-4 gap-x-2 sm:gap-x-3 text-center">
+          {/* 1. Deposit */}
+          <button
+            type="button"
+            onClick={() => onOpenWalletModal('deposit')}
+            className="flex flex-col items-center group cursor-pointer focus:outline-none"
+          >
+            <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-[#0091ea] hover:bg-[#0081d6] active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-[#0091ea]/35 text-white">
+              <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="5" width="20" height="14" rx="3" />
+                <line x1="2" y1="10" x2="22" y2="10" />
+                <rect x="6" y="14" width="4" height="2" fill="white" />
+              </svg>
+            </div>
+            <span className="text-xs text-slate-300 font-medium mt-1.5 leading-tight group-hover:text-white transition-colors">
+              Deposit
+            </span>
+          </button>
+
+          {/* 2. Withdraw */}
+          <button
+            type="button"
+            onClick={() => onOpenWalletModal('withdraw')}
+            className="flex flex-col items-center group cursor-pointer focus:outline-none"
+          >
+            <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-[#0091ea] hover:bg-[#0081d6] active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-[#0091ea]/35 text-white">
+              <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 2v9m0 0l-3-3m3 3l3-3" />
+                <rect x="3" y="13" width="18" height="8" rx="2" />
+                <circle cx="12" cy="17" r="1.5" fill="white" />
+              </svg>
+            </div>
+            <span className="text-xs text-slate-300 font-medium mt-1.5 leading-tight group-hover:text-white transition-colors">
+              Withdraw
+            </span>
+          </button>
+
+          {/* 3. Bill */}
+          <button
+            type="button"
+            onClick={() => setActiveModal('bill')}
+            className="flex flex-col items-center group cursor-pointer focus:outline-none"
+          >
+            <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-[#0091ea] hover:bg-[#0081d6] active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-[#0091ea]/35 text-white">
+              <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="3" />
+                <line x1="7" y1="8" x2="17" y2="8" />
+                <line x1="7" y1="12" x2="17" y2="12" />
+                <line x1="7" y1="16" x2="12" y2="16" />
+              </svg>
+            </div>
+            <span className="text-xs text-slate-300 font-medium mt-1.5 leading-tight group-hover:text-white transition-colors">
+              Bill
+            </span>
+          </button>
+
+          {/* 4. Invite */}
+          <button
+            type="button"
+            onClick={() => setActiveModal('invite')}
+            className="flex flex-col items-center group cursor-pointer focus:outline-none relative"
+          >
+            <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-[#0091ea] hover:bg-[#0081d6] active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-[#0091ea]/35 text-white">
+              <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M11 15h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 17" />
+                <path d="m7 21 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.8-2.8L15 13" />
+                <path d="M2 13a4 4 0 0 1 4-4h2" />
+              </svg>
+            </div>
+            <span className="text-xs text-slate-300 font-medium mt-1.5 leading-tight group-hover:text-white transition-colors">
+              Invite
+            </span>
+          </button>
+
+          {/* 5. My team */}
+          <button
+            type="button"
+            onClick={() => setActiveModal('team')}
+            className="flex flex-col items-center group cursor-pointer focus:outline-none"
+          >
+            <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-[#0091ea] hover:bg-[#0081d6] active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-[#0091ea]/35 text-white">
+              <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                <circle cx="18" cy="8" r="2.5" />
+                <path d="M18 13c1.5 0 4 .7 4 2v2h-3v-2c0-.7-.3-1.4-.8-1.8z" />
+                <circle cx="6" cy="8" r="2.5" />
+                <path d="M6 13c-1.5 0-4 .7-4 2v2h3v-2c0-.7.3-1.4.8-1.8z" />
+              </svg>
+            </div>
+            <span className="text-xs text-slate-300 font-medium mt-1.5 leading-tight group-hover:text-white transition-colors">
+              My team
+            </span>
+          </button>
+
+          {/* 6. Install App (Triggers native PWA standalone installation with App Icon) */}
+          <button
+            type="button"
+            onClick={async () => {
+              setDownloadConfirmMsg(null);
+              if (isInstallable) {
+                const accepted = await install();
+                if (accepted) {
+                  setDownloadConfirmMsg('Avor invest App installed successfully with official app icon!');
+                }
+              }
+              setActiveModal('download');
+            }}
+            className="flex flex-col items-center group cursor-pointer focus:outline-none"
+          >
+            <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-[#0091ea] hover:bg-[#0081d6] active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-[#0091ea]/35 text-white">
+              <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3v12m0 0l-4-4m4 4l4-4" />
+                <path d="M5 16v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2" />
+              </svg>
+            </div>
+            <span className="text-xs text-slate-300 font-medium mt-1.5 leading-tight group-hover:text-white transition-colors">
+              Install App
+            </span>
+          </button>
+
+          {/* 7. Manager (Customer-only access enforced inside modal per Item 16) */}
+          <button
+            type="button"
+            onClick={() => setActiveModal('manager')}
+            className="flex flex-col items-center group cursor-pointer focus:outline-none"
+          >
+            <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-[#0091ea] hover:bg-[#0081d6] active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-[#0091ea]/35 text-white">
+              <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+                <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
+                <path d="M12 19v3" />
+              </svg>
+            </div>
+            <span className="text-xs text-slate-300 font-medium mt-1.5 leading-tight group-hover:text-white transition-colors">
+              Manager
+            </span>
+          </button>
+
+          {/* 8. Settings */}
+          <button
+            type="button"
+            onClick={() => {
+              setSettingsSavedMsg(null);
+              setActiveModal('settings');
+            }}
+            className="flex flex-col items-center group cursor-pointer focus:outline-none"
+          >
+            <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-[#0091ea] hover:bg-[#0081d6] active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-[#0091ea]/35 text-white">
+              <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="9" cy="7" r="4" />
+                <path d="M2 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2" />
+                <circle cx="19" cy="11" r="2" />
+                <path d="M19 8v1m0 4v1m-2.6-4.5.7.7m3.8 3.8.7.7m-4.5.7.7-.7m3.8-3.8.7-.7" />
+              </svg>
+            </div>
+            <span className="text-xs text-slate-300 font-medium mt-1.5 leading-tight group-hover:text-white transition-colors">
+              Settings
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* =========================================================================
+          CARD 3: CLASS REQUIREMENTS TABLE (Single monthly reward button & table;
+                  duplicate last month's salary card removed per Item 5;
+                  word "VIP" excluded per Item 17)
+         ========================================================================= */}
+      <div id="class-requirements-table">
+        <VipClassTaskTable
+          user={user}
+          currency={currency}
+          invitedCount={activeInvitedCustomersCount}
+          totalInvitedMachinesPrice={totalInvitedMachinesPrice}
+          onRewardClaimed={(newBalance) => {
+            if (user && onUpdateUser) {
+              onUpdateUser({ ...user, balance: newBalance });
+            }
+          }}
+          isModal={false}
+        />
+      </div>
+
+      {/* =========================================================================
+          MODALS FOR THE 9 PROFILE ACTIONS
+         ========================================================================= */}
+
+      {/* Modal 1: Bill (Transaction & Statement Records) */}
+      {activeModal === 'bill' && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-[#03081a] border border-[#0091ea]/60 shadow-[0_0_25px_rgba(0,145,234,0.2)] rounded-2xl p-5 max-w-md w-full space-y-4 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-[#0e2748]">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-[#0091ea] flex items-center justify-center text-white">
+                  <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <line x1="7" y1="8" x2="17" y2="8" />
+                    <line x1="7" y1="12" x2="17" y2="12" />
+                  </svg>
+                </div>
+                <h3 className="text-base font-bold text-white">Bill & Statement Records</h3>
+              </div>
+              <button
+                onClick={() => setActiveModal(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+              {transactions.length === 0 ? (
+                <div className="text-center py-10 text-slate-400 space-y-2">
+                  <p className="text-sm">No transaction bills recorded yet.</p>
+                  <p className="text-xs text-slate-500">Your deposit, withdrawal, bonus, and machine bills will display here.</p>
+                </div>
+              ) : (
+                transactions.map((tx) => (
+                  <div key={tx.id} className="bg-[#08132c] border border-[#0e2748] p-3 rounded-xl flex items-center justify-between text-xs font-mono">
+                    <div>
+                      <span className="font-bold text-white block uppercase">{tx.type}</span>
+                      <span className="text-[10px] text-slate-400">{new Date(tx.created_at).toLocaleDateString()}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className={`font-black text-sm block ${tx.type === 'WITHDRAWAL' || tx.type === 'INVESTMENT' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                        {tx.type === 'WITHDRAWAL' || tx.type === 'INVESTMENT' ? '-' : '+'}
+                        {currencyInfo.format(Math.abs(tx.amount))}
+                      </span>
+                      <span className="text-[10px] text-sky-400 uppercase">{tx.status}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <button
+              onClick={() => setActiveModal(null)}
+              className="w-full py-2.5 bg-[#0091ea] hover:bg-[#0081d6] text-white rounded-xl text-xs font-bold cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 2: Invite (Personal Link & Invite Code — Only accessible when user has bought a machine per Item 8, 18 & 19) */}
+      {activeModal === 'invite' && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-[#03081a] border border-[#0091ea]/60 shadow-[0_0_25px_rgba(0,145,234,0.2)] rounded-2xl p-5 max-w-md w-full space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#0e2748]">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-[#0091ea] flex items-center justify-center text-white">
+                  <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M11 15h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 17" />
+                    <path d="m7 21 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.8-2.8L15 13" />
+                  </svg>
+                </div>
+                <h3 className="text-base font-bold text-white">Personal Invite Link & Code</h3>
+              </div>
+              <button
+                onClick={() => setActiveModal(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {!hasBoughtMachine ? (
+              <div className="bg-[#08132c] border border-amber-500/40 rounded-xl p-4 text-center space-y-3">
+                <div className="w-12 h-12 rounded-full bg-amber-950/80 border border-amber-500/50 flex items-center justify-center mx-auto text-amber-400">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <h4 className="text-sm font-black text-white">
+                  Personal Invite Link Locked
+                </h4>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Your personal referral link and invitation code are only accessible once you have bought at least one machine in the Machine Plane.
+                </p>
+                <div className="p-2.5 rounded-lg bg-[#040b1d] border border-[#0e2748] text-[11px] text-sky-300 font-mono">
+                  Invitation Bonus: <strong>8%</strong> when an invited customer buys the same machine as you (collected on your balance when their machine cycle ends).
+                </div>
+                {onNavigateToMarketplace && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveModal(null);
+                      onNavigateToMarketplace();
+                    }}
+                    className="w-full py-2.5 bg-gradient-to-r from-[#0091ea] to-[#0077b6] hover:brightness-110 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-md"
+                  >
+                    <Cpu className="w-4 h-4" />
+                    <span>Buy a Machine to Unlock Invite Link</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="text-slate-400 font-semibold block mb-1">Your Invite Code:</label>
+                  <div className="flex items-center gap-2 bg-[#08132c] border border-[#0e2748] p-2.5 rounded-xl">
+                    <span className="font-mono font-black text-sm text-sky-400 flex-1">{referralCode}</span>
+                    <button
+                      onClick={handleCopyCode}
+                      className="px-3 py-1 bg-[#0091ea] text-white rounded-lg font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedCode ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-slate-400 font-semibold block mb-1">Your Personal Invite Link:</label>
+                  <div className="flex items-center gap-2 bg-[#08132c] border border-[#0e2748] p-2.5 rounded-xl">
+                    <span className="font-mono text-[11px] text-slate-300 truncate flex-1">{referralLink}</span>
+                    <button
+                      onClick={handleCopyLink}
+                      className="px-3 py-1 bg-[#0091ea] text-white rounded-lg font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                    >
+                      {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedLink ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-[#08132c] rounded-xl border border-[#0e2748] text-slate-300 leading-relaxed">
+                  Earn <strong className="text-emerald-400">8% team income / invitation bonus</strong> when an invited customer buys the same machine as you, collected directly on your <strong className="text-sky-400">balance</strong> when the cycle of the invited customer&apos;s machine has ended.
+                </div>
+
+                <a
+                  href={`https://wa.me/?text=${encodeURIComponent(`Join me on Avor invest! Use my invite code ${referralCode}: ${referralLink}`)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                >
+                  <WhatsAppIcon className="w-4 h-4 fill-white" />
+                  <span>Share Personal Link via WhatsApp</span>
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal 3: My Team */}
+      {activeModal === 'team' && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-[#03081a] border border-[#0091ea]/60 shadow-[0_0_25px_rgba(0,145,234,0.2)] rounded-2xl p-5 max-w-md w-full space-y-4 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-[#0e2748]">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-[#0091ea] flex items-center justify-center text-white">
+                  <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                  </svg>
+                </div>
+                <h3 className="text-base font-bold text-white">My Team Network</h3>
+              </div>
+              <button
+                onClick={() => setActiveModal(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-center text-xs font-mono">
+              <div className="bg-[#08132c] border border-[#0e2748] p-2.5 rounded-xl">
+                <span className="text-slate-400 block text-[10px]">Invited Members</span>
+                <span className="text-xl font-black text-white mt-0.5 block">{invitedThisMonth}</span>
+              </div>
+              <div className="bg-[#08132c] border border-[#0e2748] p-2.5 rounded-xl">
+                <span className="text-slate-400 block text-[10px]">Team Commission</span>
+                <span className="text-xl font-black text-emerald-400 mt-0.5 block">
+                  {currencyInfo.format(totalTeamCommission)}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1 text-xs">
+              {teamMembersList.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 space-y-1">
+                  <p className="text-xs font-bold text-slate-300">No team members registered yet.</p>
+                  <p className="text-[11px] text-slate-500">
+                    Share your personal invite link from the Invite icon to build your team and unlock Class A–I rewards.
+                  </p>
+                </div>
+              ) : (
+                teamMembersList.map((m: any, idx: number) => (
+                  <div key={m.id || idx} className="bg-[#08132c] border border-[#0e2748] p-2.5 rounded-xl flex items-center justify-between font-mono">
+                    <div>
+                      <span className="font-bold text-white block">{m.phone_masked || m.full_name}</span>
+                      <span className="text-[10px] text-slate-400">
+                        Joined {m.joined_at ? new Date(m.joined_at).toLocaleDateString() : 'Recently'}
+                      </span>
+                    </div>
+                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${m.has_bought_machine ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/40' : 'bg-slate-800 text-slate-400'}`}>
+                      {m.has_bought_machine ? 'Machine Active' : 'Registered'}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <button
+              onClick={() => setActiveModal(null)}
+              className="w-full py-2.5 bg-[#0091ea] hover:bg-[#0081d6] text-white rounded-xl text-xs font-bold cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 4: Last Month's Reward Icon Modal (Displays the two clear statements per Item 6) */}
+      {activeModal === 'reward' && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-[#03081a] border border-[#0091ea]/60 shadow-[0_0_25px_rgba(0,145,234,0.2)] rounded-2xl p-5 max-w-md w-full space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#0e2748]">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-[#0091ea] flex items-center justify-center text-white">
+                  <Gift className="w-4 h-4 text-white" />
+                </div>
+                <h3 className="text-base font-bold text-white">Last Month&apos;s Reward</h3>
+              </div>
+              <button
+                onClick={() => setActiveModal(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Clear Statements Required in the Last Month's Reward Icon Modal */}
+            <div className="bg-[#08132c] border border-[#0091ea]/50 p-4 rounded-xl space-y-3 text-left">
+              <span className="text-[11px] font-black uppercase tracking-wider text-sky-400 block">
+                Official Last Month&apos;s Reward Rules:
+              </span>
+              <div className="space-y-2.5 text-xs text-slate-100 leading-relaxed font-medium">
+                <p className="flex items-start gap-2">
+                  <span className="text-[#a3e635] font-black text-sm leading-none mt-0.5">1.</span>
+                  <span>
+                    Last month&apos;s reward is to be always collected on every <strong>28th of every month</strong> to the customers&apos; balance for withdraw.
+                  </span>
+                </p>
+                <p className="flex items-start gap-2">
+                  <span className="text-[#a3e635] font-black text-sm leading-none mt-0.5">*</span>
+                  <span>
+                    Last month&apos;s reward should be collected when a customer has invited <strong>4 or more customers</strong> (people who have bought machines)
+                  </span>
+                </p>
+                <p className="flex items-start gap-2">
+                  <span className="text-[#a3e635] font-black text-sm leading-none mt-0.5">*</span>
+                  <span>
+                    Total last month&apos;s reward collected should be only <strong>5%</strong> the total the machine&apos;s price the invited customer has bought.
+                  </span>
+                </p>
+              </div>
+            </div>
+
+            {/* Live Calculation Summary */}
+            <div className="grid grid-cols-2 gap-2 text-center text-xs font-mono">
+              <div className="bg-[#08132c] border border-[#0e2748] p-3 rounded-xl">
+                <span className="text-[10px] text-slate-400 block">Invited Customers (Buyers)</span>
+                <span className={`text-lg font-black mt-0.5 block ${activeInvitedCustomersCount >= 4 ? 'text-emerald-400' : 'text-amber-300'}`}>
+                  {activeInvitedCustomersCount} / 4 Min
+                </span>
+              </div>
+              <div className="bg-[#08132c] border border-[#0e2748] p-3 rounded-xl">
+                <span className="text-[10px] text-slate-400 block">5% Reward Amount</span>
+                <span className="text-lg font-black text-emerald-400 mt-0.5 block">
+                  {currencyInfo.format(lastMonthReward5Pct)}
+                </span>
+              </div>
+            </div>
+
+            {rewardStatusMsg && (
+              <div
+                className={`p-3 rounded-xl text-xs font-medium flex items-center gap-2 ${
+                  rewardStatusMsg.type === 'success'
+                    ? 'bg-emerald-950/80 border border-emerald-500/50 text-emerald-300'
+                    : 'bg-[#08132c] border border-[#0091ea]/50 text-sky-200'
+                }`}
+              >
+                {rewardStatusMsg.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-[#0091ea] shrink-0" />
+                )}
+                <span>{rewardStatusMsg.text}</span>
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleClaimLastMonthReward}
+                disabled={isClaimingLastMonthReward}
+                className="flex-1 py-2.5 bg-gradient-to-r from-[#0091ea] to-[#0077b6] hover:brightness-110 text-white rounded-xl text-xs font-bold cursor-pointer shadow-md"
+              >
+                {isClaimingLastMonthReward ? 'Processing...' : "Get last month's reward (5%)"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveModal(null)}
+                className="px-4 py-2.5 bg-[#08132c] text-slate-300 hover:text-white rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 5: Install App (Standalone PWA Installation with Official App Icon — Not a Shortcut) */}
+      {activeModal === 'download' && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-[#03081a] border border-[#0091ea]/60 shadow-[0_0_25px_rgba(0,145,234,0.2)] rounded-2xl p-5 max-w-md w-full space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#0e2748]">
+              <div className="flex items-center gap-2.5">
+                <img
+                  src="/pwa-192x192.png"
+                  alt="Avor invest App Icon"
+                  className="w-10 h-10 rounded-xl border border-[#00e5ff]/60 shadow-md"
+                />
+                <div>
+                  <h3 className="text-base font-bold text-white">Install Avor invest App</h3>
+                  <p className="text-[10px] text-emerald-400 font-mono font-bold">
+                    Standalone App Package • Official App Icon
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setActiveModal(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-[#08132c] border border-[#0e2748] p-3.5 rounded-xl flex items-center gap-3">
+              <img
+                src="/pwa-192x192.png"
+                alt="Avor invest Icon"
+                className="w-14 h-14 rounded-2xl border border-[#00e5ff]/50 shadow-lg shrink-0"
+              />
+              <div className="text-xs space-y-1">
+                <span className="font-black text-white block text-sm">Avor invest</span>
+                <span className="text-[11px] text-slate-300 block leading-snug">
+                  Installs directly on your phone as a standalone application with the official <strong>Avor invest</strong> app icon (not a browser shortcut).
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2 text-xs text-slate-300 leading-relaxed">
+              {isInstalled ? (
+                <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 text-xs font-bold flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>Avor invest is already installed as a standalone app on your device!</span>
+                </div>
+              ) : isIOS ? (
+                <div className="bg-[#08132c] border border-[#0e2748] p-3 rounded-xl space-y-1.5 font-mono text-[11px]">
+                  <p className="text-sky-400 font-bold">iPhone / iPad Standalone App Install:</p>
+                  <p>1. Tap the <strong className="text-white">Share</strong> button in Safari</p>
+                  <p>2. Select <strong className="text-emerald-400">"Add to Home Screen"</strong></p>
+                  <p>3. Tap <strong className="text-emerald-400">"Add"</strong> to install with the official Avor invest App Icon</p>
+                </div>
+              ) : (
+                <div className="bg-[#08132c] border border-[#0e2748] p-3 rounded-xl space-y-1.5 font-mono text-[11px]">
+                  <p className="text-sky-400 font-bold">Android / Chrome Native App Install:</p>
+                  <p>1. Tap <strong className="text-emerald-400">"Install Avor invest App Now"</strong> below (or tap <strong className="text-white">⋮ → Install app</strong> in Chrome)</p>
+                  <p>2. Confirm <strong className="text-emerald-400">"Install"</strong> in the system dialog</p>
+                  <p>3. Launch <strong className="text-white">Avor invest</strong> from your app drawer with its official app icon</p>
+                </div>
+              )}
+            </div>
+
+            {downloadConfirmMsg && (
+              <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 text-xs font-bold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{downloadConfirmMsg}</span>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              {!isInstalled && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (isInstallable) {
+                      const accepted = await install();
+                      if (accepted) {
+                        setDownloadConfirmMsg('Avor invest App is installing to your device with the official app icon!');
+                      }
+                    } else if (isInIframe) {
+                      window.open(window.location.href, '_blank', 'noopener,noreferrer');
+                      setDownloadConfirmMsg('Opened in main browser window — tap "Install App" to complete full app installation.');
+                    } else {
+                      setDownloadConfirmMsg('Tap your browser menu (⋮) and choose "Install app" to install Avor invest with its app icon.');
+                    }
+                  }}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-[#0091ea] to-[#00b4d8] hover:brightness-110 text-white rounded-xl text-xs font-black cursor-pointer shadow-md"
+                >
+                  Install Avor invest App Now
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setActiveModal(null)}
+                className="px-4 py-2.5 bg-[#08132c] text-slate-300 hover:text-white rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 6: Manager (Strictly restricted to customers who bought a machine per Item 16) */}
+      {activeModal === 'manager' && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-[#03081a] border border-[#0091ea]/60 shadow-[0_0_25px_rgba(0,145,234,0.2)] rounded-2xl p-5 max-w-md w-full space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#0e2748]">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-[#0091ea] flex items-center justify-center text-white">
+                  <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+                    <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
+                  </svg>
+                </div>
+                <h3 className="text-base font-bold text-white">Customer Support Manager</h3>
+              </div>
+              <button
+                onClick={() => setActiveModal(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {!hasBoughtMachine ? (
+              <div className="bg-[#08132c] border border-amber-500/40 rounded-xl p-4 text-center space-y-3">
+                <div className="w-12 h-12 rounded-full bg-amber-950/80 border border-amber-500/50 flex items-center justify-center mx-auto text-amber-400">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <h4 className="text-sm font-black text-white">
+                  Only Active Customers Have Access to the Manager
+                </h4>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Direct access to the dedicated Avor invest Customer Manager is exclusively reserved for active customers who have purchased at least one machine.
+                </p>
+                {onNavigateToMarketplace && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveModal(null);
+                      onNavigateToMarketplace();
+                    }}
+                    className="w-full py-2.5 bg-gradient-to-r from-[#0091ea] to-[#0077b6] hover:brightness-110 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-md"
+                  >
+                    <Cpu className="w-4 h-4" />
+                    <span>Buy a Machine to Unlock Manager Access</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Verified Customer Status Active. Join the official <strong>Avor invest</strong> WhatsApp Group formed by Manager <strong>0741032838</strong> or contact the Manager directly:
+                </p>
+
+                <div className="space-y-2">
+                  <a
+                    href={`https://wa.me/256741032838?text=${encodeURIComponent(
+                      `Hello Avor invest Manager (0741032838), I am an active machine customer (${user?.phone_number || ''}). Please add me to the official Avor invest WhatsApp Group formed by Manager 0741032838.`
+                    )}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                  >
+                    <WhatsAppIcon className="w-4 h-4 fill-white" />
+                    <span>Join WhatsApp Group (Formed by Manager 0741032838)</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+
+                  <a
+                    href="https://wa.me/256741032838?text=Hello%20Avor%20invest%20Manager%20(0741032838)%2C%20I%20am%20an%20active%20machine%20customer%20and%20need%20assistance"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-3 bg-[#0091ea] hover:bg-[#0081d6] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                  >
+                    <WhatsAppIcon className="w-4 h-4 fill-white" />
+                    <span>Direct Chat with Manager (0741032838)</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal 7: Settings (Interactive Profile & Currency Editor + Logout) */}
+      {activeModal === 'settings' && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-[#03081a] border border-[#0091ea]/60 shadow-[0_0_25px_rgba(0,145,234,0.2)] rounded-2xl p-5 max-w-md w-full space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#0e2748]">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-[#0091ea] flex items-center justify-center text-white">
+                  <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                  </svg>
+                </div>
+                <h3 className="text-base font-bold text-white">Account Settings</h3>
+              </div>
+              <button
+                onClick={() => setActiveModal(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {settingsSavedMsg && (
+              <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 text-xs font-bold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{settingsSavedMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveSettings} className="space-y-3 text-xs">
+              <div>
+                <label className="text-slate-400 block mb-1 font-semibold">Full Name:</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder="Enter your name"
+                  className="w-full bg-[#08132c] text-white p-2.5 rounded-xl border border-[#0e2748] focus:border-[#0091ea] font-mono outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1 font-semibold">Registered Phone Number:</label>
+                <input
+                  type="text"
+                  value={editPhone}
+                  onChange={(e) => setEditPhone(e.target.value)}
+                  placeholder="+256700000000"
+                  className="w-full bg-[#08132c] text-sky-400 p-2.5 rounded-xl border border-[#0e2748] focus:border-[#0091ea] font-mono font-bold outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1 font-semibold">Update Password (Optional):</label>
+                <input
+                  type="password"
+                  value={editPassword}
+                  onChange={(e) => setEditPassword(e.target.value)}
+                  placeholder="Leave blank to keep current password"
+                  className="w-full bg-[#08132c] text-white p-2.5 rounded-xl border border-[#0e2748] focus:border-[#0091ea] font-mono outline-none"
+                />
+              </div>
+
+              {onCurrencyChange && (
+                <div>
+                  <label className="text-slate-400 block mb-1 font-semibold">Display Currency:</label>
+                  <select
+                    value={currency}
+                    onChange={(e) => onCurrencyChange(e.target.value as Currency)}
+                    className="w-full bg-[#08132c] text-white p-2.5 rounded-xl border border-[#0e2748] font-mono font-bold outline-none cursor-pointer"
+                  >
+                    <option value="UGX">UGX - Uganda Shillings</option>
+                    <option value="USD">USD - US Dollar</option>
+                    <option value="KES">KES - Kenyan Shilling</option>
+                    <option value="NGN">NGN - Nigerian Naira</option>
+                  </select>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-2.5 bg-[#0091ea] hover:bg-[#0081d6] text-white font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+              >
+                <Save className="w-4 h-4" />
+                <span>Save Settings</span>
+              </button>
+
+              {onLogout && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveModal(null);
+                    onLogout();
+                  }}
+                  className="w-full py-2.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-800/40 text-rose-300 font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer mt-2"
+                >
+                  <LogOut className="w-4 h-4 text-rose-400" />
+                  <span>Log Out of Account</span>
+                </button>
+              )}
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
