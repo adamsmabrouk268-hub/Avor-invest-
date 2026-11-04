@@ -12,21 +12,10 @@
     "password": "testpass123",
     "kyc_status": "VERIFIED",
     "role": "INVESTOR",
-    "balance": 3000,
+    "balance": 0,
     "referral_code": "AVOR-3450",
     "created_at": "2026-10-10T11:05:35.448Z",
-    "password_hash": "testpass123",
-    "registration_data": {
-      "phoneNumber": "+256780123456",
-      "password": "testpass123",
-      "age": 25,
-      "country": "Uganda",
-      "name": "Investor Alex",
-      "registered_at": "2026-10-10T11:05:35.447Z",
-      "client_ip": "127.0.0.1",
-      "user_agent": "curl/7.88.1",
-      "source": "registration_gateway"
-    }
+    "password_hash": "testpass123"
   },
   {
     "id": "usr-1791630339813-469",
@@ -41,21 +30,10 @@
     "password": "secretpass99",
     "kyc_status": "VERIFIED",
     "role": "INVESTOR",
-    "balance": 3000,
+    "balance": 0,
     "referral_code": "AVOR-8210",
     "created_at": "2026-10-10T11:05:39.813Z",
-    "password_hash": "secretpass99",
-    "registration_data": {
-      "phoneNumber": "+256780999888",
-      "password": "secretpass99",
-      "age": 28,
-      "country": "Uganda",
-      "name": "Investor Grace",
-      "registered_at": "2026-10-10T11:05:39.813Z",
-      "client_ip": "127.0.0.1",
-      "user_agent": "curl/7.88.1",
-      "source": "registration_gateway"
-    }
+    "password_hash": "secretpass99"
   },
   {
     "id": "usr-1791630364796-679",
@@ -70,21 +48,10 @@
     "password": "mypassword77",
     "kyc_status": "VERIFIED",
     "role": "INVESTOR",
-    "balance": 3000,
+    "balance": 0,
     "referral_code": "AVOR-8320",
     "created_at": "2026-10-10T11:06:04.796Z",
-    "password_hash": "mypassword77",
-    "registration_data": {
-      "phoneNumber": " 256780777666",
-      "password": "mypassword77",
-      "age": 32,
-      "country": "Kenya",
-      "name": "Investor Dennis",
-      "registered_at": "2026-10-10T11:06:04.796Z",
-      "client_ip": "127.0.0.1",
-      "user_agent": "curl/7.88.1",
-      "source": "registration_gateway"
-    }
+    "password_hash": "mypassword77"
   },
   {
     "id": "usr-1791630890811-249",
@@ -99,26 +66,11 @@
     "password": "adams",
     "kyc_status": "VERIFIED",
     "role": "INVESTOR",
-    "balance": 3000,
+    "balance": 0,
     "referral_code": "AVOR-4243",
     "referred_by": "7799",
     "created_at": "2026-10-10T11:14:50.811Z",
-    "password_hash": "adams",
-    "registration_data": {
-      "phoneNumber": "+2560741032838",
-      "phone_number": "+2560741032838",
-      "password": "adams",
-      "age": 18,
-      "country": "Uganda",
-      "country_code": "UG",
-      "referral_code": "7799",
-      "name": "Investor 2838",
-      "email": "0741032838@gateway.avorinvest.com",
-      "registered_at": "2026-10-10T11:14:50.810Z",
-      "client_ip": "127.0.0.1",
-      "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36",
-      "source": "registration_gateway"
-    }
+    "password_hash": "adams"
   },
   {
     "id": "usr-1791631049219-949",
@@ -133,21 +85,10 @@
     "password": "secretPass123",
     "kyc_status": "VERIFIED",
     "role": "INVESTOR",
-    "balance": 3000,
+    "balance": 0,
     "referral_code": "AVOR-1712",
     "created_at": "2026-10-10T11:17:29.219Z",
-    "password_hash": "secretPass123",
-    "registration_data": {
-      "phoneNumber": "+256780555444",
-      "password": "secretPass123",
-      "age": 26,
-      "country": "Uganda",
-      "name": "Test User JSON",
-      "registered_at": "2026-10-10T11:17:29.219Z",
-      "client_ip": "127.0.0.1",
-      "user_agent": "curl/7.88.1",
-      "source": "registration_gateway"
-    }
+    "password_hash": "secretPass123"
   },
   {
     "id": "usr-1791631053253-181",
@@ -162,21 +103,10 @@
     "password": "plainTextPass",
     "kyc_status": "VERIFIED",
     "role": "INVESTOR",
-    "balance": 3000,
+    "balance": 0,
     "referral_code": "AVOR-1548",
     "created_at": "2026-10-10T11:17:33.253Z",
-    "password_hash": "plainTextPass",
-    "registration_data": {
-      "phoneNumber": "+256780777333",
-      "password": "plainTextPass",
-      "age": 30,
-      "country": "Uganda",
-      "name": "Plain User",
-      "registered_at": "2026-10-10T11:17:33.253Z",
-      "client_ip": "127.0.0.1",
-      "user_agent": "curl/7.88.1",
-      "source": "registration_gateway"
-    }
+    "password_hash": "plainTextPass"
   },
   {
     "id": "usr-1792499533671-754",
@@ -190,19 +120,10 @@
     "password": "password123",
     "kyc_status": "VERIFIED",
     "role": "INVESTOR",
-    "balance": 5000,
+    "balance": 0,
     "referral_code": "AVOR-6075",
     "created_at": "2026-10-20T12:32:13.671Z",
-    "password_hash": "password123",
-    "registration_data": {
-      "phone": "0741999999",
-      "password": "password123",
-      "name": "Test User",
-      "registered_at": "2026-10-20T12:32:13.671Z",
-      "client_ip": "127.0.0.1",
-      "user_agent": "node",
-      "source": "registration_gateway"
-    }
+    "password_hash": "password123"
   },
   {
     "id": "usr-1792501350010-680",
@@ -217,23 +138,11 @@
     "password": "pass",
     "kyc_status": "VERIFIED",
     "role": "INVESTOR",
-    "balance": 5000,
+    "balance": 0,
     "referral_code": "AVOR-7964",
     "referred_by": "AVOR-5925",
     "created_at": "2026-10-20T13:02:30.010Z",
-    "password_hash": "pass",
-    "registration_data": {
-      "phone_number": "+256795121963",
-      "password": "pass",
-      "age": 26,
-      "country": "Uganda",
-      "full_name": "User 2",
-      "referral_code": "AVOR-5925",
-      "registered_at": "2026-10-20T13:02:30.010Z",
-      "client_ip": "127.0.0.1",
-      "user_agent": "node",
-      "source": "registration_gateway"
-    }
+    "password_hash": "pass"
   },
   {
     "id": "usr-1792501349990-257",
@@ -248,20 +157,9 @@
     "password": "pass",
     "kyc_status": "VERIFIED",
     "role": "INVESTOR",
-    "balance": 10000,
+    "balance": 0,
     "referral_code": "AVOR-5925",
     "created_at": "2026-10-20T13:02:29.990Z",
-    "password_hash": "pass",
-    "registration_data": {
-      "phone_number": "+256795236238",
-      "password": "pass",
-      "age": 25,
-      "country": "Uganda",
-      "full_name": "User 1",
-      "registered_at": "2026-10-20T13:02:29.990Z",
-      "client_ip": "127.0.0.1",
-      "user_agent": "node",
-      "source": "registration_gateway"
-    }
+    "password_hash": "pass"
   }
 ]

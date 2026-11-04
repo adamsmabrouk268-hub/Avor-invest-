@@ -84,15 +84,20 @@ export default function App() {
       const codeToUse = codeParam || 'thkjve';
       setReferralCodeFromUrl(codeToUse);
       setIsGuestPreview(false);
-      showNotification(`Invitation code "${codeToUse}" verified! Register below to claim 3,000 UGX bonus.`, 'info');
+      showNotification(`Invitation code "${codeToUse}" verified! Register below to get started.`, 'info');
     }
   }, []);
 
   useEffect(() => {
-    if (user) {
+    if (!user?.id) return;
+    fetchUserData();
+    fetchUserPortfolio();
+    const interval = setInterval(() => {
+      fetchUserData();
       fetchUserPortfolio();
-    }
-  }, [user]);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [user?.id]);
 
   const showNotification = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
     setToast({ message, type });
@@ -283,7 +288,7 @@ export default function App() {
                 if (mode === 'login') {
                   showNotification(`Welcome back to Avor invest, ${loggedInUser.full_name}!`);
                 } else {
-                  showNotification(`Welcome to Avor invest, ${loggedInUser.full_name}! 3,000 UGX bonus credited.`);
+                  showNotification(`Welcome to Avor invest, ${loggedInUser.full_name}!`);
                 }
                 setActiveTab('home');
               }}
@@ -423,6 +428,11 @@ export default function App() {
               {activeTab === 'admin' && checkAndSyncOwnerDevice(user) && (
                 <AdminPanel
                   onExitAdmin={() => setActiveTab('home')}
+                  onDataChanged={() => {
+                    fetchUserData();
+                    fetchUserPortfolio();
+                    fetchMachines();
+                  }}
                   onMachineCreated={() => {
                     fetchMachines();
                     showNotification('New machine added to live marketplace!');
@@ -479,6 +489,10 @@ export default function App() {
           user={user}
           userInvestments={investments}
           onClose={() => setSelectedMachineToInvest(null)}
+          onDepositSubmitted={() => {
+            fetchUserData();
+            fetchUserPortfolio();
+          }}
           onSuccess={() => {
             fetchUserPortfolio();
             fetchMachines();

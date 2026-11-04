@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { MachineCategory, Transaction, User, Machine, HomepageConfig } from '../types';
 import { DepositNumbersManager } from './DepositNumbersManager';
+import { checkAndSyncOwnerDevice } from './TopThreeDotMenu';
 import {
   PlusCircle,
   Cpu,
@@ -96,15 +97,26 @@ export const PRESET_MACHINE_IMAGES = [
 
 interface AdminPanelProps {
   onMachineCreated: () => void;
+  onDataChanged?: () => void;
   onExitAdmin?: () => void;
 }
 
-export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onExitAdmin }) => {
-  // Admin Login State (Default credentials removed so other people cannot access it)
-  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(false);
+export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onDataChanged, onExitAdmin }) => {
+  // Admin Login State (Persisted in session or when on owner's paired device)
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(() => {
+    try {
+      if (typeof window !== 'undefined' && sessionStorage.getItem('avor_admin_authenticated') === 'true') {
+        return true;
+      }
+      return checkAndSyncOwnerDevice();
+    } catch {
+      return false;
+    }
+  });
   const [adminEmail, setAdminEmail] = useState<string>('');
   const [adminPassword, setAdminPassword] = useState<string>('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [isApprovingAll, setIsApprovingAll] = useState<boolean>(false);
 
   // Active Tab
   const [activeTab, setActiveTab] = useState<
@@ -193,6 +205,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onExit
       const data = ct.includes('application/json') ? await res.json() : {};
       if (!res.ok) {
         if (trimmedEmail === 'adamsmabrouk268@gmail.com' && trimmedPass === 'adams@268#') {
+          try { sessionStorage.setItem('avor_admin_authenticated', 'true'); } catch {}
           setIsAdminAuthenticated(true);
           fetchAdminData();
           fetchMachines();
@@ -201,11 +214,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onExit
         throw new Error(data.error || 'Access Denied: Invalid administrator email or password.');
       }
 
+      try { sessionStorage.setItem('avor_admin_authenticated', 'true'); } catch {}
       setIsAdminAuthenticated(true);
       fetchAdminData();
       fetchMachines();
     } catch (err: any) {
       if (trimmedEmail === 'adamsmabrouk268@gmail.com' && trimmedPass === 'adams@268#') {
+        try { sessionStorage.setItem('avor_admin_authenticated', 'true'); } catch {}
         setIsAdminAuthenticated(true);
         fetchAdminData();
         fetchMachines();
@@ -263,6 +278,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onExit
     if (isAdminAuthenticated) {
       fetchAdminData();
       fetchMachines();
+      const interval = setInterval(() => {
+        fetchAdminData();
+      }, 5000);
+      return () => clearInterval(interval);
     }
   }, [isAdminAuthenticated]);
 
@@ -276,7 +295,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onExit
         body: JSON.stringify({
           transaction_id: transactionId,
           action,
-          notes: action === 'APPROVE' ? 'Deposit confirmed by Admin' : 'Deposit request declined',
+          notes: action === 'APPROVE' ? 'Deposit confirmed by Admin & reflected to all deposit planes' : 'Deposit request declined',
         }),
       });
 
@@ -285,11 +304,37 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onExit
 
       setStatusMessage({
         type: 'success',
-        text: data.message || (action === 'APPROVE' ? 'Payment confirmed!' : 'Request rejected.'),
+        text: data.message || (action === 'APPROVE' ? 'Deposit confirmed and reflected across all deposit planes!' : 'Request rejected.'),
       });
-      fetchAdminData();
+      await fetchAdminData();
+      if (onDataChanged) onDataChanged();
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message });
+    }
+  };
+
+  // Handle Confirm All Submitted Deposits
+  const handleApproveAllDeposits = async () => {
+    setStatusMessage(null);
+    setIsApprovingAll(true);
+    try {
+      const res = await fetch('/api/admin/deposits/approve-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to confirm all deposits.');
+
+      setStatusMessage({
+        type: 'success',
+        text: data.message || 'All submitted deposits confirmed and reflected across all deposit planes!',
+      });
+      await fetchAdminData();
+      if (onDataChanged) onDataChanged();
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message });
+    } finally {
+      setIsApprovingAll(false);
     }
   };
 
@@ -305,7 +350,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onExit
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to update investment status.');
       setStatusMessage({ type: 'success', text: data.message });
-      fetchAdminData();
+      await fetchAdminData();
+      if (onDataChanged) onDataChanged();
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message });
     }
@@ -1344,26 +1390,126 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onExit
       {/* TAB 1: PENDING DEPOSITS & MACHINE PAYMENTS */}
       {activeTab === 'DEPOSITS' && (
         <div className="shining-card border border-blue-950/80 rounded-2xl p-6 space-y-4 shadow-xl text-white">
-          <div className="flex items-center justify-between pb-3 border-b border-blue-950/80">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-blue-950/80">
             <div>
-              <h3 className="text-base font-extrabold text-white">Manage Deposit & Machine Payments</h3>
+              <h3 className="text-base font-extrabold text-white">Submitted Deposits & Machine Payments</h3>
               <p className="text-xs text-slate-300">
-                Confirm customer deposits and machine orders sent to Mobile Money receiver <strong>{depositReceiverNumber} ({depositReceiverName})</strong>. Machines stay on <strong>PENDING (0 Days)</strong> until you confirm payment here.
+                All submitted deposits sent to receiver <strong>{depositReceiverNumber} ({depositReceiverName})</strong> arrive here in real time. Confirming a deposit credits the investor&apos;s wallet and immediately reflects across all deposit planes (Home Deposit Details, Profile Wallet &amp; Bill, Vault Logs, Receiver Numbers, and Machine Plane).
               </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto shrink-0">
+              {deposits.filter((d) => d.status === 'PENDING').length > 0 && (
+                <button
+                  type="button"
+                  disabled={isApprovingAll}
+                  onClick={handleApproveAllDeposits}
+                  className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-xs font-black rounded-xl border border-emerald-400/50 flex items-center gap-1.5 cursor-pointer shadow-md transition-all disabled:opacity-50"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-white" />
+                  <span>
+                    {isApprovingAll
+                      ? 'Confirming All...'
+                      : `Confirm All Pending (${deposits.filter((d) => d.status === 'PENDING').length})`}
+                  </span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={fetchAdminData}
+                className="px-3 py-2 bg-[#09152e] hover:bg-[#0f2147] text-cyan-300 text-xs font-bold rounded-xl border border-cyan-500/40 flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`} />
+                <span>Refresh Submitted Deposits</span>
+              </button>
             </div>
           </div>
 
+          {/* Incoming Confirmation Messages Banner */}
+          {deposits.filter((d) => d.status === 'PENDING').length > 0 && (
+            <div className="p-4 bg-amber-950/70 border border-amber-500/50 rounded-2xl space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-amber-300 font-black text-xs uppercase tracking-wider">
+                  <Megaphone className="w-4 h-4 text-amber-400 animate-bounce" />
+                  <span>
+                    Incoming Submitted Deposits ({deposits.filter((d) => d.status === 'PENDING').length} Awaiting Admin Confirmation)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  disabled={isApprovingAll}
+                  onClick={handleApproveAllDeposits}
+                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-black rounded-lg border border-emerald-400/40 cursor-pointer flex items-center gap-1"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Confirm All &amp; Reflect to All Planes</span>
+                </button>
+              </div>
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {deposits
+                  .filter((d) => d.status === 'PENDING')
+                  .map((d: any) => (
+                    <div
+                      key={`alert-${d.id}`}
+                      className="p-3 bg-[#060f24]/90 border border-amber-500/30 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="space-y-0.5">
+                        <div className="font-black text-white flex flex-wrap items-center gap-1.5">
+                          <span>{d.customer_name || d.user_id}</span>
+                          {d.customer_phone && (
+                            <span className="font-mono text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-500/30">
+                              Sender: {d.customer_phone}
+                            </span>
+                          )}
+                          {d.receiver_phone && (
+                            <span className="font-mono text-emerald-300 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/30">
+                              Receiver: {d.receiver_phone} {d.receiver_name ? `(${d.receiver_name})` : ''}
+                            </span>
+                          )}
+                          <span className="font-mono text-amber-300">
+                            • UGX {Number(d.amount || 0).toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-300">
+                          {d.machine_title ? (
+                            <>
+                              Machine: <strong className="text-emerald-300">{d.machine_title}</strong> •{' '}
+                            </>
+                          ) : null}
+                          {d.payment_method} (Ref: <span className="font-mono">{d.payment_reference}</span>)
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => handleDepositAction(d.id, 'APPROVE')}
+                          className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-[11px] font-black rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-xs border border-emerald-500/40"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Confirm &amp; Reflect to All Planes</span>
+                        </button>
+                        <button
+                          onClick={() => handleDepositAction(d.id, 'REJECT')}
+                          className="px-2.5 py-1.5 bg-rose-950/70 hover:bg-rose-900/70 text-rose-300 text-[11px] font-bold rounded-lg border border-rose-500/30 cursor-pointer"
+                        >
+                          Decline
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+
           {deposits.length === 0 ? (
             <div className="text-center py-10 text-slate-400 text-xs">
-              No deposit or machine payment transactions logged yet.
+              No submitted deposits or machine payments logged yet. As soon as any investor submits a deposit, it will appear here for confirmation.
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-blue-950/80 bg-[#070e1f] text-slate-300 uppercase text-[10px] font-bold">
-                    <th className="py-3 px-3">Date</th>
-                    <th className="py-3 px-3">User / Channel</th>
+                    <th className="py-3 px-3">Date / Time</th>
+                    <th className="py-3 px-3">Customer / Sender &amp; Receiver</th>
                     <th className="py-3 px-3">Amount</th>
                     <th className="py-3 px-3">Tx Reference / Machine</th>
                     <th className="py-3 px-3">Status</th>
@@ -1371,30 +1517,42 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onExit
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-blue-950/60">
-                  {deposits.map((d) => {
+                  {deposits.map((d: any) => {
                     const isMachineOrder = d.type === 'INVESTMENT';
                     return (
                       <tr key={d.id} className="hover:bg-[#0c1630]/60 transition-colors">
                         <td className="py-3 px-3 font-mono text-[11px] text-slate-400">
-                          {new Date(d.created_at).toLocaleDateString()}
+                          <div>{new Date(d.created_at).toLocaleDateString()}</div>
+                          <div className="text-[10px] text-slate-500">{new Date(d.created_at).toLocaleTimeString()}</div>
                         </td>
                         <td className="py-3 px-3 font-bold text-white">
-                          <div className="flex items-center gap-1.5">
-                            <span>{d.user_id}</span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span>{d.customer_name || d.user_id}</span>
+                            {d.customer_phone && (
+                              <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/70 px-1.5 py-0.5 rounded">
+                                {d.customer_phone}
+                              </span>
+                            )}
                             <span
                               className={`text-[9px] font-mono font-black px-1.5 py-0.5 rounded uppercase ${
                                 isMachineOrder
                                   ? 'bg-amber-950/90 text-amber-300 border border-amber-500/40'
-                                  : 'bg-blue-950/90 text-blue-300 border border-blue-500/40'
+                                  : d.status === 'SUCCESS'
+                                    ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/40'
+                                    : 'bg-blue-950/90 text-blue-300 border border-blue-500/40'
                               }`}
                             >
-                              {isMachineOrder ? 'Machine Order' : 'Wallet Deposit'}
+                              {isMachineOrder
+                                ? 'Machine Order'
+                                : d.status === 'SUCCESS'
+                                  ? 'Reflected on All Planes'
+                                  : 'Submitted Deposit'}
                             </span>
                           </div>
-                          <span className="text-[10px] text-slate-400 font-normal block">{d.payment_method}</span>
+                          <span className="text-[10px] text-slate-400 font-normal block mt-0.5">{d.payment_method}</span>
                         </td>
                         <td className="py-3 px-3 font-mono font-bold text-blue-300">
-                          UGX {d.amount.toLocaleString()}
+                          UGX {Number(d.amount || 0).toLocaleString()}
                         </td>
                         <td className="py-3 px-3 font-mono text-[11px] text-slate-200 font-bold">
                           <div>{d.payment_reference || 'REF-N/A'}</div>
@@ -1412,7 +1570,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onExit
                                 : 'bg-rose-950/70 text-rose-300 border border-rose-500/40'
                             }`}
                           >
-                            {d.status}
+                            {d.status === 'SUCCESS' ? 'CONFIRMED' : d.status}
                           </span>
                         </td>
                         <td className="py-3 px-3 text-right">
@@ -1423,7 +1581,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onExit
                                 className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-[10px] font-black rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-xs border border-emerald-500/30"
                               >
                                 <Check className="w-3.5 h-3.5" />
-                                <span>{isMachineOrder ? 'Confirm Payment & Start Machine' : 'Confirm Deposit'}</span>
+                                <span>{isMachineOrder ? 'Confirm & Start Machine' : 'Confirm & Reflect'}</span>
                               </button>
 
                               <button
@@ -1435,7 +1593,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onExit
                               </button>
                             </div>
                           ) : (
-                            <span className="text-[10px] text-slate-400 font-mono">Confirmed</span>
+                            <span className="text-[10px] text-emerald-400 font-mono font-bold">
+                              {d.status === 'SUCCESS' ? 'Confirmed & Reflected' : 'Declined'}
+                            </span>
                           )}
                         </td>
                       </tr>

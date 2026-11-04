@@ -75,11 +75,17 @@ export const AccountView: React.FC<AccountViewProps> = ({
   }, [user]);
 
   useEffect(() => {
-    if (user?.id) {
+    if (!user?.id) return;
+    const loadProfileData = () => {
       fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}`)
         .then((r) => (r.ok && (r.headers.get('content-type') || '').includes('application/json') ? r.json() : null))
         .then((data) => {
-          if (data) setDashboardSummary(data);
+          if (data) {
+            setDashboardSummary(data);
+            if (typeof data.balance === 'number' && data.balance !== user.balance && onUpdateUser) {
+              onUpdateUser({ ...user, balance: data.balance });
+            }
+          }
         })
         .catch(() => {});
 
@@ -89,8 +95,12 @@ export const AccountView: React.FC<AccountViewProps> = ({
           if (Array.isArray(data)) setTransactions(data);
         })
         .catch(() => {});
-    }
-  }, [user?.id, investments.length]);
+    };
+
+    loadProfileData();
+    const interval = setInterval(loadProfileData, 4000);
+    return () => clearInterval(interval);
+  }, [user?.id, user?.balance, investments.length]);
 
   const hasBoughtMachine =
     investments.some((i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') ||
@@ -118,11 +128,13 @@ export const AccountView: React.FC<AccountViewProps> = ({
 
   // Card 1: Wallet & Balance
   const totalDeposited = dashboardSummary?.deposit_details?.total_deposited || 0;
+  const pendingDeposits = dashboardSummary?.deposit_details?.pending_deposits || 0;
+  const liveBalanceValue = dashboardSummary?.balance ?? user?.balance ?? 0;
   const displayWallet = totalDeposited.toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-  const displayBalance = (user?.balance ?? 0).toLocaleString('en-US', {
+  const displayBalance = liveBalanceValue.toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
@@ -249,6 +261,11 @@ export const AccountView: React.FC<AccountViewProps> = ({
             <span className="text-2xl sm:text-3xl font-black text-white font-mono mt-1 block">
               {displayWallet}
             </span>
+            {pendingDeposits > 0 && (
+              <span className="text-[10px] font-mono font-bold text-amber-300 mt-0.5 block">
+                Pending: {pendingDeposits.toLocaleString()} UGX
+              </span>
+            )}
           </div>
 
           {/* Right Column: Balance */}
@@ -531,16 +548,31 @@ export const AccountView: React.FC<AccountViewProps> = ({
               ) : (
                 transactions.map((tx) => (
                   <div key={tx.id} className="bg-[#08132c] border border-[#0e2748] p-3 rounded-xl flex items-center justify-between text-xs font-mono">
-                    <div>
+                    <div className="min-w-0 pr-2">
                       <span className="font-bold text-white block uppercase">{tx.type}</span>
-                      <span className="text-[10px] text-slate-400">{new Date(tx.created_at).toLocaleDateString()}</span>
+                      {tx.payment_method && (
+                        <span className="text-[10px] text-slate-300 block truncate">{tx.payment_method}</span>
+                      )}
+                      <span className="text-[10px] text-slate-400">
+                        {new Date(tx.created_at).toLocaleString()} {tx.payment_reference ? `• ${tx.payment_reference}` : ''}
+                      </span>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right shrink-0">
                       <span className={`font-black text-sm block ${tx.type === 'WITHDRAWAL' || tx.type === 'INVESTMENT' ? 'text-rose-400' : 'text-emerald-400'}`}>
                         {tx.type === 'WITHDRAWAL' || tx.type === 'INVESTMENT' ? '-' : '+'}
                         {currencyInfo.format(Math.abs(tx.amount))}
                       </span>
-                      <span className="text-[10px] text-sky-400 uppercase">{tx.status}</span>
+                      <span
+                        className={`text-[10px] font-bold uppercase ${
+                          tx.status === 'SUCCESS' || tx.status === 'CONFIRMED'
+                            ? 'text-emerald-400'
+                            : tx.status === 'PENDING'
+                              ? 'text-amber-300'
+                              : 'text-rose-400'
+                        }`}
+                      >
+                        {tx.status === 'SUCCESS' ? 'CONFIRMED' : tx.status}
+                      </span>
                     </div>
                   </div>
                 ))

@@ -61,6 +61,9 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [accountName, setAccountName] = useState<string>(user?.full_name || '');
   const [summaryHasMachine, setSummaryHasMachine] = useState<boolean>(hasBoughtMachine);
   const [summaryCompletedCycle, setSummaryCompletedCycle] = useState<boolean>(false);
+  const [confirmedDepositsTotal, setConfirmedDepositsTotal] = useState<number>(0);
+  const [pendingDepositsTotal, setPendingDepositsTotal] = useState<number>(0);
+  const [liveUserBalance, setLiveUserBalance] = useState<number>(user?.balance || 0);
 
   const completedCycleInvs = userInvestments.filter(
     (inv) => inv.status === 'PAYOUT_COMPLETE' || (inv.days_elapsed || 0) >= (inv.duration_days || 1)
@@ -83,13 +86,26 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const withdrawNetAmt = Math.max(0, (Number(withdrawAmt) || 0) - withdrawFeeAmt);
 
   useEffect(() => {
+    setLiveUserBalance(user?.balance || 0);
+  }, [user?.balance]);
+
+  useEffect(() => {
     fetchActiveReceiver();
-    if (user) {
+    if (!user) return;
+    const syncVault = () => {
       fetchTransactions();
+      onRefreshUser();
       fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}`)
         .then((r) => (r.ok && (r.headers.get('content-type') || '').includes('application/json') ? r.json() : null))
         .then((d) => {
           if (d) {
+            if (typeof d.balance === 'number') {
+              setLiveUserBalance(d.balance);
+            }
+            if (d.deposit_details) {
+              setConfirmedDepositsTotal(Number(d.deposit_details.total_deposited || 0));
+              setPendingDepositsTotal(Number(d.deposit_details.pending_deposits || 0));
+            }
             if (d.has_bought_machine) {
               setSummaryHasMachine(true);
             }
@@ -99,8 +115,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           }
         })
         .catch(() => {});
-    }
-  }, [user]);
+    };
+    syncVault();
+    const interval = setInterval(syncVault, 4000);
+    return () => clearInterval(interval);
+  }, [user?.id]);
 
   // Fast countdown timer for receiver rotation UI
   useEffect(() => {
@@ -408,8 +427,13 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 Avor Invest Vault
               </h3>
               <p className="text-xs text-blue-400 font-mono font-bold">
-                Balance: {user ? currencyInfo.format(user.balance) : currencyInfo.format(0)}
+                Balance: {currencyInfo.format(liveUserBalance)} • Confirmed Deposits: {currencyInfo.format(confirmedDepositsTotal)}
               </p>
+              {pendingDepositsTotal > 0 && (
+                <p className="text-[10px] text-amber-400 font-mono font-bold mt-0.5">
+                  ⏳ Pending Admin Confirmation: {currencyInfo.format(pendingDepositsTotal)}
+                </p>
+              )}
             </div>
           </div>
           <button
@@ -480,6 +504,32 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
           {activeTab === 'deposit' && (
             <form onSubmit={handleDeposit} className="space-y-4">
+              {/* Deposit Plane Reflection Status Strip */}
+              <div className="grid grid-cols-2 gap-2.5 bg-[#070e1f] border border-blue-950/80 p-3 rounded-xl text-xs">
+                <div className="bg-[#050a18] border border-emerald-500/30 rounded-lg p-2.5">
+                  <span className="text-[10px] font-bold text-emerald-400 uppercase block">
+                    Confirmed Deposits
+                  </span>
+                  <span className="font-mono font-black text-sm text-white block mt-0.5">
+                    {currencyInfo.format(confirmedDepositsTotal)}
+                  </span>
+                  <span className="text-[9px] text-emerald-300/80 block mt-0.5">
+                    Reflected on All Planes
+                  </span>
+                </div>
+                <div className="bg-[#050a18] border border-amber-500/30 rounded-lg p-2.5">
+                  <span className="text-[10px] font-bold text-amber-400 uppercase block">
+                    Pending Confirmation
+                  </span>
+                  <span className="font-mono font-black text-sm text-amber-300 block mt-0.5">
+                    {currencyInfo.format(pendingDepositsTotal)}
+                  </span>
+                  <span className="text-[9px] text-amber-300/80 block mt-0.5">
+                    Reflects After Admin Confirms
+                  </span>
+                </div>
+              </div>
+
               {/* Dynamic Rotating Receiver Info Box */}
               <div className="bg-[#070e1f] border border-blue-950/80 p-4 rounded-xl space-y-3 text-xs shadow-inner">
                 <div className="flex items-center justify-between">
@@ -889,12 +939,15 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     key={tx.id}
                     className="bg-[#070e1f] border border-blue-950/80 p-3 rounded-xl flex items-center justify-between text-xs"
                   >
-                    <div>
+                    <div className="min-w-0 pr-2">
                       <span className="font-bold text-white block">{tx.type}</span>
-                      <span className="text-[10px] text-slate-400">{tx.payment_method}</span>
+                      <span className="text-[10px] text-slate-400 block truncate">{tx.payment_method}</span>
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        {new Date(tx.created_at).toLocaleString()} {tx.payment_reference ? `• ${tx.payment_reference}` : ''}
+                      </span>
                     </div>
 
-                    <div className="text-right">
+                    <div className="text-right shrink-0">
                       <span
                         className={`font-mono font-bold text-xs block ${
                           tx.type === 'DEPOSIT' || tx.type === 'DAILY_YIELD' || tx.type === 'REFERRAL_BONUS'
@@ -905,8 +958,16 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                         {tx.type === 'WITHDRAWAL' || tx.type === 'INVESTMENT' ? '-' : '+'}
                         {currencyInfo.format(tx.amount)}
                       </span>
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        {new Date(tx.created_at).toLocaleDateString()}
+                      <span
+                        className={`inline-block mt-0.5 px-2 py-0.5 rounded text-[9px] font-mono font-extrabold uppercase ${
+                          tx.status === 'SUCCESS' || tx.status === 'CONFIRMED'
+                            ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/40'
+                            : tx.status === 'PENDING'
+                              ? 'bg-amber-950/80 text-amber-300 border border-amber-500/40'
+                              : 'bg-rose-950/80 text-rose-300 border border-rose-500/40'
+                        }`}
+                      >
+                        {tx.status === 'SUCCESS' ? 'CONFIRMED' : tx.status}
                       </span>
                     </div>
                   </div>

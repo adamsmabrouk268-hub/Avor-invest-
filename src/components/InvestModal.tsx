@@ -26,6 +26,7 @@ interface InvestModalProps {
   userInvestments?: Investment[];
   onClose: () => void;
   onSuccess: () => void;
+  onDepositSubmitted?: () => void;
   onOpenAuth: () => void;
   onOpenDeposit?: () => void;
   onNotify?: (message: string, type?: 'success' | 'info' | 'error') => void;
@@ -38,6 +39,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
   userInvestments,
   onClose,
   onSuccess,
+  onDepositSubmitted,
   onOpenAuth,
   onNotify,
 }) => {
@@ -111,7 +113,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
   const [isLoadingReceiver, setIsLoadingReceiver] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [depositSuccessMessage, setDepositSuccessMessage] = useState<string | null>(null);
-  const [successData, setSuccessData] = useState<{ message: string } | null>(null);
+  const [successData, setSuccessData] = useState<{ message: string; status?: string } | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const RECEIVER_PHONE = '0741032838';
@@ -211,7 +213,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
   const userHasEnoughBalance = liveBalance >= totalCost;
   const isMobileMoney = selectedChannel === 'MTN Mobile Money' || selectedChannel === 'Airtel Money';
 
-  // Step 2: Handle depositing to wallet via Mobile Money
+  // Step 2: Handle submitting deposit to Admin via Mobile Money (Reflects across all deposit planes once Admin confirms)
   const handleDepositToWallet = async () => {
     if (!user) {
       onOpenAuth();
@@ -236,14 +238,25 @@ export const InvestModal: React.FC<InvestModalProps> = ({
           phone_number: phoneNumber.trim(),
           receiver_phone: activeReceiver.phone_number || RECEIVER_PHONE,
           receiver_name: activeReceiver.account_name || RECEIVER_NAME,
+          machine_id: machine.id,
+          machine_title: `${machine.title} (${units} Unit${units > 1 ? 's' : ''})`,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Failed to submit wallet deposit.');
       }
+      if (typeof data.new_balance === 'number') {
+        setLiveBalance(data.new_balance);
+      }
       setPendingDepositAmount((prev) => prev + totalCost);
-      const msg = `Deposit of ${currencyInfo.format(totalCost)} via ${selectedChannel} to ${activeReceiver.phone_number || RECEIVER_PHONE} submitted! Please wait for Admin to confirm your deposit. Once confirmed, money automatically goes to your wallet and you can buy the machine.`;
+      setSelectedChannel('Wallet Balance');
+      if (onDepositSubmitted) {
+        onDepositSubmitted();
+      }
+      const msg =
+        data.message ||
+        `Deposit of ${currencyInfo.format(totalCost)} submitted to Admin for confirmation! Once Admin confirms your deposit, it will automatically reflect across all deposit planes and your Wallet Balance.`;
       setDepositSuccessMessage(msg);
       if (onNotify) {
         onNotify(msg, 'info');
@@ -289,8 +302,14 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       if (!res.ok) {
         throw new Error(data.error || 'Failed to purchase machine.');
       }
+      if (typeof data.user_balance === 'number') {
+        setLiveBalance(data.user_balance);
+      }
       setSuccessData({
-        message: data.message || `Successfully bought ${machine.title}! Your machine is now ACTIVE and running on Day 1.`,
+        message:
+          data.message ||
+          `Machine order for ${machine.title} placed using your wallet! Confirmation message has reached Admin.`,
+        status: data.status || 'PENDING',
       });
       onSuccess();
     } catch (err: any) {
@@ -353,10 +372,20 @@ export const InvestModal: React.FC<InvestModalProps> = ({
               </div>
 
               <div className="space-y-1">
-                <span className="inline-block px-3 py-1 rounded-full bg-emerald-950/90 border border-emerald-500/50 text-emerald-300 text-[10px] font-mono font-black uppercase">
-                  ACTIVE • Day 1 of {machine.duration_days} Days
+                <span
+                  className={`inline-block px-3 py-1 rounded-full text-[10px] font-mono font-black uppercase border ${
+                    successData.status === 'PENDING'
+                      ? 'bg-amber-950/90 border-amber-500/50 text-amber-300'
+                      : 'bg-emerald-950/90 border-emerald-500/50 text-emerald-300'
+                  }`}
+                >
+                  {successData.status === 'PENDING'
+                    ? `CONFIRMATION SENT TO ADMIN • ${machine.duration_days} Days Cycle`
+                    : `ACTIVE • Day 1 of ${machine.duration_days} Days`}
                 </span>
-                <h3 className="text-xl font-black text-white">Machine Activated!</h3>
+                <h3 className="text-xl font-black text-white">
+                  {successData.status === 'PENDING' ? 'Machine Order Sent to Admin!' : 'Machine Activated!'}
+                </h3>
                 <p className="text-xs text-slate-300">{successData.message}</p>
               </div>
 
@@ -378,30 +407,39 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                 </div>
               )}
 
-              {/* Pending Deposit Notification Banner */}
+              {/* Deposit Submitted to Admin / Wallet Status Notification Banner */}
               {(depositSuccessMessage || pendingDepositAmount > 0) && (
-                <div className="p-3.5 bg-amber-950/80 border border-amber-500/60 rounded-xl text-amber-200 text-xs space-y-2 animate-fade-in">
+                <div
+                  className={`p-3.5 rounded-xl text-xs space-y-2 animate-fade-in border ${
+                    userHasEnoughBalance
+                      ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-200'
+                      : 'bg-amber-950/80 border-amber-500/60 text-amber-200'
+                  }`}
+                >
                   <div className="flex items-start gap-2">
-                    <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5 animate-spin" />
-                    <div>
-                      <span className="font-black text-amber-300 block">
-                        Deposit Pending Admin Confirmation ({currencyInfo.format(pendingDepositAmount || totalCost)})
+                    <CheckCircle2
+                      className={`w-4 h-4 shrink-0 mt-0.5 ${
+                        userHasEnoughBalance ? 'text-emerald-400' : 'text-amber-400'
+                      }`}
+                    />
+                    <div className="flex-1">
+                      <span
+                        className={`font-black block ${
+                          userHasEnoughBalance ? 'text-emerald-300' : 'text-amber-300'
+                        }`}
+                      >
+                        {userHasEnoughBalance
+                          ? `Deposit Confirmed & Reflected on Wallet (${currencyInfo.format(liveBalance)})`
+                          : `Deposit Submitted to Admin for Confirmation (${currencyInfo.format(pendingDepositAmount || totalCost)})`}
                       </span>
-                      <p className="text-[11px] text-amber-100/90 mt-0.5 leading-relaxed">
-                        {depositSuccessMessage ||
-                          `You have a pending wallet top-up of ${currencyInfo.format(pendingDepositAmount)}. Once Admin confirms your payment, the funds will go to your wallet balance automatically and you can click Buy Unit.`}
+                      <p className="text-[11px] opacity-90 mt-0.5 leading-relaxed">
+                        {userHasEnoughBalance
+                          ? `Admin has confirmed your deposit and it is now reflected across all deposit planes! Click Buy Unit below to complete your machine purchase.`
+                          : depositSuccessMessage ||
+                            `Your deposit of ${currencyInfo.format(pendingDepositAmount)} has reached Admin and is awaiting confirmation. Once Admin confirms, it will automatically reflect here and on all deposit planes.`}
                       </p>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => refreshWalletStatus(true)}
-                    disabled={isCheckingBalance}
-                    className="w-full py-1.5 bg-[#09152e] hover:bg-[#0f2147] text-cyan-300 text-[11px] font-bold rounded-lg border border-cyan-500/40 flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isCheckingBalance ? 'animate-spin' : ''}`} />
-                    <span>{isCheckingBalance ? 'Checking...' : 'Check If Admin Confirmed My Deposit'}</span>
-                  </button>
                 </div>
               )}
 
@@ -475,8 +513,8 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                       <Wallet className="w-4 h-4 text-sky-400 shrink-0" />
                       <span className="text-xs font-bold text-white truncate">Wallet Balance</span>
                     </div>
-                    <span className="text-[11px] text-slate-400 mt-1 block">
-                      Buy Machine Only
+                    <span className="text-[11px] text-sky-300 font-mono font-bold mt-1 block">
+                      {currencyInfo.format(liveBalance)} Available
                     </span>
                   </button>
 

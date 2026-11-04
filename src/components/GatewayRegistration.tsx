@@ -575,11 +575,11 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
             </div>
           </form>
 
-          {/* Welcome Bonus Notice (3,000 UGX) */}
+          {/* Platform Security Note */}
           <div className="mt-5 text-center text-xs text-slate-300 font-sans flex items-center justify-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
             <span>
-              New accounts receive <strong className="text-cyan-300 font-semibold">UGX 3,000 Welcome Bonus</strong> automatically.
+              Official <strong className="text-cyan-300 font-semibold">Avor invest</strong> Compute Leasing Gateway
             </span>
           </div>
 
