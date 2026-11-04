@@ -41,6 +41,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
   onSuccess,
   onDepositSubmitted,
   onOpenAuth,
+  onOpenDeposit,
   onNotify,
 }) => {
   if (!machine) return null;
@@ -105,9 +106,10 @@ export const InvestModal: React.FC<InvestModalProps> = ({
   const [pendingDepositAmount, setPendingDepositAmount] = useState<number>(0);
 
   // Payment channel selection: 'Wallet Balance' | 'MTN Mobile Money' | 'Airtel Money' | 'Card Billing'
-  // Default to MTN Mobile Money so investor immediately gets the number to deposit on like in the second screenshot
-  const [selectedChannel, setSelectedChannel] = useState<'Wallet Balance' | 'MTN Mobile Money' | 'Airtel Money' | 'Card Billing'>('MTN Mobile Money');
-  const [phoneNumber, setPhoneNumber] = useState<string>(user?.phone_number || '+256741032838');
+  // Default to 'Wallet Balance' because user buys machine using money on wallet after depositing
+  const [selectedChannel, setSelectedChannel] = useState<'Wallet Balance' | 'MTN Mobile Money' | 'Airtel Money' | 'Card Billing'>('Wallet Balance');
+  const [phoneNumber, setPhoneNumber] = useState<string>(user?.phone_number || '');
+  const [hasRevealedReceiver, setHasRevealedReceiver] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [isCheckingBalance, setIsCheckingBalance] = useState<boolean>(false);
   const [isLoadingReceiver, setIsLoadingReceiver] = useState<boolean>(false);
@@ -322,14 +324,28 @@ export const InvestModal: React.FC<InvestModalProps> = ({
   const handleActionClick = () => {
     if (selectedChannel === 'Wallet Balance') {
       if (!userHasEnoughBalance) {
+        if (onOpenDeposit) {
+          onOpenDeposit();
+          return;
+        }
         setSelectedChannel('MTN Mobile Money');
+        setHasRevealedReceiver(false);
         setErrorMessage(
-          `Wallet balance (${currencyInfo.format(liveBalance)}) is less than ${currencyInfo.format(totalCost)}. Please deposit on your wallet first using MTN Mobile Money or Airtel Money below.`
+          `Wallet balance (${currencyInfo.format(liveBalance)}) is less than ${currencyInfo.format(totalCost)}. Please deposit on your wallet first.`
         );
         return;
       }
       handleBuyWithWallet();
     } else {
+      if (!hasRevealedReceiver) {
+        if (!phoneNumber.trim() || phoneNumber.replace(/\D/g, '').length < 7) {
+          setErrorMessage('Please enter the phone number you are going to use to deposit first.');
+          return;
+        }
+        setErrorMessage(null);
+        setHasRevealedReceiver(true);
+        return;
+      }
       handleDepositToWallet();
     }
   };
@@ -586,109 +602,136 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                 </div>
               </div>
 
-              {/* ACTIVE VERIFIED RECEIVER BOX (Matching Screenshot 2) */}
-              <div className="bg-[#050c1c] border border-blue-900/80 rounded-2xl p-4 space-y-3 animate-fade-in shadow-inner">
-                <div className="flex items-center justify-between border-b border-blue-950/80 pb-2.5">
-                  <div className="flex items-center gap-1.5">
-                    <span className="bg-blue-950/80 border border-blue-500/40 text-blue-300 font-black px-2 py-0.5 rounded text-[10px] uppercase flex items-center gap-1">
-                      <ShieldCheck className="w-3 h-3 text-blue-400" />
-                      <span>Active Verified Receiver</span>
-                    </span>
-                    <span
-                      className={`text-[10px] font-black px-2 py-0.5 rounded uppercase ${
-                        selectedChannel === 'Airtel Money'
-                          ? 'bg-rose-600 text-white'
-                          : 'bg-[#ffcc00] text-slate-950'
-                      }`}
-                    >
-                      {selectedChannel === 'Airtel Money' ? 'Airtel Money' : 'MTN MoMo'}
-                    </span>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={rotateReceiver}
-                    disabled={isLoadingReceiver}
-                    title="Request Next Alternate Receiver in Rotation Pool"
-                    className="text-[11px] font-bold text-blue-300 hover:text-white flex items-center gap-1 bg-[#091329] hover:bg-[#0f1f42] px-2 py-1 rounded-lg transition-all cursor-pointer border border-blue-900/60"
-                  >
-                    <RotateCcw className={`w-3 h-3 ${isLoadingReceiver ? 'animate-spin' : ''}`} />
-                    <span>Alternate Line</span>
-                  </button>
-                </div>
-
-                <div className="space-y-2 bg-[#050a18] p-3 rounded-lg border border-blue-950/80 shadow-inner">
-                  {/* Phone Number Field with Copy */}
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-slate-400 font-bold text-xs">Deposit Phone Number:</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-mono text-base font-black text-blue-400 tracking-wider">
-                        {activeReceiver.phone_number || RECEIVER_PHONE}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => copyToClipboard(activeReceiver.phone_number || RECEIVER_PHONE, 'phone')}
-                        className="px-2 py-1 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-black text-[11px] rounded flex items-center gap-1 cursor-pointer transition-all shadow-xs border border-blue-400/40"
-                      >
-                        {copiedField === 'phone' ? <Check className="w-3 h-3 text-white" /> : <Copy className="w-3 h-3" />}
-                        <span>{copiedField === 'phone' ? 'Copied' : 'Copy'}</span>
-                      </button>
+              {/* STEP 3 & 4 INSIDE INVEST MODAL WHEN MOBILE MONEY IS SELECTED */}
+              {selectedChannel !== 'Wallet Balance' && (
+                <div className="space-y-3 animate-fade-in">
+                  {/* Step 3: Enter Sender Phone Number & Amount before receiving deposit number */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
+                      AMOUNT TO DEPOSIT ON WALLET (UGX)
+                    </label>
+                    <div className="w-full px-4 py-3 bg-[#060e22] border border-blue-900/70 rounded-xl text-sm font-black text-amber-300 font-mono">
+                      {currencyInfo.format(totalCost)}
                     </div>
                   </div>
 
-                  {/* Receiver Name Field with Copy */}
-                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-blue-950/80">
-                    <span className="text-slate-400 font-bold text-xs">Registered Account Name:</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-extrabold text-white text-xs uppercase bg-[#091329] px-2 py-0.5 rounded border border-blue-900/60">
-                        {activeReceiver.account_name || RECEIVER_NAME}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => copyToClipboard(activeReceiver.account_name || RECEIVER_NAME, 'name')}
-                        className="px-2 py-1 bg-[#091329] hover:bg-[#0f1f42] text-slate-200 font-bold text-[11px] rounded flex items-center gap-1 cursor-pointer transition-all border border-blue-900/60"
-                      >
-                        {copiedField === 'name' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-slate-400" />}
-                        <span>{copiedField === 'name' ? 'Copied' : 'Copy'}</span>
-                      </button>
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
+                      YOUR PHONE NUMBER (NUMBER YOU WILL USE TO DEPOSIT)
+                    </label>
+                    <input
+                      type="tel"
+                      value={phoneNumber}
+                      onChange={(e) => setPhoneNumber(e.target.value)}
+                      placeholder="07XXXXXXXX"
+                      className="w-full px-4 py-3 bg-[#060e22] border border-blue-900/70 rounded-xl text-sm text-white font-mono focus:outline-none focus:border-blue-500 shadow-inner"
+                    />
+                  </div>
+
+                  {!hasRevealedReceiver ? (
+                    <div className="p-3.5 rounded-xl bg-[#050c1c] border border-blue-900/80 text-[11px] font-bold text-slate-300 uppercase leading-relaxed">
+                      Enter the same MTN or Airtel phone number that you will use to make the payment, then click below to receive the company&apos;s deposit number and registered name.
                     </div>
+                  ) : (
+                    /* Step 4: Reveals the Number to Deposit Money On & Registered Name */
+                    <div className="bg-[#050c1c] border border-amber-500/40 rounded-2xl p-4 space-y-3 animate-fade-in shadow-inner">
+                      <div className="flex items-center justify-between border-b border-blue-950/80 pb-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className="bg-amber-950/80 border border-amber-500/40 text-amber-300 font-black px-2 py-0.5 rounded text-[10px] uppercase flex items-center gap-1">
+                            <ShieldCheck className="w-3 h-3 text-amber-400" />
+                            <span>Payment Information</span>
+                          </span>
+                          <span
+                            className={`text-[10px] font-black px-2 py-0.5 rounded uppercase ${
+                              selectedChannel === 'Airtel Money'
+                                ? 'bg-rose-600 text-white'
+                                : 'bg-[#ffcc00] text-slate-950'
+                            }`}
+                          >
+                            {selectedChannel === 'Airtel Money' ? 'Airtel Money' : 'MTN MoMo'}
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={rotateReceiver}
+                          disabled={isLoadingReceiver}
+                          title="Request Next Alternate Receiver in Rotation Pool"
+                          className="text-[11px] font-bold text-blue-300 hover:text-white flex items-center gap-1 bg-[#091329] hover:bg-[#0f1f42] px-2 py-1 rounded-lg transition-all cursor-pointer border border-blue-900/60"
+                        >
+                          <RotateCcw className={`w-3 h-3 ${isLoadingReceiver ? 'animate-spin' : ''}`} />
+                          <span>Alternate Line</span>
+                        </button>
+                      </div>
+
+                      <div className="space-y-2 bg-[#050a18] p-3 rounded-lg border border-blue-950/80 shadow-inner">
+                        {/* Account Number Field with Copy */}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-slate-400 font-bold text-xs uppercase">Account Number:</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-base font-black text-amber-400 tracking-wider">
+                              {activeReceiver.phone_number || RECEIVER_PHONE}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard(activeReceiver.phone_number || RECEIVER_PHONE, 'phone')}
+                              className="px-2 py-1 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-black text-[11px] rounded flex items-center gap-1 cursor-pointer transition-all shadow-xs border border-blue-400/40"
+                            >
+                              {copiedField === 'phone' ? <Check className="w-3 h-3 text-white" /> : <Copy className="w-3 h-3" />}
+                              <span>{copiedField === 'phone' ? 'Copied' : 'Copy'}</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Account Name Field with Copy */}
+                        <div className="flex items-center justify-between gap-2 pt-2 border-t border-blue-950/80">
+                          <span className="text-slate-400 font-bold text-xs uppercase">Account Name:</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-extrabold text-white text-xs uppercase bg-[#091329] px-2 py-0.5 rounded border border-blue-900/60">
+                              {activeReceiver.account_name || RECEIVER_NAME}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard(activeReceiver.account_name || RECEIVER_NAME, 'name')}
+                              className="px-2 py-1 bg-[#091329] hover:bg-[#0f1f42] text-slate-200 font-bold text-[11px] rounded flex items-center gap-1 cursor-pointer transition-all border border-blue-900/60"
+                            >
+                              {copiedField === 'name' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-slate-400" />}
+                              <span>{copiedField === 'name' ? 'Copied' : 'Copy'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* When Wallet Balance is selected */}
+              {selectedChannel === 'Wallet Balance' && (
+                <div className="p-3.5 bg-[#050c1c] border border-blue-900/80 rounded-2xl space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400 font-bold uppercase">Machine Cost:</span>
+                    <span className="font-mono font-black text-white text-sm">{currencyInfo.format(totalCost)}</span>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-blue-950/80 pt-2">
+                    <span className="text-slate-400 font-bold uppercase">Your Wallet Balance:</span>
+                    <span className={`font-mono font-black text-sm ${userHasEnoughBalance ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {currencyInfo.format(liveBalance)}
+                    </span>
                   </div>
                 </div>
-
-                <div className="flex items-start gap-1.5 text-[11px] text-slate-300 leading-tight">
-                  <Clock className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />
-                  <p>
-                    📌 <strong>Anti-Tracking Active Channel:</strong> Send money to{' '}
-                    <strong>{activeReceiver.phone_number || RECEIVER_PHONE} ({activeReceiver.account_name || RECEIVER_NAME})</strong>{' '}
-                    via Mobile Money. Deposit numbers cycle automatically to protect transactions and stay within limits.
-                  </p>
-                </div>
-              </div>
-
-              {/* SENDER PHONE NUMBER INPUT (Matching Screenshot 2) */}
-              <div className="space-y-1.5">
-                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-                  SENDER PHONE NUMBER
-                </label>
-                <input
-                  type="tel"
-                  value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(e.target.value)}
-                  placeholder="+256741032838"
-                  className="w-full px-4 py-3 bg-[#060e22] border border-blue-900/70 rounded-xl text-sm text-white font-mono focus:outline-none focus:border-blue-500 shadow-inner"
-                />
-              </div>
+              )}
 
               {/* When Wallet Balance is selected but insufficient */}
               {selectedChannel === 'Wallet Balance' && !userHasEnoughBalance && (
                 <div className="p-3.5 bg-amber-950/70 border border-amber-500/50 rounded-2xl space-y-2 text-xs text-amber-200">
                   <div className="flex items-center gap-2 text-amber-300 font-bold">
                     <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Wallet Balance is Less Than Required</span>
+                    <span>Deposit on Wallet First to Buy Machine</span>
                   </div>
                   <p className="text-[11px] text-amber-100/90 leading-relaxed">
-                    Available: <strong>{currencyInfo.format(liveBalance)}</strong> • Required: <strong>{currencyInfo.format(totalCost)}</strong>.
-                    Please select <strong>Airtel Money</strong> or <strong>MTN Mobile Money</strong> above to top up your wallet first.
+                    Available on Wallet: <strong>{currencyInfo.format(liveBalance)}</strong> • Required: <strong>{currencyInfo.format(totalCost)}</strong>.
+                    Click below to deposit money onto your wallet first, then return here to buy <strong>{machine.title}</strong> using the money on your wallet.
                   </p>
                 </div>
               )}
@@ -698,7 +741,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                 <div className="p-3 bg-emerald-950/70 border border-emerald-500/50 rounded-2xl flex items-center gap-2.5 text-xs text-emerald-200">
                   <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                   <span>
-                    <strong>Wallet Funded!</strong> Money on your wallet is ready to buy this unit and start running. (Money on balance is for withdrawal only after the total cycle duration of days).
+                    <strong>Wallet Funded!</strong> Click below to buy <strong>{machine.title}</strong> using the money on your wallet.
                   </span>
                 </div>
               )}
@@ -713,7 +756,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                 </span>
               </div>
 
-              {/* BOTTOM ACTION BUTTON (Matching exact screenshot) */}
+              {/* BOTTOM ACTION BUTTON */}
               <div className="pt-1">
                 {hasActiveAV1 ? (
                   <button
@@ -744,9 +787,13 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                     <span>
                       {isSubmitting
                         ? 'Processing...'
-                        : selectedChannel === 'Wallet Balance' && userHasEnoughBalance
-                        ? `Buy Unit (${currencyInfo.format(totalCost)})`
-                        : `Submit Deposit (${currencyInfo.format(totalCost)}) for Admin Confirmation`}
+                        : selectedChannel === 'Wallet Balance'
+                          ? userHasEnoughBalance
+                            ? `Buy Machine Using Wallet (${currencyInfo.format(totalCost)})`
+                            : `Deposit on Wallet First (${currencyInfo.format(totalCost)})`
+                          : !hasRevealedReceiver
+                            ? 'Continue to Receive Deposit Number & Name'
+                            : `Confirm Payment (${currencyInfo.format(totalCost)})`}
                     </span>
                   </button>
                 )}

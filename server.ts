@@ -1703,10 +1703,18 @@ async function startServer() {
 
     const refCode = `MACH-${Math.floor(100000 + Math.random() * 900000)}`;
 
-    if (unconfirmedDepositTx) {
-      // Link existing pending deposit transaction to this machine purchase so Admin sees the machine on the deposit record too
-      unconfirmedDepositTx.investment_id = newInvestment.id;
-      unconfirmedDepositTx.machine_title = newInvestment.machine_title;
+    const recentConfirmedDep = transactions.find(
+      (t) =>
+        doesTxBelongToUser(t, user, user_id) &&
+        t.type === 'DEPOSIT' &&
+        (t.status === 'SUCCESS' || t.status === 'CONFIRMED') &&
+        !t.investment_id
+    );
+    if (recentConfirmedDep) {
+      recentConfirmedDep.investment_id = newInvestment.id;
+      if (!recentConfirmedDep.machine_title) {
+        recentConfirmedDep.machine_title = newInvestment.machine_title;
+      }
     }
 
     const newTx: Transaction = {
@@ -1753,6 +1761,11 @@ async function startServer() {
     }
 
     const rewardNote = activateConfirmedMachineInvestment(newInvestment, 'Activated via Admin-approved wallet balance');
+    notifyAllAdmins(
+      `✅ Machine Purchased & Activated: ${newInvestment.machine_title}`,
+      `Customer ${user.full_name || user.id} (${phone_number || user.phone_number || 'No Phone'}) purchased ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} using their Admin-confirmed wallet balance (Ref: ${refCode}).`,
+      'PAYMENT'
+    );
     saveAppStateToDisk();
 
     res.status(201).json({

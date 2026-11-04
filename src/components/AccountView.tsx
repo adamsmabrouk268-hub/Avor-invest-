@@ -279,6 +279,37 @@ export const AccountView: React.FC<AccountViewProps> = ({
           </div>
         </div>
 
+        {/* Direct Deposit & Withdraw Action Buttons on Wallet Card (Step 1 of Deposit Flow) */}
+        <div className="grid grid-cols-2 gap-3 mt-4 pt-3 border-t border-[#0091ea]/25">
+          <button
+            type="button"
+            onClick={() => onOpenWalletModal('deposit')}
+            className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:brightness-110 border border-blue-400/50 text-white font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md shadow-blue-900/40 active:scale-98"
+          >
+            DEPOSIT
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenWalletModal('withdraw')}
+            className="py-2.5 px-4 rounded-xl bg-[#07142e] hover:bg-[#0c1f47] border border-[#0091ea]/50 text-white font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm active:scale-98"
+          >
+            WITHDRAW
+          </button>
+        </div>
+
+        {onNavigateToMarketplace && (
+          <div className="mt-2.5">
+            <button
+              type="button"
+              onClick={onNavigateToMarketplace}
+              className="w-full py-2 px-4 rounded-xl bg-[#061229] hover:bg-[#0a1c40] border border-cyan-500/40 text-cyan-300 font-bold text-xs uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2"
+            >
+              <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+              <span>BUY A MACHINE (USING WALLET)</span>
+            </button>
+          </div>
+        )}
+
         {/* Center Double Chevron ︾ Icon (Clickable to show user info details) */}
         <button
           type="button"

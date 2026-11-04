@@ -541,6 +541,7 @@ export default function App() {
             fetchUserData();
             fetchUserPortfolio();
           }}
+          onNavigateToMarketplace={() => setActiveTab('marketplace')}
         />
       )}
     </div>
