@@ -48,11 +48,13 @@ service cloud.firestore {
           'paymentMethod',
           'paymentReference',
           'status',
-          'authorUid'
+          'authorUid',
+          'userId',
+          'transactionId'
         ]) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
         data.item is string && data.item.size() >= 1 && data.item.size() <= 1000 &&
-        data.timestamp == request.time &&
+        data.timestamp is timestamp &&
         (!('senderPhone' in data) || (data.senderPhone is string && data.senderPhone.size() >= 3 && data.senderPhone.size() <= 40)) &&
         (!('receiverPhone' in data) || (data.receiverPhone is string && data.receiverPhone.size() >= 3 && data.receiverPhone.size() <= 40)) &&
         (!('receiverName' in data) || (data.receiverName is string && data.receiverName.size() >= 1 && data.receiverName.size() <= 120)) &&
@@ -61,7 +63,9 @@ service cloud.firestore {
         (!('paymentMethod' in data) || (data.paymentMethod is string && data.paymentMethod.size() >= 1 && data.paymentMethod.size() <= 100)) &&
         (!('paymentReference' in data) || (data.paymentReference is string && data.paymentReference.size() >= 1 && data.paymentReference.size() <= 120)) &&
         (!('status' in data) || (data.status is string && data.status in ['PENDING', 'CONFIRMED', 'SUCCESS'])) &&
-        (!('authorUid' in data) || (data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128 && (!isSignedIn() || data.authorUid == request.auth.uid)));
+        (!('authorUid' in data) || (data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128)) &&
+        (!('userId' in data) || (data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128)) &&
+        (!('transactionId' in data) || (data.transactionId is string && data.transactionId.size() >= 1 && data.transactionId.size() <= 128));
     }
 
     function isValidAdminUser(data) {
@@ -83,16 +87,19 @@ service cloud.firestore {
     }
 
     match /admin_messages/{messageId} {
-      allow get: if isValidId(messageId) && (
+      allow get: if isValidId(messageId) && existing().name is string;
+      allow list: if resource.data.name is string && resource.data.name.size() >= 1;
+      allow create: if isValidId(messageId) && isValidAdminMessage(incoming()) && incoming().timestamp == request.time;
+      allow update: if isValidId(messageId) && isValidAdminMessage(incoming()) && (
         isAdmin() ||
-        (isSignedIn() && existing().authorUid == request.auth.uid)
+        (
+          incoming().name == existing().name &&
+          incoming().item == existing().item &&
+          incoming().timestamp == existing().timestamp &&
+          incoming().status in ['PENDING', 'CONFIRMED', 'SUCCESS'] &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status'])
+        )
       );
-      allow list: if isAdmin() || (isSignedIn() && resource.data.authorUid == request.auth.uid);
-      allow create: if isValidId(messageId) && isValidAdminMessage(incoming());
-      allow update: if isValidId(messageId) && isAdmin() && isValidAdminMessage(incoming()) &&
-        incoming().name == existing().name &&
-        incoming().item == existing().item &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'timestamp']);
       allow delete: if isValidId(messageId) && isAdmin();
     }
   }

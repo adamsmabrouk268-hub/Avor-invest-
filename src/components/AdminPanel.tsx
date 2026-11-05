@@ -4,6 +4,7 @@ import { DepositNumbersManager } from './DepositNumbersManager';
 import { checkAndSyncOwnerDevice } from './TopThreeDotMenu';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, subscribeToFirestoreAdminMessages, signInAdminWithGoogle } from '../firebase';
+import { notifyAdminOnDeposit } from '../notifyAdminOnDeposit';
 import {
   PlusCircle,
   Cpu,
@@ -297,24 +298,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
   useEffect(() => {
     if (!isAdminAuthenticated) return;
-    let unsubFirestore: (() => void) | null = null;
+    // Start real-time Firestore subscription & notifyAdminOnDeposit trigger immediately
+    const unsubFirestore = subscribeToFirestoreAdminMessages((items) => {
+      setFirestoreMessages(items);
+    });
+    const unsubTrigger = notifyAdminOnDeposit.startListener();
+
     const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
-      if (unsubFirestore) {
-        unsubFirestore();
-        unsubFirestore = null;
-      }
       if (fbUser) {
         setFirebaseAdminEmail(fbUser.email || 'Connected');
-        unsubFirestore = subscribeToFirestoreAdminMessages((items) => {
-          setFirestoreMessages(items);
-        });
       } else {
         setFirebaseAdminEmail(null);
       }
     });
     return () => {
       unsubAuth();
-      if (unsubFirestore) unsubFirestore();
+      unsubFirestore();
+      unsubTrigger();
     };
   }, [isAdminAuthenticated]);
 
@@ -1674,6 +1674,52 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
               </button>
             </div>
           </div>
+
+          {/* Live Firestore notifyAdminOnDeposit ("admin_messages/{messageId}") Stream */}
+          {firestoreMessages.length > 0 && (
+            <div className="p-4 bg-[#06152f] border border-sky-500/50 rounded-2xl space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sky-300 font-black text-xs uppercase tracking-wider">
+                  <Megaphone className="w-4 h-4 text-sky-400" />
+                  <span>
+                    Live Firestore `admin_messages` (`notifyAdminOnDeposit` • {firestoreMessages.length} Received)
+                  </span>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                  AUTO-CONFIRMED
+                </span>
+              </div>
+              <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                {firestoreMessages.slice(0, 6).map((fbMsg) => (
+                  <div
+                    key={fbMsg.id}
+                    className="p-3 rounded-xl bg-[#040c1d] border border-sky-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="font-bold text-white flex flex-wrap items-center gap-2">
+                        <span>{fbMsg.name}</span>
+                        {fbMsg.senderPhone && (
+                          <span className="text-cyan-300 font-mono">({fbMsg.senderPhone})</span>
+                        )}
+                        {fbMsg.amount > 0 && (
+                          <span className="text-sky-400 font-mono">
+                            UGX {Number(fbMsg.amount).toLocaleString()}
+                          </span>
+                        )}
+                        <span className="px-2 py-0.5 rounded text-[9px] font-mono bg-emerald-950 text-emerald-300 border border-emerald-500/40">
+                          {fbMsg.status || 'CONFIRMED'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-300">{fbMsg.item}</p>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                      {new Date(fbMsg.created_at).toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Incoming Confirmation Messages Banner */}
           {deposits.filter((d) => d.status === 'PENDING').length > 0 && (

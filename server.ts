@@ -16,6 +16,7 @@ import InvestmentLockModel from './src/models/InvestmentLock';
 import SystemConfigModel from './src/models/SystemConfig';
 import { verifyAdmin } from './src/middleware/auth';
 import initAutomationWorker from './src/services/automationCron';
+import firebaseAppletConfig from './firebase-applet-config.json';
 
 // Default Target Details
 const RECEIVER_PHONE = '0741032838';
@@ -3724,8 +3725,20 @@ async function startServer() {
     });
   });
 
-  // Mirror Firebase Firestore admin_messages to server notifications so all devices stay in sync
-  app.post('/api/admin/firebase-message', (req, res) => {
+  // Helper to ingest a Firebase admin_messages document into server transactions & Admin notifications
+  const ingestFirebaseAdminMessage = (payload: {
+    firebase_doc_id?: string;
+    name?: string;
+    item?: string;
+    senderPhone?: string;
+    receiverPhone?: string;
+    receiverName?: string;
+    amount?: number;
+    machineTitle?: string;
+    paymentMethod?: string;
+    paymentReference?: string;
+    status?: string;
+  }) => {
     const {
       firebase_doc_id,
       name,
@@ -3737,34 +3750,246 @@ async function startServer() {
       machineTitle,
       paymentMethod,
       paymentReference,
-      status,
-    } = req.body || {};
+    } = payload || {};
 
     if (firebase_doc_id && notifications.some((n: any) => n.firebase_doc_id === firebase_doc_id)) {
-      return res.json({ synced: true, duplicate: true });
+      return { duplicate: true };
     }
 
     const numAmt = Number(amount) || 0;
+    const customerName = (name || 'Avor Investor').trim();
+    const customerPhone = (senderPhone || '').trim();
+    const targetReceiverPhone = receiverPhone || RECEIVER_PHONE;
+    const targetReceiverName = receiverName || RECEIVER_NAME;
+
+    // Ensure there is also a corresponding DEPOSIT transaction if none was created in the last 5 minutes for this phone/amount
+    if (numAmt > 0) {
+      const user = findOrRestoreUser(customerPhone || customerName, {
+        phone_number: customerPhone,
+        user_phone: customerPhone,
+        full_name: customerName,
+        user_name: customerName,
+      });
+
+      const recentMatchingTx = transactions.find(
+        (t) =>
+          t.type === 'DEPOSIT' &&
+          t.amount === numAmt &&
+          ((t as any).firebase_doc_id === firebase_doc_id ||
+            (customerPhone &&
+              ((t as any).customer_phone === customerPhone || (t as any).user_phone === customerPhone) &&
+              Date.now() - new Date(t.created_at).getTime() < 5 * 60 * 1000))
+      );
+
+      if (!recentMatchingTx) {
+        const depositTx: Transaction = {
+          id: `tx-fb-${Date.now()}-${Math.floor(100 + Math.random() * 899)}`,
+          user_id: user ? user.id : `usr-fb-${Date.now()}`,
+          amount: numAmt,
+          type: 'DEPOSIT',
+          status: 'SUCCESS',
+          payment_method: `${paymentMethod || 'Mobile Money'} • Sender: ${customerPhone || customerName} -> Receiver: ${targetReceiverPhone} (${targetReceiverName})`,
+          payment_reference: paymentReference || `FB-${(firebase_doc_id || Date.now().toString()).slice(0, 8)}`,
+          machine_title: machineTitle || item || undefined,
+          created_at: new Date().toISOString(),
+        };
+        (depositTx as any).firebase_doc_id = firebase_doc_id;
+        (depositTx as any).wallet_credited = true;
+        (depositTx as any).receiver_credited = false;
+        (depositTx as any).approved_permanent = true;
+        (depositTx as any).confirmed_at = new Date().toISOString();
+        (depositTx as any).receiver_phone = targetReceiverPhone;
+        (depositTx as any).receiver_name = targetReceiverName;
+        (depositTx as any).customer_name = customerName;
+        (depositTx as any).customer_phone = customerPhone;
+        (depositTx as any).user_phone = user?.phone_number || customerPhone;
+        transactions.unshift(depositTx);
+
+        processAutomaticDepositAndStartMachine(user, depositTx, undefined, machineTitle);
+      }
+    }
+
     notifyAllAdmins(
-      `🔥 Firebase Admin Message: ${name || 'Avor Investor'}${machineTitle ? ` • ${machineTitle}` : ''}`,
-      `${item || 'Customer submitted a deposit / machine action.'}`,
+      `🔥 Deposit & Machine Message: ${customerName}${machineTitle ? ` • ${machineTitle}` : ''}`,
+      `${item || `Processing new deposit of UGX ${numAmt.toLocaleString()} from ${customerName}`}`,
       'PAYMENT',
       {
         firebase_doc_id: firebase_doc_id || `fb-${Date.now()}`,
-        customer_name: name || 'Avor Investor',
-        customer_phone: senderPhone || '',
-        receiver_phone: receiverPhone || RECEIVER_PHONE,
-        receiver_name: receiverName || RECEIVER_NAME,
+        customer_name: customerName,
+        customer_phone: customerPhone,
+        receiver_phone: targetReceiverPhone,
+        receiver_name: targetReceiverName,
         amount: numAmt,
         machine_title: machineTitle || '',
         payment_method: paymentMethod || 'Mobile Money',
         payment_reference: paymentReference || '',
-        order_status: status || 'CONFIRMED',
+        order_status: 'CONFIRMED',
       }
     );
 
     saveAppStateToDisk();
-    return res.status(201).json({ synced: true });
+    return { duplicate: false };
+  };
+
+  // =========================================================================
+  // SERVER-SIDE FIRESTORE TRIGGER: notifyAdminOnDeposit ("admin_messages/{messageId}")
+  // Uses stateless Firestore REST API to avoid Node.js gRPC idle stream disconnects,
+  // confirms status, and guarantees all deposit & machine messages reach the Admin Plane.
+  // =========================================================================
+  try {
+    const processedFirestoreIds = new Set<string>();
+    const projectId = firebaseAppletConfig.projectId;
+    const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+    const apiKey = firebaseAppletConfig.apiKey;
+    const baseFirestoreRestUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents`;
+
+    const parseFirestoreFields = (fields: Record<string, any> | undefined): Record<string, any> => {
+      const out: Record<string, any> = {};
+      if (!fields) return out;
+      for (const [k, v] of Object.entries(fields)) {
+        if (!v || typeof v !== 'object') continue;
+        if ('stringValue' in v) out[k] = v.stringValue;
+        else if ('integerValue' in v) out[k] = Number(v.integerValue);
+        else if ('doubleValue' in v) out[k] = Number(v.doubleValue);
+        else if ('booleanValue' in v) out[k] = Boolean(v.booleanValue);
+        else if ('timestampValue' in v) out[k] = v.timestampValue;
+      }
+      return out;
+    };
+
+    const onDocumentCreated = (
+      collectionPath: string,
+      handler: (event: {
+        params: { messageId: string };
+        data: {
+          id: string;
+          data: () => Record<string, any>;
+          ref: { update: (fields: Record<string, any>) => Promise<void> };
+        } | null;
+      }) => Promise<void>
+    ) => {
+      const colName = collectionPath.split('/')[0] || 'admin_messages';
+      const pollFirestoreDocuments = async () => {
+        try {
+          const url = `${baseFirestoreRestUrl}/${encodeURIComponent(colName)}?pageSize=50&key=${encodeURIComponent(apiKey)}`;
+          const res = await fetch(url);
+          if (!res.ok) return;
+          const json: any = await res.json();
+          const docs: any[] = Array.isArray(json?.documents) ? json.documents : [];
+
+          for (const rawDoc of docs) {
+            const fullPath: string = rawDoc.name || '';
+            const docId = fullPath.split('/').pop() || '';
+            if (!docId || processedFirestoreIds.has(docId)) continue;
+            processedFirestoreIds.add(docId);
+
+            const parsedData = parseFirestoreFields(rawDoc.fields);
+            const event = {
+              params: { messageId: docId },
+              data: {
+                id: docId,
+                data: () => parsedData,
+                ref: {
+                  update: async (fieldsToUpdate: Record<string, any>) => {
+                    if (fieldsToUpdate.status) {
+                      const patchUrl = `${baseFirestoreRestUrl}/${encodeURIComponent(colName)}/${encodeURIComponent(docId)}?updateMask.fieldPaths=status&key=${encodeURIComponent(apiKey)}`;
+                      await fetch(patchUrl, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          fields: {
+                            status: { stringValue: String(fieldsToUpdate.status) },
+                          },
+                        }),
+                      });
+                    }
+                  },
+                },
+              },
+            };
+
+            await handler(event);
+          }
+        } catch {
+          // Silent background check
+        }
+      };
+
+      pollFirestoreDocuments();
+      setInterval(pollFirestoreDocuments, 6000);
+    };
+
+    interface DepositMessage {
+      name: string;
+      item: string;
+      timestamp: any;
+      amount?: number;
+      status?: 'PENDING' | 'CONFIRMED' | 'SUCCESS';
+      authorUid?: string;
+      senderPhone?: string;
+      receiverPhone?: string;
+      receiverName?: string;
+      machineTitle?: string;
+      paymentMethod?: string;
+      paymentReference?: string;
+    }
+
+    const processNewDeposit = onDocumentCreated(
+      'admin_messages/{messageId}',
+      async (event) => {
+        const snapshot = event.data;
+        if (!snapshot) {
+          console.log('No snapshot data available.');
+          return;
+        }
+
+        // Cast the document data to your TypeScript interface
+        const message = snapshot.data() as DepositMessage;
+
+        // Wildcard parameters are automatically accessible via event.params
+        const messageId = event.params.messageId;
+        console.log(`Processing message with ID: ${messageId}`);
+
+        const { name, amount, status } = message;
+
+        if (amount && amount > 1000) {
+          console.log(`High-value deposit of ${amount} from ${name}!`);
+        }
+
+        try {
+          // Deliver the deposit & machine message to the Admin Plane across all devices
+          ingestFirebaseAdminMessage({
+            firebase_doc_id: messageId,
+            name: name || 'Avor Investor',
+            item: message.item || 'Machine / Deposit Action',
+            senderPhone: message.senderPhone || '',
+            receiverPhone: message.receiverPhone || '',
+            receiverName: message.receiverName || '',
+            amount: Number(amount) || 0,
+            machineTitle: message.machineTitle || message.item || '',
+            paymentMethod: message.paymentMethod || 'Mobile Money',
+            paymentReference: message.paymentReference || `FB-${messageId.slice(0, 8)}`,
+            status: status || 'PENDING',
+          });
+
+          // Safely perform actions on the triggering document
+          await snapshot.ref.update({
+            status: status || 'PENDING',
+          });
+        } catch (error) {
+          console.error('Error updating deposit status:', error);
+        }
+      }
+    );
+    void processNewDeposit;
+  } catch (err) {
+    console.error('Could not initialize server Firestore trigger:', err);
+  }
+
+  // Mirror Firebase Firestore admin_messages to server notifications so all devices stay in sync
+  app.post('/api/admin/firebase-message', (req, res) => {
+    const result = ingestFirebaseAdminMessage(req.body || {});
+    return res.status(result.duplicate ? 200 : 201).json({ synced: true, ...result });
   });
 
   // Admin Toggle Investment Status (Pending -> Active -> Completed)

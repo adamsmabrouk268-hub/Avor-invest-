@@ -12,8 +12,13 @@ import {
   orderBy,
   limit,
   deleteDoc,
+  updateDoc,
+  setLogLevel,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
+
+// Suppress noisy internal Firestore idle stream / transport warnings
+setLogLevel('silent');
 
 // Initialize the Firebase backend connection using the provisioned configuration
 const app = initializeApp(firebaseConfig);
@@ -186,6 +191,20 @@ export function subscribeToFirestoreAdminMessages(
   return onSnapshot(
     q,
     (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          const d = change.doc;
+          const depositData = d.data();
+          const { amount, name, item } = depositData;
+          console.log(`Processing new deposit of ${amount} from ${name} for ${item}`);
+          if (depositData.status !== 'CONFIRMED') {
+            updateDoc(d.ref, { status: 'CONFIRMED' }).catch((err) => {
+              console.error('Failed to process deposit notification:', err);
+            });
+          }
+        }
+      });
+
       const items = snapshot.docs.map((d) => {
         const data = d.data();
         const ts = data.timestamp?.toDate ? data.timestamp.toDate().toISOString() : new Date().toISOString();
@@ -207,11 +226,7 @@ export function subscribeToFirestoreAdminMessages(
       onUpdate(items);
     },
     (error) => {
-      try {
-        handleFirestoreError(error, OperationType.LIST, path);
-      } catch {
-        // Admin may not have signed in with Google yet; server-side messages still load
-      }
+      console.error('Firestore admin_messages listener error:', error);
     }
   );
 }
