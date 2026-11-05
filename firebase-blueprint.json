@@ -1,0 +1,115 @@
+{
+  "entities": {
+    "AdminMessage": {
+      "title": "AdminMessage",
+      "description": "Real-time message sent to Admin when a user submits a deposit or taps Buy a Machine.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Customer full name or phone identifier",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "item": {
+          "type": "string",
+          "description": "Machine details or deposit summary sent to Admin",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "senderPhone": {
+          "type": "string",
+          "description": "Customer sender phone number",
+          "minLength": 3,
+          "maxLength": 40
+        },
+        "receiverPhone": {
+          "type": "string",
+          "description": "Admin/Company receiver phone number",
+          "minLength": 3,
+          "maxLength": 40
+        },
+        "receiverName": {
+          "type": "string",
+          "description": "Receiver account name",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "amount": {
+          "type": "number",
+          "description": "Amount in UGX deposited or paid for the machine"
+        },
+        "machineTitle": {
+          "type": "string",
+          "description": "Title of the machine purchased or funded",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "paymentMethod": {
+          "type": "string",
+          "description": "Payment channel used (MTN Mobile Money, Airtel Money, Wallet Balance)",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "paymentReference": {
+          "type": "string",
+          "description": "Transaction ID or SMS reference",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "status": {
+          "type": "string",
+          "enum": ["PENDING", "CONFIRMED", "SUCCESS"],
+          "description": "Confirmation and reflection status"
+        },
+        "authorUid": {
+          "type": "string",
+          "description": "Optional Firebase Auth UID or customer ID",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the message was created"
+        }
+      },
+      "required": ["name", "item", "timestamp"]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Authorized administrator registry document.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified administrator email",
+          "minLength": 5,
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin"],
+          "description": "Admin role marker"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        }
+      },
+      "required": ["email", "role", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/admin_messages/{messageId}": {
+      "schema": { "$ref": "#/entities/AdminMessage" },
+      "description": "Collection of real-time messages sent to Admin when a user deposits money or buys a machine."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Collection of authorized admin UIDs."
+    }
+  }
+}

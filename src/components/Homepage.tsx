@@ -25,7 +25,6 @@ import {
   checkAndSyncOwnerDevice,
   authorizeOwnerDeviceWithKey,
 } from './TopThreeDotMenu';
-import { JotformDepositModal } from './JotformDepositModal';
 
 interface DashboardSummaryData {
   user_id: string;
@@ -157,7 +156,6 @@ export const Homepage: React.FC<HomepageProps> = ({
 
   const activeBannerMachine =
     systemMachines[currentSlide % Math.max(1, systemMachines.length)] || DEFAULT_MACHINES[0];
-  const [showJotformModal, setShowJotformModal] = useState<boolean>(false);
 
   useEffect(() => {
     if (!user || !user.id) return;
@@ -662,14 +660,6 @@ export const Homepage: React.FC<HomepageProps> = ({
           <span>
             <strong className="text-white">How to Invest:</strong> 1. Go to <strong className="text-[#00e5ff]">Profile → Deposit</strong> to fund wallet • 2. Open <strong className="text-[#00e5ff]">Machine Plane</strong> & tap <strong className="text-white">Buy</strong> • 3. Collect yields in <strong className="text-[#a3e635]">Income Plane</strong>.
           </span>
-          <button
-            type="button"
-            onClick={() => setShowJotformModal(true)}
-            className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-[#0066ff] via-[#0091ea] to-[#00b4d8] hover:brightness-110 text-white font-black text-[11px] border border-[#00e5ff]/50 flex items-center gap-1.5 cursor-pointer shrink-0 shadow-sm"
-          >
-            <FileText className="w-3.5 h-3.5 text-white" />
-            <span>Fill Jotform Deposit Form (Message Admin)</span>
-          </button>
         </div>
       </div>
 
@@ -1327,23 +1317,6 @@ export const Homepage: React.FC<HomepageProps> = ({
             </div>
           </div>
         </div>
-      )}
-
-      {showJotformModal && (
-        <JotformDepositModal
-          user={user}
-          onClose={() => setShowJotformModal(false)}
-          onSubmitted={() => {
-            if (user?.id) {
-              fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}`)
-                .then((res) => (res.ok ? res.json() : null))
-                .then((data) => {
-                  if (data) setSummary(data);
-                })
-                .catch(() => {});
-            }
-          }}
-        />
       )}
     </div>
   );

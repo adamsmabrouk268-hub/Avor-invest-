@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { MachineCategory, Transaction, User, Machine, HomepageConfig } from '../types';
 import { DepositNumbersManager } from './DepositNumbersManager';
 import { checkAndSyncOwnerDevice } from './TopThreeDotMenu';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth, subscribeToFirestoreAdminMessages, signInAdminWithGoogle } from '../firebase';
 import {
   PlusCircle,
   Cpu,
@@ -120,14 +122,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
   // Active Tab
   const [activeTab, setActiveTab] = useState<
-    'DEPOSITS' | 'JOTFORM_MESSAGES' | 'ORDER_MESSAGES' | 'LEDGER' | 'DEPOSIT_NUMBERS' | 'WITHDRAWALS' | 'MACHINES' | 'HOMEPAGE' | 'USERS' | 'SECURITY'
+    'DEPOSITS' | 'ORDER_MESSAGES' | 'LEDGER' | 'DEPOSIT_NUMBERS' | 'WITHDRAWALS' | 'MACHINES' | 'HOMEPAGE' | 'USERS' | 'SECURITY'
   >('DEPOSITS');
 
   // Admin Data State
   const [stats, setStats] = useState<any>(null);
   const [deposits, setDeposits] = useState<Transaction[]>([]);
   const [adminMessages, setAdminMessages] = useState<any[]>([]);
-  const [jotformSubmissions, setJotformSubmissions] = useState<any[]>([]);
+  const [firestoreMessages, setFirestoreMessages] = useState<any[]>([]);
+  const [firebaseAdminEmail, setFirebaseAdminEmail] = useState<string | null>(null);
   const [withdrawals, setWithdrawals] = useState<Transaction[]>([]);
   const [investmentsLedger, setInvestmentsLedger] = useState<any[]>([]);
   const [userList, setUserList] = useState<User[]>([]);
@@ -243,7 +246,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         setStats(data);
         setDeposits(data.deposits || []);
         setAdminMessages(data.admin_notifications || []);
-        setJotformSubmissions(data.jotform_submissions || []);
         setWithdrawals(data.withdrawals || []);
         setInvestmentsLedger(data.investments || []);
         setUserList(data.users || []);
@@ -291,6 +293,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       }, 5000);
       return () => clearInterval(interval);
     }
+  }, [isAdminAuthenticated]);
+
+  useEffect(() => {
+    if (!isAdminAuthenticated) return;
+    let unsubFirestore: (() => void) | null = null;
+    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
+      if (unsubFirestore) {
+        unsubFirestore();
+        unsubFirestore = null;
+      }
+      if (fbUser) {
+        setFirebaseAdminEmail(fbUser.email || 'Connected');
+        unsubFirestore = subscribeToFirestoreAdminMessages((items) => {
+          setFirestoreMessages(items);
+        });
+      } else {
+        setFirebaseAdminEmail(null);
+      }
+    });
+    return () => {
+      unsubAuth();
+      if (unsubFirestore) unsubFirestore();
+    };
   }, [isAdminAuthenticated]);
 
   // Handle Deposit Approval Action
@@ -361,24 +386,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       });
       await fetchAdminData();
       if (onDataChanged) onDataChanged();
-    } catch (err: any) {
-      setStatusMessage({ type: 'error', text: err.message });
-    }
-  };
-
-  const handleDeleteJotformSubmission = async (id: string) => {
-    setStatusMessage(null);
-    try {
-      const res = await fetch(`/api/admin/jotform-submissions/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to delete Jotform message.');
-      setStatusMessage({
-        type: 'success',
-        text: data.message || 'Jotform deposit message deleted by Admin.',
-      });
-      await fetchAdminData();
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message });
     }
@@ -1259,18 +1266,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         </button>
 
         <button
-          onClick={() => setActiveTab('JOTFORM_MESSAGES')}
-          className={`px-4 py-2.5 font-bold text-xs rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
-            activeTab === 'JOTFORM_MESSAGES'
-              ? 'bg-gradient-to-r from-blue-600 via-sky-600 to-cyan-600 text-white font-black shadow-md border border-sky-400/50'
-              : 'text-sky-300 hover:text-white bg-[#07152e] hover:bg-[#0c2046] border border-sky-500/30'
-          }`}
-        >
-          <Send className="w-4 h-4 text-sky-400" />
-          <span>Jotform Deposit Messages ({jotformSubmissions.length})</span>
-        </button>
-
-        <button
           onClick={() => setActiveTab('LEDGER')}
           className={`px-4 py-2.5 font-bold text-xs rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
             activeTab === 'LEDGER'
@@ -1354,104 +1349,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
           <span>Change Password</span>
         </button>
       </div>
-
-      {/* TAB: JOTFORM DEPOSIT & MACHINE MESSAGES INBOX */}
-      {activeTab === 'JOTFORM_MESSAGES' && (
-        <div className="shining-card border border-sky-500/40 rounded-2xl p-6 space-y-4 shadow-xl text-white">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-blue-950/80">
-            <div>
-              <h3 className="text-base font-extrabold text-white flex items-center gap-2">
-                <Send className="w-5 h-5 text-sky-400" />
-                <span>Jotform Deposit &amp; Machine Purchase Messages Inbox</span>
-              </h3>
-              <p className="text-xs text-slate-300 mt-0.5">
-                Every time a user fills the <strong>AVOR Jotform Deposit &amp; Machine Form</strong> after buying a machine or depositing, their message, sender number, machine bought, and deposit details arrive here in real time across all devices.
-              </p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={fetchAdminData}
-                className="px-3.5 py-2 bg-[#09152e] hover:bg-[#0f2147] text-sky-300 text-xs font-bold rounded-xl border border-sky-500/40 flex items-center gap-1.5 cursor-pointer"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`} />
-                <span>Refresh Jotform Inbox ({jotformSubmissions.length})</span>
-              </button>
-            </div>
-          </div>
-
-          {jotformSubmissions.length === 0 ? (
-            <div className="text-center py-10 text-slate-400 text-xs">
-              No Jotform deposit messages submitted yet. When any customer fills the Jotform after buying a machine or depositing, their message will appear here immediately.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {jotformSubmissions.map((sub: any) => (
-                <div
-                  key={sub.id}
-                  className="p-4 rounded-2xl bg-[#07132c] border border-sky-500/50 shadow-[0_0_20px_rgba(0,145,234,0.15)] flex flex-col sm:flex-row sm:items-start justify-between gap-4"
-                >
-                  <div className="space-y-2 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase font-mono bg-sky-500/20 text-sky-300 border border-sky-400/40">
-                        JOTFORM DEPOSIT MESSAGE
-                      </span>
-                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-400/40">
-                        {sub.status || 'RECEIVED & CREDITED'}
-                      </span>
-                      <span className="text-sm font-black text-white">
-                        {sub.customer_name} • {sub.machine_title} ({sub.units || 1} Unit{Number(sub.units) > 1 ? 's' : ''})
-                      </span>
-                      <span className="text-[11px] font-mono text-slate-400">
-                        {new Date(sub.created_at).toLocaleString()}
-                      </span>
-                    </div>
-
-                    <div className="p-3 rounded-xl bg-[#050c1d] border border-blue-900/70 text-xs text-slate-100 leading-relaxed">
-                      <span className="text-[10px] font-mono uppercase tracking-wider text-sky-400 block mb-1 font-bold">
-                        Customer Deposit Message / SMS Note to Admin:
-                      </span>
-                      {sub.message}
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] font-mono">
-                      <span className="px-2.5 py-1 rounded-lg bg-[#0b1b3d] border border-blue-800/60 text-white">
-                        Customer: <strong>{sub.customer_name}</strong>
-                      </span>
-                      <span className="px-2.5 py-1 rounded-lg bg-cyan-950/80 border border-cyan-500/40 text-cyan-300">
-                        Sender Phone: <strong>{sub.sender_phone}</strong>
-                      </span>
-                      <span className="px-2.5 py-1 rounded-lg bg-blue-950/90 border border-sky-400/40 text-sky-300 font-bold">
-                        Deposit Amount: UGX {Number(sub.deposit_amount || 0).toLocaleString()}
-                      </span>
-                      <span className="px-2.5 py-1 rounded-lg bg-indigo-950/80 border border-indigo-400/40 text-indigo-200">
-                        Machine: <strong>{sub.machine_title}</strong>
-                      </span>
-                      <span className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-emerald-300">
-                        Sent To Receiver: <strong>{sub.receiver_phone} ({sub.receiver_name || 'Company'})</strong>
-                      </span>
-                      <span className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-300">
-                        Network: {sub.payment_method} • Ref: {sub.transaction_reference}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteJotformSubmission(sub.id)}
-                      className="px-3 py-2 bg-rose-950/70 hover:bg-rose-900/80 text-rose-300 text-xs font-bold rounded-xl border border-rose-500/40 flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Delete</span>
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* TAB: INVESTMENT MANAGEMENT LEDGER */}
       {activeTab === 'LEDGER' && (
@@ -1564,13 +1461,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
             <div>
               <h3 className="text-base font-extrabold text-white flex items-center gap-2">
                 <Megaphone className="w-5 h-5 text-sky-400" />
-                <span>Admin Inbox: Placed Deposit &amp; Machine Order Messages</span>
+                <span>Admin Inbox: Placed Deposit &amp; Machine Order Messages (Firebase + Server Sync)</span>
               </h3>
               <p className="text-xs text-slate-300 mt-0.5">
-                Every time a user clicks <strong>CONFIRM PAYMENT</strong> on a deposit or places a machine order, an instant order message is delivered here with the sender number, receiver account, amount, and one-click confirmation button.
+                Every time a user clicks <strong>CONFIRM PAYMENT</strong> on a deposit or taps <strong>Buy a Machine</strong>, an instant message is saved to Firebase Firestore (<code className="text-sky-300">admin_messages</code>) and the server database so you receive it here across all devices.
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {!firebaseAdminEmail ? (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await signInAdminWithGoogle();
+                      setStatusMessage({ type: 'success', text: 'Firebase Google Admin connected for live Firestore snapshots!' });
+                    } catch (err: any) {
+                      setStatusMessage({ type: 'error', text: err.message || 'Could not connect Google Admin.' });
+                    }
+                  }}
+                  className="px-3 py-2 bg-[#0b1b3d] hover:bg-[#102654] text-sky-300 text-xs font-bold rounded-xl border border-sky-500/40 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Connect Firebase Live Stream</span>
+                </button>
+              ) : (
+                <span className="px-2.5 py-1.5 rounded-xl bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 text-[11px] font-mono">
+                  Firebase Live: {firebaseAdminEmail} ({firestoreMessages.length} docs)
+                </span>
+              )}
               {deposits.filter((d) => d.status === 'PENDING').length > 0 && (
                 <button
                   type="button"
@@ -1593,9 +1511,41 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
             </div>
           </div>
 
-          {adminMessages.length === 0 ? (
+          {firestoreMessages.length > 0 && (
+            <div className="p-3.5 rounded-2xl bg-[#07152e] border border-sky-500/40 space-y-2">
+              <div className="text-xs font-black text-sky-300 uppercase tracking-wider flex items-center justify-between">
+                <span>Live Firestore `admin_messages` Collection ({firestoreMessages.length})</span>
+              </div>
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {firestoreMessages.map((fbMsg) => (
+                  <div
+                    key={fbMsg.id}
+                    className="p-3 rounded-xl bg-[#050c1d] border border-blue-900/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="font-bold text-white">
+                        {fbMsg.name}{' '}
+                        {fbMsg.senderPhone && <span className="text-cyan-300 font-mono">({fbMsg.senderPhone})</span>}
+                        {fbMsg.amount > 0 && (
+                          <span className="text-sky-400 font-mono ml-2">
+                            • UGX {Number(fbMsg.amount).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-slate-300 text-[11px]">{fbMsg.item}</p>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                      {new Date(fbMsg.created_at).toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {adminMessages.length === 0 && firestoreMessages.length === 0 ? (
             <div className="text-center py-10 text-slate-400 text-xs">
-              No placed deposit or order messages yet. As soon as a user clicks Confirm Payment on a deposit, the message will appear here immediately.
+              No placed deposit or order messages yet. As soon as a user clicks Confirm Payment on a deposit or buys a machine, the message will appear here immediately.
             </div>
           ) : (
             <div className="space-y-3">
@@ -1724,45 +1674,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
               </button>
             </div>
           </div>
-
-          {/* Live Jotform Deposit Messages Banner inside Deposits Tab */}
-          {jotformSubmissions.length > 0 && (
-            <div className="p-4 bg-[#06152f] border border-sky-500/50 rounded-2xl space-y-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-sky-300 font-black text-xs uppercase tracking-wider">
-                  <Send className="w-4 h-4 text-sky-400" />
-                  <span>
-                    Jotform Deposit &amp; Machine Purchase Messages ({jotformSubmissions.length} Received)
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('JOTFORM_MESSAGES')}
-                  className="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-black rounded-lg border border-sky-400/40 cursor-pointer"
-                >
-                  Open Jotform Inbox ({jotformSubmissions.length})
-                </button>
-              </div>
-              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                {jotformSubmissions.slice(0, 4).map((sub: any) => (
-                  <div
-                    key={sub.id}
-                    className="p-2.5 rounded-xl bg-[#040c1d] border border-sky-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
-                  >
-                    <div className="space-y-0.5">
-                      <div className="font-bold text-white">
-                        {sub.customer_name} ({sub.sender_phone}) • <span className="text-sky-400">UGX {Number(sub.deposit_amount || 0).toLocaleString()}</span> • <span className="text-emerald-400">{sub.machine_title}</span>
-                      </div>
-                      <p className="text-[11px] text-slate-300">{sub.message}</p>
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-400 shrink-0">
-                      {new Date(sub.created_at).toLocaleTimeString()}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Incoming Confirmation Messages Banner */}
           {deposits.filter((d) => d.status === 'PENDING').length > 0 && (

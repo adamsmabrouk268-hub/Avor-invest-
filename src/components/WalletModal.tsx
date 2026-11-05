@@ -20,9 +20,8 @@ import {
   Coins,
   PhoneCall,
   Cpu,
-  FileText,
 } from 'lucide-react';
-import { JotformDepositModal } from './JotformDepositModal';
+import { sendMessageToAdmin } from '../firebase';
 
 interface WalletModalProps {
   user: User | null;
@@ -102,7 +101,6 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [copiedField, setCopiedField] = useState<'phone' | 'name' | 'amount' | null>(null);
-  const [showJotformModal, setShowJotformModal] = useState<boolean>(false);
 
   const isEligibleCustomer = hasBoughtMachine || summaryHasMachine || userInvestments.length > 0;
   const currentDayOfWeek = new Date().getDay(); // 0 = Sun, 1 = Mon ... 5 = Fri, 6 = Sat
@@ -298,6 +296,20 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           data.message ||
           `Deposit of ${depositAmt.toLocaleString()} UGX submitted to Admin! Once Admin confirms your deposit, it will reflect on your wallet balance so you can buy your machine.`,
       });
+      await sendMessageToAdmin(
+        user.full_name || depositPhone || user.phone_number || 'Avor Investor',
+        `Deposited UGX ${depositAmt.toLocaleString()} via ${depositMethod} from ${depositPhone} to ${targetPhone} (${targetName})`,
+        {
+          senderPhone: depositPhone || user.phone_number,
+          receiverPhone: targetPhone,
+          receiverName: targetName,
+          amount: depositAmt,
+          machineTitle: data.activated_investment?.machine_title || 'Wallet Deposit & Machine Activation',
+          paymentMethod: depositMethod,
+          paymentReference: depositRefInput || data.transaction?.payment_reference || `DEP-${Date.now()}`,
+          status: 'CONFIRMED',
+        }
+      );
       setDepositRefInput('');
       setDepositStep('SUBMITTED');
       onRefreshUser();
@@ -974,15 +986,6 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                   <div className="space-y-2.5 pt-2">
                     <button
                       type="button"
-                      onClick={() => setShowJotformModal(true)}
-                      className="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-600 hover:brightness-110 text-white font-black text-xs uppercase tracking-wider shadow-lg shadow-blue-900/50 border border-sky-300/40 transition-all cursor-pointer flex items-center justify-center gap-2"
-                    >
-                      <FileText className="w-4 h-4 text-white" />
-                      <span>FILL JOTFORM DEPOSIT FORM (MESSAGE ADMIN)</span>
-                    </button>
-
-                    <button
-                      type="button"
                       onClick={() => {
                         onClose();
                         if (onNavigateToMarketplace) {
@@ -1007,18 +1010,6 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     </button>
                   </div>
                 </div>
-              )}
-
-              {/* Quick Jotform Access Button on Deposit Tab */}
-              {depositStep !== 'SUBMITTED' && (
-                <button
-                  type="button"
-                  onClick={() => setShowJotformModal(true)}
-                  className="w-full py-3 px-4 rounded-2xl bg-[#07152e] hover:bg-[#0c2147] border border-sky-500/40 text-sky-300 font-extrabold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer"
-                >
-                  <FileText className="w-4 h-4 text-sky-400" />
-                  <span>Fill Jotform Deposit Form (Send Deposit Message to Admin)</span>
-                </button>
               )}
             </div>
           )}
@@ -1297,18 +1288,6 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           )}
         </div>
       </div>
-
-      {showJotformModal && (
-        <JotformDepositModal
-          user={user}
-          initialAmount={depositAmt || undefined}
-          onClose={() => setShowJotformModal(false)}
-          onSubmitted={() => {
-            fetchTransactions();
-            onRefreshUser();
-          }}
-        />
-      )}
     </div>
   );
 };

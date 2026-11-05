@@ -1,0 +1,99 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'adamsmabrouk268@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidAdminMessage(data) {
+      return data.keys().hasAll(['name', 'item', 'timestamp']) &&
+        data.keys().hasOnly([
+          'name',
+          'item',
+          'timestamp',
+          'senderPhone',
+          'receiverPhone',
+          'receiverName',
+          'amount',
+          'machineTitle',
+          'paymentMethod',
+          'paymentReference',
+          'status',
+          'authorUid'
+        ]) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.item is string && data.item.size() >= 1 && data.item.size() <= 1000 &&
+        data.timestamp == request.time &&
+        (!('senderPhone' in data) || (data.senderPhone is string && data.senderPhone.size() >= 3 && data.senderPhone.size() <= 40)) &&
+        (!('receiverPhone' in data) || (data.receiverPhone is string && data.receiverPhone.size() >= 3 && data.receiverPhone.size() <= 40)) &&
+        (!('receiverName' in data) || (data.receiverName is string && data.receiverName.size() >= 1 && data.receiverName.size() <= 120)) &&
+        (!('amount' in data) || (data.amount is number && data.amount >= 0 && data.amount <= 1000000000)) &&
+        (!('machineTitle' in data) || (data.machineTitle is string && data.machineTitle.size() >= 1 && data.machineTitle.size() <= 160)) &&
+        (!('paymentMethod' in data) || (data.paymentMethod is string && data.paymentMethod.size() >= 1 && data.paymentMethod.size() <= 100)) &&
+        (!('paymentReference' in data) || (data.paymentReference is string && data.paymentReference.size() >= 1 && data.paymentReference.size() <= 120)) &&
+        (!('status' in data) || (data.status is string && data.status in ['PENDING', 'CONFIRMED', 'SUCCESS'])) &&
+        (!('authorUid' in data) || (data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128 && (!isSignedIn() || data.authorUid == request.auth.uid)));
+    }
+
+    function isValidAdminUser(data) {
+      return data.keys().hasAll(['email', 'role', 'createdAt']) &&
+        data.keys().hasOnly(['email', 'role', 'createdAt']) &&
+        data.email is string && data.email.size() >= 5 && data.email.size() <= 120 &&
+        data.role is string && data.role == 'admin' &&
+        data.createdAt == request.time;
+    }
+
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && isAdmin();
+      allow list: if isAdmin() && resource.data.role == 'admin';
+      allow create: if isValidId(adminUid) && isAdmin() && isValidAdminUser(incoming());
+      allow update: if isValidId(adminUid) && isAdmin() && isValidAdminUser(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role']);
+      allow delete: if isValidId(adminUid) && isAdmin();
+    }
+
+    match /admin_messages/{messageId} {
+      allow get: if isValidId(messageId) && (
+        isAdmin() ||
+        (isSignedIn() && existing().authorUid == request.auth.uid)
+      );
+      allow list: if isAdmin() || (isSignedIn() && resource.data.authorUid == request.auth.uid);
+      allow create: if isValidId(messageId) && isValidAdminMessage(incoming());
+      allow update: if isValidId(messageId) && isAdmin() && isValidAdminMessage(incoming()) &&
+        incoming().name == existing().name &&
+        incoming().item == existing().item &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'timestamp']);
+      allow delete: if isValidId(messageId) && isAdmin();
+    }
+  }
+}

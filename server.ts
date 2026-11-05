@@ -28,7 +28,6 @@ const machines: Machine[] = [...DEFAULT_MACHINES];
 const investments: Investment[] = [];
 const transactions: Transaction[] = [];
 const notifications: AppNotification[] = [];
-const jotformSubmissions: any[] = [];
 
 // ====================================================================
 // REGISTERED USERS DISK PERSISTENCE STORAGE
@@ -39,7 +38,6 @@ const REGISTRATION_EVENTS_FILE = path.join(DATA_DIR, 'registration_events.json')
 const TRANSACTIONS_FILE = path.join(DATA_DIR, 'transactions.json');
 const INVESTMENTS_FILE = path.join(DATA_DIR, 'investments.json');
 const NOTIFICATIONS_FILE = path.join(DATA_DIR, 'notifications.json');
-const JOTFORM_SUBMISSIONS_FILE = path.join(DATA_DIR, 'jotform_submissions.json');
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -88,12 +86,6 @@ function loadAppStateFromDisk() {
         notifications.splice(0, notifications.length, ...loadedNotif);
       }
     }
-    if (fs.existsSync(JOTFORM_SUBMISSIONS_FILE)) {
-      const loadedJotform = JSON.parse(fs.readFileSync(JOTFORM_SUBMISSIONS_FILE, 'utf-8'));
-      if (Array.isArray(loadedJotform)) {
-        jotformSubmissions.splice(0, jotformSubmissions.length, ...loadedJotform);
-      }
-    }
   } catch (err) {
     console.error('Error loading app state from disk:', err);
   }
@@ -107,7 +99,6 @@ function saveAppStateToDisk() {
     fs.writeFileSync(TRANSACTIONS_FILE, JSON.stringify(transactions, null, 2), 'utf-8');
     fs.writeFileSync(INVESTMENTS_FILE, JSON.stringify(investments, null, 2), 'utf-8');
     fs.writeFileSync(NOTIFICATIONS_FILE, JSON.stringify(notifications.slice(0, 500), null, 2), 'utf-8');
-    fs.writeFileSync(JOTFORM_SUBMISSIONS_FILE, JSON.stringify(jotformSubmissions, null, 2), 'utf-8');
   } catch (err) {
     console.error('Error saving app state to disk:', err);
   }
@@ -3730,218 +3721,50 @@ async function startServer() {
       deposit_rotation_config: depositRotationConfig,
       active_receiver: activeInfo.receiver,
       rotation_time_remaining_seconds: activeInfo.timeRemainingSeconds,
-      jotform_submissions: jotformSubmissions,
     });
   });
 
-  // =========================================================================
-  // JOTFORM DEPOSIT & MACHINE PURCHASE SUBMISSION ENDPOINTS
-  // Delivers instant messages about deposits & machines to the Admin Plane across all devices
-  // =========================================================================
-  const handleJotformSubmission = (req: express.Request, res: express.Response) => {
-    const rawBody = req.body || {};
-    // Support both direct Avor Jotform payload and external Jotform Webhook rawRequest
-    let parsedWebhook: any = rawBody;
-    if (typeof rawBody.rawRequest === 'string') {
-      try {
-        parsedWebhook = { ...rawBody, ...JSON.parse(rawBody.rawRequest) };
-      } catch {}
+  // Mirror Firebase Firestore admin_messages to server notifications so all devices stay in sync
+  app.post('/api/admin/firebase-message', (req, res) => {
+    const {
+      firebase_doc_id,
+      name,
+      item,
+      senderPhone,
+      receiverPhone,
+      receiverName,
+      amount,
+      machineTitle,
+      paymentMethod,
+      paymentReference,
+      status,
+    } = req.body || {};
+
+    if (firebase_doc_id && notifications.some((n: any) => n.firebase_doc_id === firebase_doc_id)) {
+      return res.json({ synced: true, duplicate: true });
     }
 
-    const customerName = (
-      parsedWebhook.customer_name ||
-      parsedWebhook.q3_name ||
-      parsedWebhook.name ||
-      parsedWebhook.full_name ||
-      'Avor Investor'
-    )
-      .toString()
-      .trim();
-
-    const customerPhone = (
-      parsedWebhook.customer_phone ||
-      parsedWebhook.phone_number ||
-      parsedWebhook.q4_phone ||
-      parsedWebhook.phone ||
-      ''
-    )
-      .toString()
-      .trim();
-
-    const machineId = (parsedWebhook.machine_id || 'mach-av1-01').toString().trim();
-    const matchedMachine =
-      machines.find((m) => m.id === machineId) ||
-      machines.find((m) => (m.title || '').toLowerCase() === (parsedWebhook.machine_title || '').toString().toLowerCase()) ||
-      machines[0];
-
-    const rawAmount = Number(
-      parsedWebhook.amount ||
-        parsedWebhook.q5_amount ||
-        matchedMachine?.total_cost ||
-        35000
-    );
-    const numAmt = isNaN(rawAmount) || rawAmount <= 0 ? (matchedMachine?.total_cost || 35000) : rawAmount;
-    const machineTitle = parsedWebhook.machine_title || matchedMachine?.title || 'AV1 - Machine 1';
-    const paymentMethod = parsedWebhook.payment_method || 'MTN Mobile Money';
-
-    const activeInfo = getActiveReceiver(false);
-    const receiverPhone =
-      parsedWebhook.receiver_phone ||
-      activeInfo.receiver?.phone_number ||
-      homepageConfig.deposit_receiver_number ||
-      RECEIVER_PHONE;
-    const receiverName =
-      parsedWebhook.receiver_name ||
-      activeInfo.receiver?.account_name ||
-      homepageConfig.deposit_receiver_name ||
-      RECEIVER_NAME;
-
-    const paymentReference = (
-      parsedWebhook.payment_reference ||
-      parsedWebhook.submissionID ||
-      `JOTFORM-${customerPhone.replace(/\D/g, '').slice(-4) || 'MM'}-${Date.now().toString().slice(-5)}`
-    )
-      .toString()
-      .trim();
-
-    const customerMessage = (
-      parsedWebhook.customer_message ||
-      parsedWebhook.message ||
-      `Jotform Deposit Verification: Customer ${customerName} (${customerPhone}) deposited UGX ${numAmt.toLocaleString()} for ${machineTitle} to ${receiverPhone} (${receiverName}).`
-    )
-      .toString()
-      .trim();
-
-    const user = findOrRestoreUser(parsedWebhook.user_id || customerPhone, {
-      user_id: parsedWebhook.user_id,
-      phone_number: customerPhone,
-      user_phone: customerPhone,
-      full_name: customerName,
-      user_name: customerName,
-    });
-
-    // Check if this user already has a matching recent deposit transaction from the last 10 minutes so we don't double-count
-    const existingRecentTx = transactions.find(
-      (t) =>
-        t.type === 'DEPOSIT' &&
-        doesTxBelongToUser(t, user, parsedWebhook.user_id || customerPhone) &&
-        t.amount === numAmt &&
-        Date.now() - new Date(t.created_at).getTime() < 10 * 60 * 1000
-    );
-
-    let depositTx = existingRecentTx;
-    let startedInv: Investment | null = null;
-
-    if (!depositTx) {
-      depositTx = {
-        id: `tx-jotform-${Date.now()}`,
-        user_id: user ? user.id : parsedWebhook.user_id || `usr-jotform-${Date.now()}`,
-        amount: numAmt,
-        type: 'DEPOSIT',
-        status: 'SUCCESS',
-        payment_method: `Jotform (${paymentMethod}) • Sender: ${customerPhone} -> Receiver: ${receiverPhone} (${receiverName})`,
-        payment_reference: paymentReference,
-        machine_title: machineTitle,
-        created_at: new Date().toISOString(),
-      };
-      (depositTx as any).wallet_credited = true;
-      (depositTx as any).receiver_credited = false;
-      (depositTx as any).approved_permanent = true;
-      (depositTx as any).confirmed_at = new Date().toISOString();
-      (depositTx as any).receiver_phone = receiverPhone;
-      (depositTx as any).receiver_name = receiverName;
-      (depositTx as any).customer_name = customerName;
-      (depositTx as any).customer_phone = customerPhone;
-      (depositTx as any).user_phone = user?.phone_number || customerPhone;
-      (depositTx as any).machine_id = matchedMachine?.id;
-      (depositTx as any).is_jotform = true;
-      (depositTx as any).customer_message = customerMessage;
-      transactions.unshift(depositTx);
-
-      startedInv = processAutomaticDepositAndStartMachine(user, depositTx, matchedMachine?.id, machineTitle);
-    } else {
-      (depositTx as any).is_jotform = true;
-      (depositTx as any).customer_message = customerMessage;
-      if (depositTx.status === 'PENDING') {
-        startedInv = processAutomaticDepositAndStartMachine(user, depositTx, matchedMachine?.id, machineTitle);
-      }
-    }
-
-    const jotformRecord = {
-      id: `jf-${Date.now()}-${Math.floor(100 + Math.random() * 899)}`,
-      transaction_id: depositTx.id,
-      user_id: user?.id || depositTx.user_id,
-      customer_name: customerName,
-      customer_phone: customerPhone,
-      machine_id: matchedMachine?.id || machineId,
-      machine_title: startedInv?.machine_title || machineTitle,
-      amount: numAmt,
-      payment_method: paymentMethod,
-      receiver_phone: receiverPhone,
-      receiver_name: receiverName,
-      payment_reference: paymentReference,
-      customer_message: customerMessage,
-      status: 'CONFIRMED',
-      created_at: new Date().toISOString(),
-    };
-
-    jotformSubmissions.unshift(jotformRecord);
-
+    const numAmt = Number(amount) || 0;
     notifyAllAdmins(
-      `📋 Jotform Deposit Message: UGX ${numAmt.toLocaleString()} (${machineTitle})`,
-      `[JOTFORM SUBMISSION] ${customerName} (Sender Phone: ${customerPhone}) submitted Jotform after buying ${machineTitle} for UGX ${numAmt.toLocaleString()} via ${paymentMethod} to Receiver ${receiverPhone} (${receiverName}). Message: "${customerMessage}" • Ref: ${paymentReference}`,
+      `🔥 Firebase Admin Message: ${name || 'Avor Investor'}${machineTitle ? ` • ${machineTitle}` : ''}`,
+      `${item || 'Customer submitted a deposit / machine action.'}`,
       'PAYMENT',
       {
-        transaction_id: depositTx.id,
-        jotform_id: jotformRecord.id,
-        is_jotform: true,
-        customer_name: customerName,
-        customer_phone: customerPhone,
+        firebase_doc_id: firebase_doc_id || `fb-${Date.now()}`,
+        customer_name: name || 'Avor Investor',
+        customer_phone: senderPhone || '',
+        receiver_phone: receiverPhone || RECEIVER_PHONE,
+        receiver_name: receiverName || RECEIVER_NAME,
         amount: numAmt,
-        payment_method: `Jotform • ${paymentMethod}`,
-        receiver_phone: receiverPhone,
-        receiver_name: receiverName,
-        payment_reference: paymentReference,
-        machine_title: machineTitle,
-        customer_message: customerMessage,
-        order_status: 'CONFIRMED',
+        machine_title: machineTitle || '',
+        payment_method: paymentMethod || 'Mobile Money',
+        payment_reference: paymentReference || '',
+        order_status: status || 'CONFIRMED',
       }
     );
 
     saveAppStateToDisk();
-
-    return res.status(201).json({
-      success: true,
-      message: `Jotform deposit message for UGX ${numAmt.toLocaleString()} (${machineTitle}) sent to Admin Plane!`,
-      submission: jotformRecord,
-      transaction: depositTx,
-      activated_investment: startedInv,
-      new_balance: user ? user.balance : numAmt,
-    });
-  };
-
-  app.post('/api/jotform/submit', handleJotformSubmission);
-  app.post('/api/webhooks/jotform', handleJotformSubmission);
-
-  app.get('/api/admin/jotform-submissions', (req, res) => {
-    res.json({
-      count: jotformSubmissions.length,
-      submissions: jotformSubmissions,
-    });
-  });
-
-  app.delete('/api/admin/jotform-submissions/:id', (req, res) => {
-    const id = req.params.id;
-    const idx = jotformSubmissions.findIndex((s) => s.id === id);
-    if (idx === -1) {
-      return res.status(404).json({ error: 'Jotform submission not found.' });
-    }
-    const removed = jotformSubmissions.splice(idx, 1)[0];
-    saveAppStateToDisk();
-    return res.json({
-      message: `Jotform message from ${removed.customer_name} deleted by Admin.`,
-      deleted_id: id,
-    });
+    return res.status(201).json({ synced: true });
   });
 
   // Admin Toggle Investment Status (Pending -> Active -> Completed)

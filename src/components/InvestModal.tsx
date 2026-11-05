@@ -16,10 +16,9 @@ import {
   RefreshCw,
   RotateCcw,
   Cpu,
-  FileText,
 } from 'lucide-react';
 import { WhatsAppIcon } from './WhatsAppIcon';
-import { JotformDepositModal } from './JotformDepositModal';
+import { sendMessageToAdmin } from '../firebase';
 
 interface InvestModalProps {
   machine: Machine | null;
@@ -119,7 +118,6 @@ export const InvestModal: React.FC<InvestModalProps> = ({
   const [depositSuccessMessage, setDepositSuccessMessage] = useState<string | null>(null);
   const [successData, setSuccessData] = useState<{ message: string; status?: string } | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [showJotformModal, setShowJotformModal] = useState<boolean>(false);
 
   const RECEIVER_PHONE = '0741032838';
   const RECEIVER_NAME = 'SULAINH NAKASEETA';
@@ -265,6 +263,20 @@ export const InvestModal: React.FC<InvestModalProps> = ({
         message: msg,
         status: 'ACTIVE',
       });
+      await sendMessageToAdmin(
+        user.full_name || phoneNumber.trim() || user.phone_number || 'Avor Investor',
+        `Bought ${machine.title} (${units} Unit${units > 1 ? 's' : ''}) • Deposited UGX ${totalCost.toLocaleString()} via ${selectedChannel} from ${phoneNumber.trim()} to ${activeReceiver.phone_number || RECEIVER_PHONE} (${activeReceiver.account_name || RECEIVER_NAME})`,
+        {
+          senderPhone: phoneNumber.trim() || user.phone_number,
+          receiverPhone: activeReceiver.phone_number || RECEIVER_PHONE,
+          receiverName: activeReceiver.account_name || RECEIVER_NAME,
+          amount: totalCost,
+          machineTitle: `${machine.title} (${units} Unit${units > 1 ? 's' : ''})`,
+          paymentMethod: selectedChannel,
+          paymentReference: data.transaction?.payment_reference || `DEP-${Date.now()}`,
+          status: 'CONFIRMED',
+        }
+      );
       onSuccess();
     } catch (err: any) {
       setErrorMessage(err.message || 'Unable to submit deposit.');
@@ -316,6 +328,20 @@ export const InvestModal: React.FC<InvestModalProps> = ({
           `Machine order for ${machine.title} placed using your wallet! Confirmation message has reached Admin.`,
         status: data.status || 'PENDING',
       });
+      await sendMessageToAdmin(
+        user.full_name || user.phone_number || 'Avor Investor',
+        `Bought ${machine.title} (${units} Unit${units > 1 ? 's' : ''}) for UGX ${totalCost.toLocaleString()} using Wallet Balance (${user.phone_number || phoneNumber})`,
+        {
+          senderPhone: user.phone_number || phoneNumber,
+          receiverPhone: activeReceiver.phone_number || RECEIVER_PHONE,
+          receiverName: activeReceiver.account_name || RECEIVER_NAME,
+          amount: totalCost,
+          machineTitle: `${machine.title} (${units} Unit${units > 1 ? 's' : ''})`,
+          paymentMethod: 'Wallet Balance',
+          paymentReference: data.investment?.id || `INV-${Date.now()}`,
+          status: 'CONFIRMED',
+        }
+      );
       onSuccess();
     } catch (err: any) {
       setErrorMessage(err.message || 'Error occurred while purchasing machine.');
@@ -408,24 +434,13 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                 <p className="text-xs text-slate-300">{successData.message}</p>
               </div>
 
-              <div className="space-y-2.5 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowJotformModal(true)}
-                  className="w-full py-3.5 px-4 bg-gradient-to-r from-blue-600 via-sky-500 to-cyan-500 hover:brightness-110 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg border border-sky-300/40 cursor-pointer flex items-center justify-center gap-2"
-                >
-                  <FileText className="w-4 h-4 text-white" />
-                  <span>Fill Jotform Deposit Form (Send Deposit Message to Admin)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="w-full py-3 bg-[#091734] hover:bg-[#0e224d] border border-blue-800/70 text-sky-300 font-bold text-xs rounded-xl shadow-lg cursor-pointer"
-                >
-                  View Running Machine in Income Plane
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full py-3 bg-gradient-to-r from-blue-600 to-cyan-600 text-white font-bold text-xs rounded-xl shadow-lg cursor-pointer"
+              >
+                View in Income Plane
+              </button>
             </div>
           ) : (
             <>
@@ -811,32 +826,11 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                     </span>
                   </button>
                 )}
-
-                <button
-                  type="button"
-                  onClick={() => setShowJotformModal(true)}
-                  className="w-full mt-2.5 py-3 px-4 bg-[#07152e] hover:bg-[#0c2147] text-sky-300 font-extrabold text-xs rounded-2xl border border-sky-500/40 transition-all cursor-pointer flex items-center justify-center gap-2"
-                >
-                  <FileText className="w-4 h-4 text-sky-400" />
-                  <span>Already Bought Machine / Deposited? Fill Jotform to Message Admin</span>
-                </button>
               </div>
             </>
           )}
         </div>
       </div>
-
-      {showJotformModal && (
-        <JotformDepositModal
-          user={user}
-          initialMachine={machine}
-          initialAmount={totalCost}
-          onClose={() => setShowJotformModal(false)}
-          onSubmitted={() => {
-            onSuccess();
-          }}
-        />
-      )}
     </div>
   );
 };
