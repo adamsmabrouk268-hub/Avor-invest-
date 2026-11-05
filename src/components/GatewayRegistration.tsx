@@ -147,6 +147,8 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
     generateNewCaptcha();
   }, []);
 
+  const [hasInviteFromUrl, setHasInviteFromUrl] = useState<boolean>(Boolean(initialReferralCode));
+
   // Check URL query parameters for referral code
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
@@ -159,6 +161,8 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
       initialReferralCode;
     if (codeFromUrl) {
       setReferralCode(codeFromUrl);
+      setHasInviteFromUrl(true);
+      setActiveTab('register');
     }
   }, [initialReferralCode]);
 
@@ -187,14 +191,23 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
     e.preventDefault();
     setError(null);
 
-    // 1. Phone validation
+    // 1. Phone validation & cross-device normalization
     const cleanDigits = phone.replace(/\D/g, '');
     if (!cleanDigits || cleanDigits.length < 6) {
       setError('Please enter a valid mobile phone number.');
       return;
     }
 
-    const fullPhoneNumber = phone.startsWith('+') ? phone : `${selectedCountry.dialCode}${cleanDigits}`;
+    const dialDigits = selectedCountry.dialCode.replace(/\D/g, '');
+    let normalizedLocal = cleanDigits;
+    if (normalizedLocal.startsWith(dialDigits) && normalizedLocal.length > 9) {
+      normalizedLocal = normalizedLocal.slice(dialDigits.length);
+    }
+    if (normalizedLocal.startsWith('0') && normalizedLocal.length >= 10) {
+      normalizedLocal = normalizedLocal.slice(1);
+    }
+
+    const fullPhoneNumber = `${selectedCountry.dialCode}${normalizedLocal}`;
 
     // 2. Captcha verification
     const currentCaptcha = captchaCode.join('');
@@ -360,14 +373,35 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
         {/* Foreground Form Content */}
         <div className="relative z-10 flex flex-col items-center">
           {/* 1. Header: AVOR Brand & Welcome Title */}
-          <div className="text-center mb-7 sm:mb-8">
-            <h2 className="text-xs sm:text-sm font-serif font-bold tracking-[0.45em] text-cyan-400 uppercase mb-2 drop-shadow-[0_0_12px_rgba(0,240,255,0.45)]">
+          <div className="text-center mb-5 sm:mb-6">
+            <h2 className="text-xs sm:text-sm font-serif font-bold tracking-[0.45em] text-cyan-400 uppercase mb-1 drop-shadow-[0_0_12px_rgba(0,240,255,0.45)]">
               AVOR INVEST
             </h2>
+            <span className="text-[11px] font-mono text-sky-300/90 font-semibold block mb-1.5">
+              Official Gateway • avorinvest.com
+            </span>
             <h1 className="text-4xl sm:text-5xl font-serif font-bold text-white tracking-tight leading-tight">
               Welcome
             </h1>
           </div>
+
+          {/* Official Invitation Banner when accessed via Shared Invite Link */}
+          {hasInviteFromUrl && (
+            <div className="w-full mb-5 bg-gradient-to-r from-blue-950/90 via-[#071a3e] to-cyan-950/80 border border-cyan-400/50 rounded-2xl p-3.5 text-left space-y-1.5 shadow-lg">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-mono font-black uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>avorinvest.com • Official Invite Access</span>
+                </span>
+                <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[10px] font-mono font-bold">
+                  Code: {referralCode}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-200 leading-snug">
+                You have been invited to <strong className="text-white">Avor Invest (avorinvest.com)</strong>. Register your account below to claim your automatic <strong className="text-emerald-400">UGX 3,000 Welcome Bonus</strong> and access daily AI compute machine yields!
+              </p>
+            </div>
+          )}
 
           {/* Quick Tab Switcher: Register / Sign In */}
           <div className="flex items-center gap-2 mb-6 w-full max-w-xs bg-[#040b1e]/90 p-1 rounded-full border border-blue-900/70 text-xs">

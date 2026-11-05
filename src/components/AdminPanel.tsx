@@ -120,12 +120,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
   // Active Tab
   const [activeTab, setActiveTab] = useState<
-    'DEPOSITS' | 'LEDGER' | 'DEPOSIT_NUMBERS' | 'WITHDRAWALS' | 'MACHINES' | 'HOMEPAGE' | 'USERS' | 'SECURITY'
+    'DEPOSITS' | 'ORDER_MESSAGES' | 'LEDGER' | 'DEPOSIT_NUMBERS' | 'WITHDRAWALS' | 'MACHINES' | 'HOMEPAGE' | 'USERS' | 'SECURITY'
   >('DEPOSITS');
 
   // Admin Data State
   const [stats, setStats] = useState<any>(null);
   const [deposits, setDeposits] = useState<Transaction[]>([]);
+  const [adminMessages, setAdminMessages] = useState<any[]>([]);
   const [withdrawals, setWithdrawals] = useState<Transaction[]>([]);
   const [investmentsLedger, setInvestmentsLedger] = useState<any[]>([]);
   const [userList, setUserList] = useState<User[]>([]);
@@ -235,10 +236,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     setIsLoadingData(true);
     try {
       const res = await fetch('/api/admin/overview');
-      if (res.ok) {
+      const ct = res.headers.get('content-type') || '';
+      if (res.ok && ct.includes('application/json')) {
         const data = await res.json();
         setStats(data);
         setDeposits(data.deposits || []);
+        setAdminMessages(data.admin_notifications || []);
         setWithdrawals(data.withdrawals || []);
         setInvestmentsLedger(data.investments || []);
         setUserList(data.users || []);
@@ -255,8 +258,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
           setSelectedUserId(data.users[0].id);
         }
       }
-    } catch (err) {
-      console.error('Failed to fetch admin overview:', err);
+    } catch {
+      // Transient fetch error during background polling or server restart — keep existing state silently
     } finally {
       setIsLoadingData(false);
     }
@@ -265,12 +268,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
   const fetchMachines = async () => {
     try {
       const res = await fetch('/api/machines');
-      if (res.ok) {
+      const ct = res.headers.get('content-type') || '';
+      if (res.ok && ct.includes('application/json')) {
         const data = await res.json();
-        setMachineList(data);
+        if (Array.isArray(data)) {
+          setMachineList(data);
+        }
       }
-    } catch (err) {
-      console.error('Error fetching machines:', err);
+    } catch {
+      // Transient fetch error during background polling — keep existing machine list silently
     }
   };
 
@@ -335,6 +341,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       setStatusMessage({ type: 'error', text: err.message });
     } finally {
       setIsApprovingAll(false);
+    }
+  };
+
+  // Explicit Admin-Only Delete Deposit Record (No money details leave the system unless deleted by Admin)
+  const handleDeleteDepositRecord = async (txId: string) => {
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`/api/admin/deposits/${encodeURIComponent(txId)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to delete record.');
+      setStatusMessage({
+        type: 'success',
+        text: data.message || 'Deposit record permanently deleted by Admin.',
+      });
+      await fetchAdminData();
+      if (onDataChanged) onDataChanged();
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message });
     }
   };
 
@@ -1199,6 +1225,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         </button>
 
         <button
+          onClick={() => setActiveTab('ORDER_MESSAGES')}
+          className={`px-4 py-2.5 font-bold text-xs rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'ORDER_MESSAGES'
+              ? 'bg-gradient-to-r from-blue-600 via-blue-700 to-indigo-800 text-white font-black shadow-md border border-blue-400/40'
+              : 'text-slate-400 hover:text-white hover:bg-[#0c1630]'
+          }`}
+        >
+          <Megaphone className="w-4 h-4 text-sky-400" />
+          <span>
+            Placed Order Messages ({adminMessages.filter((m) => m.order_status === 'PENDING').length || adminMessages.length})
+          </span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('LEDGER')}
           className={`px-4 py-2.5 font-bold text-xs rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
             activeTab === 'LEDGER'
@@ -1382,6 +1422,137 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB: PLACED ORDER & DEPOSIT CONFIRMATION MESSAGES */}
+      {activeTab === 'ORDER_MESSAGES' && (
+        <div className="shining-card border border-blue-950/80 rounded-2xl p-6 space-y-4 shadow-xl text-white">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-blue-950/80">
+            <div>
+              <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                <Megaphone className="w-5 h-5 text-sky-400" />
+                <span>Admin Inbox: Placed Deposit &amp; Machine Order Messages</span>
+              </h3>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Every time a user clicks <strong>CONFIRM PAYMENT</strong> on a deposit or places a machine order, an instant order message is delivered here with the sender number, receiver account, amount, and one-click confirmation button.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {deposits.filter((d) => d.status === 'PENDING').length > 0 && (
+                <button
+                  type="button"
+                  disabled={isApprovingAll}
+                  onClick={handleApproveAllDeposits}
+                  className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-xs font-black rounded-xl border border-emerald-400/50 flex items-center gap-1.5 cursor-pointer shadow-md"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-white" />
+                  <span>Confirm All Pending ({deposits.filter((d) => d.status === 'PENDING').length})</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={fetchAdminData}
+                className="px-3 py-2 bg-[#09152e] hover:bg-[#0f2147] text-cyan-300 text-xs font-bold rounded-xl border border-cyan-500/40 flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`} />
+                <span>Refresh Messages</span>
+              </button>
+            </div>
+          </div>
+
+          {adminMessages.length === 0 ? (
+            <div className="text-center py-10 text-slate-400 text-xs">
+              No placed deposit or order messages yet. As soon as a user clicks Confirm Payment on a deposit, the message will appear here immediately.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {adminMessages.map((msg: any) => {
+                const isPendingOrder = msg.order_status === 'PENDING';
+                const isConfirmedOrder = msg.order_status === 'CONFIRMED' || msg.order_status === 'SUCCESS';
+                return (
+                  <div
+                    key={msg.id}
+                    className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                      isPendingOrder
+                        ? 'bg-[#07132c] border-blue-500/60 shadow-[0_0_20px_rgba(0,145,234,0.2)]'
+                        : 'bg-[#060d1f] border-blue-950/80'
+                    }`}
+                  >
+                    <div className="space-y-1.5 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase font-mono ${
+                            isPendingOrder
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse'
+                              : isConfirmedOrder
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                : 'bg-blue-500/20 text-sky-300 border border-blue-500/40'
+                          }`}
+                        >
+                          {isPendingOrder ? 'NEW ORDER AWAITING CONFIRMATION' : isConfirmedOrder ? 'CONFIRMED & REFLECTED' : msg.order_status || 'ORDER MESSAGE'}
+                        </span>
+                        <span className="text-sm font-black text-white">{msg.title}</span>
+                        <span className="text-[11px] font-mono text-slate-400">
+                          {new Date(msg.created_at).toLocaleString()}
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-slate-200 leading-relaxed">{msg.message}</p>
+
+                      <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] font-mono">
+                        {msg.customer_name && (
+                          <span className="px-2 py-0.5 rounded bg-[#0b1b3d] border border-blue-800/60 text-white">
+                            Customer: <strong>{msg.customer_name}</strong>
+                          </span>
+                        )}
+                        {msg.customer_phone && (
+                          <span className="px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/40 text-cyan-300">
+                            Sender Phone: <strong>{msg.customer_phone}</strong>
+                          </span>
+                        )}
+                        {msg.receiver_phone && (
+                          <span className="px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 text-emerald-300">
+                            Receiver: <strong>{msg.receiver_phone} ({msg.receiver_name || 'Company'})</strong>
+                          </span>
+                        )}
+                        {Number(msg.amount) > 0 && (
+                          <span className="px-2 py-0.5 rounded bg-blue-950/90 border border-sky-400/40 text-sky-300 font-bold">
+                            Amount: UGX {Number(msg.amount).toLocaleString()}
+                          </span>
+                        )}
+                        {msg.payment_reference && (
+                          <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-300">
+                            Ref: {msg.payment_reference}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {msg.transaction_id && isPendingOrder && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleDepositAction(msg.transaction_id, 'APPROVE')}
+                          className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-xs font-black rounded-xl border border-emerald-400/50 flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
+                        >
+                          <Check className="w-4 h-4" />
+                          <span>Confirm Deposit &amp; Reflect</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDepositAction(msg.transaction_id, 'REJECT')}
+                          className="px-3 py-2 bg-rose-950/70 hover:bg-rose-900/70 text-rose-300 text-xs font-bold rounded-xl border border-rose-500/40 cursor-pointer"
+                        >
+                          Decline
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -1593,9 +1764,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                               </button>
                             </div>
                           ) : (
-                            <span className="text-[10px] text-emerald-400 font-mono font-bold">
-                              {d.status === 'SUCCESS' ? 'Confirmed & Reflected' : 'Declined'}
-                            </span>
+                            <div className="flex items-center justify-end gap-2">
+                              <span className="text-[10px] text-emerald-400 font-mono font-bold">
+                                {d.status === 'SUCCESS' ? 'Permanently Approved & Saved' : 'Declined'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteDepositRecord(d.id)}
+                                className="px-2 py-1 bg-rose-950/50 hover:bg-rose-900/70 text-rose-300 text-[10px] font-bold rounded-lg border border-rose-500/30 flex items-center gap-1 cursor-pointer"
+                                title="Delete record permanently (Admin only)"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>Delete</span>
+                              </button>
+                            </div>
                           )}
                         </td>
                       </tr>

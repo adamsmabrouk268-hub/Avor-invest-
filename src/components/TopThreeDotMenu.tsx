@@ -137,11 +137,36 @@ export const TopThreeDotMenu: React.FC<TopThreeDotMenuProps> = ({
   const [isOwnerAuthorized, setIsOwnerAuthorized] = useState<boolean>(() =>
     forceOwnerAuthorized || checkAndSyncOwnerDevice(user)
   );
+  const [pendingOrdersCount, setPendingOrdersCount] = useState<number>(0);
+  const [latestOrderMessage, setLatestOrderMessage] = useState<any>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setIsOwnerAuthorized(forceOwnerAuthorized || checkAndSyncOwnerDevice(user));
   }, [user, forceOwnerAuthorized]);
+
+  // Poll incoming placed deposit & machine order messages for the Owner/Admin device
+  useEffect(() => {
+    if (!isOwnerAuthorized) return;
+    const fetchOwnerOrderMessages = async () => {
+      try {
+        const res = await fetch('/api/admin/overview');
+        if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
+          const data = await res.json();
+          const pendingDeps = Number(data.pending_deposits_count || 0);
+          setPendingOrdersCount(pendingDeps);
+          const notifs = Array.isArray(data.admin_notifications) ? data.admin_notifications : [];
+          const pendingMsg = notifs.find((n: any) => n.order_status === 'PENDING') || notifs[0] || null;
+          setLatestOrderMessage(pendingMsg);
+        }
+      } catch {
+        // Ignore transient network errors
+      }
+    };
+    fetchOwnerOrderMessages();
+    const interval = setInterval(fetchOwnerOrderMessages, 4000);
+    return () => clearInterval(interval);
+  }, [isOwnerAuthorized]);
 
   // Close when clicking outside
   useEffect(() => {
@@ -180,11 +205,16 @@ export const TopThreeDotMenu: React.FC<TopThreeDotMenuProps> = ({
           setIsOpen(!isOpen);
           setShowLockedSupportNotice(false);
         }}
-        className="p-2 sm:px-2.5 sm:py-2 rounded-xl bg-[#062232]/90 hover:bg-[#0a354c] border border-[#00d2c4]/40 text-[#80deea] hover:text-white transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center gap-1 group"
+        className="relative p-2 sm:px-2.5 sm:py-2 rounded-xl bg-[#062232]/90 hover:bg-[#0a354c] border border-[#00d2c4]/40 text-[#80deea] hover:text-white transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center gap-1 group"
         title="Owner Navigation & Admin Console (This Device Only)"
         aria-label="Owner Three-Dot Navigation"
       >
         <MoreVertical className="w-4 h-4 text-[#00e5ff] group-hover:scale-110 transition-transform" />
+        {pendingOrdersCount > 0 && (
+          <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-slate-950 font-mono font-black text-[10px] flex items-center justify-center shadow-md border border-amber-300 animate-pulse">
+            {pendingOrdersCount}
+          </span>
+        )}
       </button>
 
       {/* Floating Three-Dot Dropdown Menu */}
@@ -235,13 +265,25 @@ export const TopThreeDotMenu: React.FC<TopThreeDotMenuProps> = ({
                 <span className="text-xs font-bold text-white group-hover:text-[#00e5ff] transition-colors">
                   Admin Console
                 </span>
-                <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                  Owner Only
-                </span>
+                {pendingOrdersCount > 0 ? (
+                  <span className="text-[10px] font-mono font-black px-1.5 py-0.5 rounded-md bg-amber-500 text-slate-950 border border-amber-300 animate-pulse">
+                    {pendingOrdersCount} New Order{pendingOrdersCount > 1 ? 's' : ''}
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    Owner Only
+                  </span>
+                )}
               </div>
               <p className="text-[10px] text-[#7ba3b0] mt-0.5 leading-snug">
                 Authorized owner controls, deposit verification & node specs
               </p>
+              {latestOrderMessage && (
+                <div className="mt-1.5 p-2 rounded-lg bg-[#041529] border border-blue-500/40 text-[10px] text-sky-200 leading-snug">
+                  <div className="font-bold text-amber-300 truncate">{latestOrderMessage.title}</div>
+                  <div className="text-slate-300 line-clamp-2 mt-0.5">{latestOrderMessage.message}</div>
+                </div>
+              )}
             </div>
           </button>
 

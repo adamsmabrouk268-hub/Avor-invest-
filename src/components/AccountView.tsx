@@ -18,6 +18,7 @@ import {
 import { WhatsAppIcon } from './WhatsAppIcon';
 import { VipClassTaskTable } from './VipClassTaskTable';
 import { usePWAInstall } from '../hooks/usePWAInstall';
+import { getShareableInviteLink, getShareableInviteMessage } from '../utils/inviteLink';
 
 interface AccountViewProps {
   user: User | null;
@@ -61,6 +62,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
+  const [copiedDetails, setCopiedDetails] = useState<boolean>(false);
 
   // Settings form state
   const [editName, setEditName] = useState<string>(user?.full_name || '');
@@ -107,27 +109,51 @@ export const AccountView: React.FC<AccountViewProps> = ({
     !!dashboardSummary?.has_bought_machine;
 
   const referralCode = user?.referral_code || 'AVOR-7789';
-  const referralLink =
-    typeof window !== 'undefined'
-      ? `${window.location.origin}/reg?AvorInvest=${referralCode}`
-      : `https://avor.invest/reg?AvorInvest=${referralCode}`;
+  const referralLink = getShareableInviteLink(referralCode);
+  const fullInviteMessage = getShareableInviteMessage(referralCode);
 
   const handleCopyLink = () => {
-    if (!hasBoughtMachine) return;
     navigator.clipboard.writeText(referralLink);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2500);
   };
 
   const handleCopyCode = () => {
-    if (!hasBoughtMachine) return;
     navigator.clipboard.writeText(referralCode);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2500);
   };
 
+  const handleCopyFullDetails = () => {
+    navigator.clipboard.writeText(fullInviteMessage);
+    setCopiedDetails(true);
+    setTimeout(() => setCopiedDetails(false), 2500);
+  };
+
+  const handleNativeShare = async () => {
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Avor Invest (avorinvest.com) — Official Invitation',
+          text: fullInviteMessage,
+          url: referralLink,
+        });
+        return;
+      } catch {
+        // Fallback to copy
+      }
+    }
+    handleCopyFullDetails();
+  };
+
   // Card 1: Wallet & Balance
-  const totalDeposited = dashboardSummary?.deposit_details?.total_deposited || 0;
+  const confirmedTxDeposits = transactions
+    .filter((t) => t.type === 'DEPOSIT' && (t.status === 'SUCCESS' || t.status === 'CONFIRMED'))
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const totalDeposited = Math.max(
+    Number(dashboardSummary?.deposit_details?.total_deposited || 0),
+    confirmedTxDeposits
+  );
   const pendingDeposits = dashboardSummary?.deposit_details?.pending_deposits || 0;
   const liveBalanceValue = dashboardSummary?.balance ?? user?.balance ?? 0;
   const displayWallet = totalDeposited.toLocaleString('en-US', {
@@ -620,19 +646,23 @@ export const AccountView: React.FC<AccountViewProps> = ({
         </div>
       )}
 
-      {/* Modal 2: Invite (Personal Link & Invite Code — Only accessible when user has bought a machine per Item 8, 18 & 19) */}
+      {/* Modal 2: Invite (Personal Link & Invite Code with Avor Invest Details) */}
       {activeModal === 'invite' && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-[#03081a] border border-[#0091ea]/60 shadow-[0_0_25px_rgba(0,145,234,0.2)] rounded-2xl p-5 max-w-md w-full space-y-4">
+          <div className="bg-[#03081a] border border-[#0091ea]/60 shadow-[0_0_25px_rgba(0,145,234,0.25)] rounded-2xl p-5 max-w-md w-full space-y-3.5 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-[#0e2748]">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-[#0091ea] flex items-center justify-center text-white">
-                  <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M11 15h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 17" />
-                    <path d="m7 21 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.8-2.8L15 13" />
-                  </svg>
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 flex items-center justify-center text-white font-black text-xs shadow-md">
+                  AVOR
                 </div>
-                <h3 className="text-base font-bold text-white">Personal Invite Link & Code</h3>
+                <div>
+                  <h3 className="text-base font-black text-white leading-tight">
+                    Avor Invest Invite Plane
+                  </h3>
+                  <span className="text-[11px] font-mono text-cyan-400 font-bold">
+                    Official Access • avorinvest.com
+                  </span>
+                </div>
               </div>
               <button
                 onClick={() => setActiveModal(null)}
@@ -642,79 +672,126 @@ export const AccountView: React.FC<AccountViewProps> = ({
               </button>
             </div>
 
-            {!hasBoughtMachine ? (
-              <div className="bg-[#08132c] border border-amber-500/40 rounded-xl p-4 text-center space-y-3">
-                <div className="w-12 h-12 rounded-full bg-amber-950/80 border border-amber-500/50 flex items-center justify-center mx-auto text-amber-400">
-                  <Lock className="w-6 h-6" />
+            {/* Avor Invest Platform Summary Card */}
+            <div className="bg-gradient-to-br from-[#071536] via-[#06112b] to-[#040a1a] border border-blue-500/40 rounded-xl p-3.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-black uppercase tracking-wider text-cyan-300 font-mono">
+                  🌐 avorinvest.com Official Invitation
+                </span>
+                <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold">
+                  Active Link
+                </span>
+              </div>
+              <p className="text-xs text-slate-200 leading-relaxed">
+                Share your official <strong className="text-white">Avor Invest (avorinvest.com)</strong> link below. Anyone who opens your link is directed straight to the Avor Invest registration gateway with your invite code pre-filled:
+              </p>
+              <ul className="text-[11px] text-slate-300 space-y-1 font-mono pl-1">
+                <li>• <strong className="text-emerald-400">UGX 3,000</strong> Free Automatic Registration Welcome Bonus</li>
+                <li>• <strong className="text-sky-400">8% Invitation Commission</strong> on Same-Machine Purchases</li>
+                <li>• <strong className="text-cyan-300">5% Monthly Class Reward</strong> (4+ Active Invited Buyers)</li>
+              </ul>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="text-slate-300 font-bold block mb-1">
+                  Your Official Avor Invest Invite Code:
+                </label>
+                <div className="flex items-center gap-2 bg-[#08132c] border border-blue-500/40 p-2.5 rounded-xl">
+                  <span className="font-mono font-black text-sm text-sky-400 flex-1 select-all">
+                    {referralCode}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyCode}
+                    className="px-3 py-1.5 bg-[#0091ea] hover:bg-[#0081d6] text-white rounded-lg font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                  >
+                    {copiedCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedCode ? 'Copied!' : 'Copy Code'}</span>
+                  </button>
                 </div>
-                <h4 className="text-sm font-black text-white">
-                  Personal Invite Link Locked
-                </h4>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Your personal referral link and invitation code are only accessible once you have bought at least one machine in the Machine Plane.
-                </p>
-                <div className="p-2.5 rounded-lg bg-[#040b1d] border border-[#0e2748] text-[11px] text-sky-300 font-mono">
-                  Invitation Bonus: <strong>8%</strong> when an invited customer buys the same machine as you (collected on your balance when their machine cycle ends).
+              </div>
+
+              <div>
+                <label className="text-slate-300 font-bold block mb-1">
+                  Direct Registration Link (Opens Avor Invest on Any Device):
+                </label>
+                <div className="flex items-center gap-2 bg-[#08132c] border border-blue-500/40 p-2.5 rounded-xl">
+                  <input
+                    type="text"
+                    readOnly
+                    value={referralLink}
+                    onClick={(e) => (e.target as HTMLInputElement).select()}
+                    className="font-mono text-[11px] text-cyan-200 bg-transparent outline-none w-full flex-1 select-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCopyLink}
+                    className="px-3 py-1.5 bg-[#0091ea] hover:bg-[#0081d6] text-white rounded-lg font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                  >
+                    {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedLink ? 'Link Copied!' : 'Copy Link'}</span>
+                  </button>
                 </div>
-                {onNavigateToMarketplace && (
+              </div>
+
+              {/* Preview of Avor Invest Invite Details */}
+              <div className="bg-[#050d21] border border-[#122b57] rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-300">
+                    Avor Invest Invitation Package (With Link & Details):
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyFullDetails}
+                    className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 flex items-center gap-1 cursor-pointer"
+                  >
+                    {copiedDetails ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedDetails ? 'Copied Package!' : 'Copy Full Details'}</span>
+                  </button>
+                </div>
+                <pre className="text-[10px] text-slate-300 font-mono whitespace-pre-wrap break-all bg-[#030816] p-2.5 rounded-lg border border-blue-950/80 select-all">
+                  {fullInviteMessage}
+                </pre>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                <a
+                  href={`https://wa.me/?text=${encodeURIComponent(fullInviteMessage)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer text-center"
+                >
+                  <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
+                  <span>Send on WhatsApp</span>
+                </a>
+
+                <button
+                  type="button"
+                  onClick={handleNativeShare}
+                  className="w-full py-2.5 px-3 bg-gradient-to-r from-blue-600 to-cyan-500 hover:brightness-110 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                >
+                  <ExternalLink className="w-4 h-4 shrink-0" />
+                  <span>{copiedDetails ? 'Copied to Clipboard!' : 'Share Invite Link'}</span>
+                </button>
+              </div>
+
+              {!hasBoughtMachine && onNavigateToMarketplace && (
+                <div className="p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/30 flex items-center justify-between gap-2 text-[11px] text-amber-200">
+                  <span>Activate a compute machine to unlock 8% same-machine commission payouts.</span>
                   <button
                     type="button"
                     onClick={() => {
                       setActiveModal(null);
                       onNavigateToMarketplace();
                     }}
-                    className="w-full py-2.5 bg-gradient-to-r from-[#0091ea] to-[#0077b6] hover:brightness-110 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-md"
+                    className="px-2.5 py-1 bg-amber-500 text-slate-950 font-black rounded-lg shrink-0 cursor-pointer"
                   >
-                    <Cpu className="w-4 h-4" />
-                    <span>Buy a Machine to Unlock Invite Link</span>
+                    Machines
                   </button>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-3 text-xs">
-                <div>
-                  <label className="text-slate-400 font-semibold block mb-1">Your Invite Code:</label>
-                  <div className="flex items-center gap-2 bg-[#08132c] border border-[#0e2748] p-2.5 rounded-xl">
-                    <span className="font-mono font-black text-sm text-sky-400 flex-1">{referralCode}</span>
-                    <button
-                      onClick={handleCopyCode}
-                      className="px-3 py-1 bg-[#0091ea] text-white rounded-lg font-bold flex items-center gap-1 cursor-pointer"
-                    >
-                      {copiedCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>{copiedCode ? 'Copied' : 'Copy'}</span>
-                    </button>
-                  </div>
                 </div>
-
-                <div>
-                  <label className="text-slate-400 font-semibold block mb-1">Your Personal Invite Link:</label>
-                  <div className="flex items-center gap-2 bg-[#08132c] border border-[#0e2748] p-2.5 rounded-xl">
-                    <span className="font-mono text-[11px] text-slate-300 truncate flex-1">{referralLink}</span>
-                    <button
-                      onClick={handleCopyLink}
-                      className="px-3 py-1 bg-[#0091ea] text-white rounded-lg font-bold flex items-center gap-1 cursor-pointer shrink-0"
-                    >
-                      {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>{copiedLink ? 'Copied' : 'Copy'}</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="p-3 bg-[#08132c] rounded-xl border border-[#0e2748] text-slate-300 leading-relaxed">
-                  Earn <strong className="text-emerald-400">8% team income / invitation bonus</strong> when an invited customer buys the same machine as you, collected directly on your <strong className="text-sky-400">balance</strong> when the cycle of the invited customer&apos;s machine has ended.
-                </div>
-
-                <a
-                  href={`https://wa.me/?text=${encodeURIComponent(`Join me on Avor invest! Use my invite code ${referralCode}: ${referralLink}`)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer"
-                >
-                  <WhatsAppIcon className="w-4 h-4 fill-white" />
-                  <span>Share Personal Link via WhatsApp</span>
-                </a>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       )}

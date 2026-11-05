@@ -74,7 +74,8 @@ export const DepositNumbersManager: React.FC<DepositNumbersManagerProps> = ({ on
     setIsLoading(true);
     try {
       const res = await fetch('/api/admin/deposit-numbers');
-      if (res.ok) {
+      const ct = res.headers.get('content-type') || '';
+      if (res.ok && ct.includes('application/json')) {
         const data = await res.json();
         setNumbers(data.numbers || []);
         if (data.config) {
@@ -93,8 +94,8 @@ export const DepositNumbersManager: React.FC<DepositNumbersManagerProps> = ({ on
           setRotationHistory(data.rotation_history);
         }
       }
-    } catch (err) {
-      console.error('Failed to fetch deposit numbers:', err);
+    } catch {
+      // Transient fetch error during background refresh — keep existing state silently
     } finally {
       setIsLoading(false);
     }
