@@ -1464,7 +1464,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                 <span>Admin Inbox: Placed Deposit &amp; Machine Order Messages (Firebase + Server Sync)</span>
               </h3>
               <p className="text-xs text-slate-300 mt-0.5">
-                Every time a user clicks <strong>CONFIRM PAYMENT</strong> on a deposit or taps <strong>Buy a Machine</strong>, an instant message is saved to Firebase Firestore (<code className="text-sky-300">admin_messages</code>) and the server database so you receive it here across all devices.
+                Every time a user clicks <strong>PLACE ORDER</strong> on a deposit or taps <strong>Buy a Machine</strong>, an instant message is saved to Firebase Firestore (<code className="text-sky-300">admin_messages</code>) and the server database so you receive it here across all devices.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -1545,7 +1545,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
           {adminMessages.length === 0 && firestoreMessages.length === 0 ? (
             <div className="text-center py-10 text-slate-400 text-xs">
-              No placed deposit or order messages yet. As soon as a user clicks Confirm Payment on a deposit or buys a machine, the message will appear here immediately.
+              No placed deposit or order messages yet. As soon as a user clicks Place Order on a deposit or buys a machine, the message will appear here immediately.
             </div>
           ) : (
             <div className="space-y-3">

@@ -822,7 +822,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                             : `Deposit on Wallet First (${currencyInfo.format(totalCost)})`
                           : !hasRevealedReceiver
                             ? 'Continue to Receive Deposit Number & Name'
-                            : `Confirm Payment (${currencyInfo.format(totalCost)})`}
+                            : `Place Order (${currencyInfo.format(totalCost)})`}
                     </span>
                   </button>
                 )}

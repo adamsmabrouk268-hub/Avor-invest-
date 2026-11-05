@@ -950,13 +950,13 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     <span>DIAL USSD (AVAILABLE SOON)</span>
                   </div>
 
-                  {/* CONFIRM PAYMENT Button */}
+                  {/* PLACE ORDER Button */}
                   <button
                     type="submit"
                     disabled={isLoading}
                     className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 hover:brightness-110 active:scale-98 text-white font-black text-sm uppercase tracking-wider shadow-lg shadow-blue-900/50 border border-blue-400/40 transition-all cursor-pointer disabled:opacity-50"
                   >
-                    {isLoading ? 'CONFIRMING PAYMENT...' : 'CONFIRM PAYMENT'}
+                    {isLoading ? 'PLACING ORDER...' : 'PLACE ORDER'}
                   </button>
                 </form>
               )}
