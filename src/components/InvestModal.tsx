@@ -16,8 +16,10 @@ import {
   RefreshCw,
   RotateCcw,
   Cpu,
+  FileText,
 } from 'lucide-react';
 import { WhatsAppIcon } from './WhatsAppIcon';
+import { JotformDepositModal } from './JotformDepositModal';
 
 interface InvestModalProps {
   machine: Machine | null;
@@ -117,6 +119,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
   const [depositSuccessMessage, setDepositSuccessMessage] = useState<string | null>(null);
   const [successData, setSuccessData] = useState<{ message: string; status?: string } | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [showJotformModal, setShowJotformModal] = useState<boolean>(false);
 
   const RECEIVER_PHONE = '0741032838';
   const RECEIVER_NAME = 'SULAINH NAKASEETA';
@@ -215,7 +218,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
   const userHasEnoughBalance = liveBalance >= totalCost;
   const isMobileMoney = selectedChannel === 'MTN Mobile Money' || selectedChannel === 'Airtel Money';
 
-  // Step 2: Handle submitting deposit to Admin via Mobile Money (Reflects across all deposit planes once Admin confirms)
+  // Step 2: Handle submitting deposit via Mobile Money (Automatically goes to Admin, reflects on wallet, starts machine & unlocks all planes)
   const handleDepositToWallet = async () => {
     if (!user) {
       onOpenAuth();
@@ -251,18 +254,18 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       if (typeof data.new_balance === 'number') {
         setLiveBalance(data.new_balance);
       }
-      setPendingDepositAmount((prev) => prev + totalCost);
-      setSelectedChannel('Wallet Balance');
       if (onDepositSubmitted) {
         onDepositSubmitted();
       }
       const msg =
         data.message ||
-        `Deposit of ${currencyInfo.format(totalCost)} submitted to Admin for confirmation! Once Admin confirms your deposit, it will automatically reflect across all deposit planes and your Wallet Balance.`;
+        `Deposit of ${currencyInfo.format(totalCost)} sent to Admin and reflected on your Wallet! ${machine.title} is now ACTIVE and running (Day 1) and all locked planes are open!`;
       setDepositSuccessMessage(msg);
-      if (onNotify) {
-        onNotify(msg, 'info');
-      }
+      setSuccessData({
+        message: msg,
+        status: 'ACTIVE',
+      });
+      onSuccess();
     } catch (err: any) {
       setErrorMessage(err.message || 'Unable to submit deposit.');
     } finally {
@@ -405,13 +408,24 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                 <p className="text-xs text-slate-300">{successData.message}</p>
               </div>
 
-              <button
-                type="button"
-                onClick={onClose}
-                className="w-full py-3 bg-gradient-to-r from-blue-600 to-cyan-600 text-white font-bold text-xs rounded-xl shadow-lg cursor-pointer"
-              >
-                View in Income Plane
-              </button>
+              <div className="space-y-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowJotformModal(true)}
+                  className="w-full py-3.5 px-4 bg-gradient-to-r from-blue-600 via-sky-500 to-cyan-500 hover:brightness-110 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg border border-sky-300/40 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <FileText className="w-4 h-4 text-white" />
+                  <span>Fill Jotform Deposit Form (Send Deposit Message to Admin)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="w-full py-3 bg-[#091734] hover:bg-[#0e224d] border border-blue-800/70 text-sky-300 font-bold text-xs rounded-xl shadow-lg cursor-pointer"
+                >
+                  View Running Machine in Income Plane
+                </button>
+              </div>
             </div>
           ) : (
             <>
@@ -797,11 +811,32 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                     </span>
                   </button>
                 )}
+
+                <button
+                  type="button"
+                  onClick={() => setShowJotformModal(true)}
+                  className="w-full mt-2.5 py-3 px-4 bg-[#07152e] hover:bg-[#0c2147] text-sky-300 font-extrabold text-xs rounded-2xl border border-sky-500/40 transition-all cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <FileText className="w-4 h-4 text-sky-400" />
+                  <span>Already Bought Machine / Deposited? Fill Jotform to Message Admin</span>
+                </button>
               </div>
             </>
           )}
         </div>
       </div>
+
+      {showJotformModal && (
+        <JotformDepositModal
+          user={user}
+          initialMachine={machine}
+          initialAmount={totalCost}
+          onClose={() => setShowJotformModal(false)}
+          onSubmitted={() => {
+            onSuccess();
+          }}
+        />
+      )}
     </div>
   );
 };

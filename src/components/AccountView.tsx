@@ -106,7 +106,10 @@ export const AccountView: React.FC<AccountViewProps> = ({
 
   const hasBoughtMachine =
     investments.some((i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') ||
-    !!dashboardSummary?.has_bought_machine;
+    !!dashboardSummary?.has_bought_machine ||
+    !!user?.has_bought_machine ||
+    Number(dashboardSummary?.deposit_details?.total_deposited || 0) > 0 ||
+    (user?.balance || 0) > 0;
 
   const referralCode = user?.referral_code || 'AVOR-7789';
   const referralLink = getShareableInviteLink(referralCode);

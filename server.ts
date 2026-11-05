@@ -28,6 +28,7 @@ const machines: Machine[] = [...DEFAULT_MACHINES];
 const investments: Investment[] = [];
 const transactions: Transaction[] = [];
 const notifications: AppNotification[] = [];
+const jotformSubmissions: any[] = [];
 
 // ====================================================================
 // REGISTERED USERS DISK PERSISTENCE STORAGE
@@ -38,6 +39,7 @@ const REGISTRATION_EVENTS_FILE = path.join(DATA_DIR, 'registration_events.json')
 const TRANSACTIONS_FILE = path.join(DATA_DIR, 'transactions.json');
 const INVESTMENTS_FILE = path.join(DATA_DIR, 'investments.json');
 const NOTIFICATIONS_FILE = path.join(DATA_DIR, 'notifications.json');
+const JOTFORM_SUBMISSIONS_FILE = path.join(DATA_DIR, 'jotform_submissions.json');
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -86,6 +88,12 @@ function loadAppStateFromDisk() {
         notifications.splice(0, notifications.length, ...loadedNotif);
       }
     }
+    if (fs.existsSync(JOTFORM_SUBMISSIONS_FILE)) {
+      const loadedJotform = JSON.parse(fs.readFileSync(JOTFORM_SUBMISSIONS_FILE, 'utf-8'));
+      if (Array.isArray(loadedJotform)) {
+        jotformSubmissions.splice(0, jotformSubmissions.length, ...loadedJotform);
+      }
+    }
   } catch (err) {
     console.error('Error loading app state from disk:', err);
   }
@@ -99,6 +107,7 @@ function saveAppStateToDisk() {
     fs.writeFileSync(TRANSACTIONS_FILE, JSON.stringify(transactions, null, 2), 'utf-8');
     fs.writeFileSync(INVESTMENTS_FILE, JSON.stringify(investments, null, 2), 'utf-8');
     fs.writeFileSync(NOTIFICATIONS_FILE, JSON.stringify(notifications.slice(0, 500), null, 2), 'utf-8');
+    fs.writeFileSync(JOTFORM_SUBMISSIONS_FILE, JSON.stringify(jotformSubmissions, null, 2), 'utf-8');
   } catch (err) {
     console.error('Error saving app state to disk:', err);
   }
@@ -1705,41 +1714,50 @@ async function startServer() {
 
     const totalCost = machine.total_cost * units;
 
-    // Verify referral buyer requirements for AVclasses / Locked Planes (A class: 4 people, B class: 9, etc.)
+    // Sync confirmed finances before checking balance or lock status
+    const finSummary = syncUserConfirmedFinances(user, user_id);
+    const userConfirmedInvs = investments.filter(
+      (i) => i.user_id === user.id && (i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE')
+    );
+    const hasUnlockedAllPlanes =
+      userConfirmedInvs.length > 0 ||
+      finSummary.confirmedDeposits > 0 ||
+      user.balance > 0 ||
+      !!user.has_bought_machine;
+
+    // Verify locked plane access: once someone deposits money on the given number, all locked things open automatically
     if ((machine.is_av_class || (machine.required_referral_buyers && machine.required_referral_buyers > 0)) && user.role !== 'ADMIN') {
-      const userConfirmedInvs = investments.filter(
-        (i) => i.user_id === user.id && (i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE')
-      );
-      if (userConfirmedInvs.length === 0) {
+      if (!hasUnlockedAllPlanes) {
         return res.status(400).json({
-          error: `Access Denied: ${machine.title} is a locked plane. You cannot access closed or locked planes until Admin confirms your payment and your machine starts running.`,
-        });
-      }
-
-      const userRefCode = (user.referral_code || '').toLowerCase();
-      const allReferred = Array.from(users.values()).filter(
-        (u) => u.id !== user.id && (u.referred_by || '').toLowerCase() === userRefCode
-      );
-      const activeBuyers = allReferred.filter((m) => {
-        const mInvs = investments.filter(
-          (i) => i.user_id === m.id && (i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE')
-        );
-        return mInvs.length > 0;
-      });
-
-      const reqBuyers = machine.required_referral_buyers || 4;
-      if (activeBuyers.length < reqBuyers) {
-        return res.status(400).json({
-          error: `Locked Plane: Unlocking ${machine.title} requires ${reqBuyers} invited customers whose machine payments have been confirmed by Admin. You currently have ${activeBuyers.length} confirmed buyer(s).`,
+          error: `Access Denied: ${machine.title} is a locked plane. Deposit money on the given number first so your machine starts running and all locked planes open.`,
         });
       }
     }
 
-    // Sync confirmed finances before checking balance
-    syncUserConfirmedFinances(user, user_id);
+    // If this exact machine was already auto-started by the user's recent deposit, return success immediately
+    const recentAutoStartedInv = investments.find(
+      (i) =>
+        i.user_id === user.id &&
+        i.machine_id === machine.id &&
+        i.status === 'ACTIVE' &&
+        !i.wallet_deducted
+    );
+    if (recentAutoStartedInv && user.balance < totalCost) {
+      recentAutoStartedInv.wallet_deducted = true;
+      syncUserConfirmedFinances(user, user_id);
+      saveRegisteredUserToDisk(user);
+      saveAppStateToDisk();
+      return res.status(200).json({
+        message: `Your ${machine.title} is ACTIVE and running (Day ${recentAutoStartedInv.days_elapsed || 1} of ${machine.duration_days})! All locked planes are open.`,
+        investment: recentAutoStartedInv,
+        user_balance: user.balance,
+        has_bought_machine: true,
+        status: 'ACTIVE',
+        claimed_tier_rewards: (user as any).claimed_tier_rewards || [],
+      });
+    }
 
-    // Every buyer must first deposit money on their wallet (via MTN Mobile Money or Airtel Money)
-    // and have Admin confirm their deposit payment before they can buy/access any machine.
+    // Every buyer must deposit money on their wallet (via MTN Mobile Money or Airtel Money)
     if (user.balance < totalCost) {
       const pendingDeposits = transactions.filter(
         (t) => doesTxBelongToUser(t, user, user_id) && t.type === 'DEPOSIT' && t.status === 'PENDING'
@@ -1749,26 +1767,18 @@ async function startServer() {
       pushNotification(
         user.id,
         '⚠️ Wallet Balance Not Enough',
-        pendingTotal > 0
-          ? `Wallet balance is not enough to access machine (${machine.title}). Your wallet deposit of ${pendingTotal.toLocaleString()} UGX is still PENDING Admin confirmation.`
-          : `Wallet balance is not enough to access machine (${machine.title}). Required: ${totalCost.toLocaleString()} UGX • Your Wallet Balance: ${user.balance.toLocaleString()} UGX. Please deposit money on your wallet first via MTN Mobile Money or Airtel Money and wait for Admin to confirm your payment.`,
+        `Wallet balance is not enough to access machine (${machine.title}). Required: ${totalCost.toLocaleString()} UGX • Your Wallet Balance: ${user.balance.toLocaleString()} UGX. Please deposit money on the given number first.`,
         'PAYMENT'
       );
 
-      if (pendingTotal > 0) {
-        return res.status(400).json({
-          error: `Wallet balance is not enough to access machine (${machine.title}). Your wallet deposit of ${pendingTotal.toLocaleString()} UGX is currently PENDING Admin confirmation. Only after Admin confirms your deposit will it reflect on your wallet so you can buy ${machine.title}.`,
-          requires_deposit_approval: true,
-        });
-      }
-
       return res.status(400).json({
-        error: `Wallet balance is not enough to access machine (${totalCost.toLocaleString()} UGX required • Available Wallet Balance: ${user.balance.toLocaleString()} UGX). You must first deposit money on your wallet via MTN Mobile Money or Airtel Money and wait for Admin to confirm your payment.`,
+        error: `Wallet balance is not enough to access machine (${totalCost.toLocaleString()} UGX required • Available Wallet Balance: ${user.balance.toLocaleString()} UGX). Please deposit money on the given number via MTN Mobile Money or Airtel Money.`,
         requires_deposit: true,
+        requires_deposit_approval: pendingTotal > 0,
       });
     }
 
-    // Deduct from the user's Admin-confirmed wallet balance
+    // Deduct from the user's wallet balance
     user.balance -= totalCost;
     user.has_bought_machine = true;
     saveRegisteredUserToDisk(user);
@@ -2193,12 +2203,16 @@ async function startServer() {
       }
     });
 
-    // Check if current user has bought and Admin-confirmed at least one machine
-    const userInvestments = investments.filter((i) => i.user_id === userId);
+    // Check if current user has an active/completed machine or has deposited money on the given number
+    const userInvestments = investments.filter((i) => i.user_id === userId || doesTxBelongToUser({ user_id: i.user_id } as any, user, userId));
     const confirmedUserInvestments = userInvestments.filter(
       (i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE'
     );
-    const hasBoughtMachine = confirmedUserInvestments.length > 0;
+    const hasBoughtMachine =
+      confirmedUserInvestments.length > 0 ||
+      totalDeposited > 0 ||
+      user.balance > 0 ||
+      !!user.has_bought_machine;
     user.has_bought_machine = hasBoughtMachine;
     const inviterOwnedMachineIds = new Set(confirmedUserInvestments.map((i) => i.machine_id));
     const inviterOwnedMachineTitles = new Set(
@@ -2490,7 +2504,10 @@ async function startServer() {
   // 7. Get User Portfolio & Calculate Live Unclaimed Earnings
   app.get('/api/user/portfolio/:userId', (req, res) => {
     const userId = req.params.userId;
-    const userInvestments = investments.filter((i) => i.user_id === userId);
+    const user = findOrRestoreUser(userId, { user_id: userId });
+    const userInvestments = investments.filter(
+      (i) => i.user_id === userId || (user && i.user_id === user.id) || doesTxBelongToUser({ user_id: i.user_id, customer_phone: (i as any).customer_phone } as any, user, userId)
+    );
 
     // Calculate accrued earnings based on time passed
     const now = Date.now();
@@ -2963,12 +2980,180 @@ async function startServer() {
   app.put('/api/admin/deposit-numbers/rotation-config', handleStrategyUpdate);
   app.post('/api/admin/deposit-numbers/strategy', handleStrategyUpdate);
 
+  // Helper: Automatically credit Admin receiver, reflect on customer wallet, start machine running, and unlock all locked planes
+  const processAutomaticDepositAndStartMachine = (
+    user: (User & { password_hash?: string }) | undefined,
+    tx: Transaction,
+    requestedMachineId?: string,
+    requestedMachineTitle?: string
+  ): Investment | null => {
+    const nowIso = new Date().toISOString();
+    tx.status = 'SUCCESS';
+    (tx as any).wallet_credited = true;
+    (tx as any).approved_permanent = true;
+    (tx as any).confirmed_at = nowIso;
+
+    // 1. Automatically send money to Admin (credit active receiver number & Admin wallet)
+    const recPhone = (tx as any).receiver_phone || RECEIVER_PHONE;
+    const recName = (tx as any).receiver_name || RECEIVER_NAME;
+    const recId = (tx as any).receiver_id;
+    let targetRec =
+      depositReceiverNumbers.find((n) => (recId && n.id === recId) || (recPhone && n.phone_number === recPhone)) ||
+      depositReceiverNumbers.find((n) => n.is_active) ||
+      null;
+    if (!targetRec) {
+      targetRec = {
+        id: recId || `rec-${Date.now()}`,
+        phone_number: recPhone,
+        account_name: recName,
+        carrier: 'MTN',
+        is_active: true,
+        priority: depositReceiverNumbers.length + 1,
+        daily_limit_ugx: 5000000,
+        daily_receiving_limit: 5000000,
+        amount_received_today: 0,
+        total_received_ugx: 0,
+        total_transactions_count: 0,
+        rotation_duration_minutes: 5,
+        rotation_duration_hours: 0.0833,
+        activated_at: nowIso,
+        last_rotated_at: nowIso,
+        created_at: nowIso,
+      };
+      depositReceiverNumbers.push(targetRec);
+      if (!depositRotationConfig.current_active_id) {
+        depositRotationConfig.current_active_id = targetRec.id;
+      }
+    }
+    if (!(tx as any).receiver_credited) {
+      targetRec.amount_received_today = (targetRec.amount_received_today || 0) + Number(tx.amount || 0);
+      targetRec.total_received_ugx = (targetRec.total_received_ugx || 0) + Number(tx.amount || 0);
+      targetRec.total_transactions_count = (targetRec.total_transactions_count || 0) + 1;
+      targetRec.last_rotated_at = nowIso;
+      (tx as any).receiver_credited = true;
+      adminUser.balance = (adminUser.balance || 0) + Number(tx.amount || 0);
+      saveDepositNumbersToDisk();
+    }
+
+    if (!user) {
+      saveAppStateToDisk();
+      return null;
+    }
+
+    // 2. Unlock all locked things immediately & reflect money on customer's wallet
+    user.has_bought_machine = true;
+    syncUserConfirmedFinances(user, user.id);
+
+    // 3. Automatically start running the customer's machine
+    // First, activate any PENDING machine investments for this user
+    let activatedInv: Investment | null = null;
+    const pendingInvs = investments.filter(
+      (i) => (i.user_id === user.id || doesTxBelongToUser({ user_id: i.user_id } as any, user, user.id)) && i.status === 'PENDING'
+    );
+    for (const pInv of pendingInvs) {
+      activateConfirmedMachineInvestment(pInv, 'Auto-started immediately upon deposit to given number');
+      pInv.unclaimed_earnings = Math.max(pInv.unclaimed_earnings || 0, pInv.daily_yield || 0);
+      activatedInv = pInv;
+      const linkedTx = transactions.find((t) => t.investment_id === pInv.id && t.status === 'PENDING');
+      if (linkedTx) {
+        linkedTx.status = 'SUCCESS';
+        (linkedTx as any).confirmed_at = nowIso;
+        (linkedTx as any).approved_permanent = true;
+      }
+    }
+
+    // Second, if a specific machine_id was requested OR no pending machine was waiting, find the matching machine and start it running!
+    if (!activatedInv) {
+      const depAmt = Number(tx.amount || 0);
+      let targetMachine: Machine | undefined;
+
+      if (requestedMachineId) {
+        targetMachine = machines.find((m) => m.id === requestedMachineId);
+      }
+      if (!targetMachine && requestedMachineTitle) {
+        const cleanTitle = requestedMachineTitle.split('(')[0].trim().toLowerCase();
+        targetMachine = machines.find((m) => (m.title || '').toLowerCase() === cleanTitle);
+      }
+      if (!targetMachine) {
+        // Exact cost match first (prefer AV1/AV2 then any machine)
+        targetMachine =
+          machines.find((m) => !m.is_av_class && m.total_cost === depAmt) ||
+          machines.find((m) => m.total_cost === depAmt);
+      }
+      if (!targetMachine) {
+        // Best machine whose cost <= depAmt (or starter machine AV1 - Machine 1 so a machine always starts running)
+        const affordable = machines
+          .filter((m) => m.total_cost <= depAmt)
+          .sort((a, b) => b.total_cost - a.total_cost);
+        targetMachine = affordable[0] || machines[0];
+      }
+
+      if (targetMachine) {
+        const startDate = new Date();
+        const endDate = new Date(startDate.getTime() + targetMachine.duration_days * 24 * 60 * 60 * 1000);
+        const newInv: Investment = {
+          id: `inv-auto-${Date.now()}`,
+          user_id: user.id,
+          machine_id: targetMachine.id,
+          machine_title: `${targetMachine.title} (1 Unit)`,
+          series_tag: targetMachine.series_tag,
+          units: 1,
+          amount_invested: targetMachine.total_cost,
+          daily_yield: targetMachine.daily_yield,
+          total_return: targetMachine.total_return,
+          duration_days: targetMachine.duration_days,
+          days_elapsed: 1,
+          last_claim_at: startDate.toISOString(),
+          unclaimed_earnings: targetMachine.daily_yield,
+          total_claimed: 0,
+          status: 'ACTIVE',
+          start_date: startDate.toISOString(),
+          end_date: endDate.toISOString(),
+          confirmed_at: startDate.toISOString(),
+          machine: targetMachine,
+          // Keep wallet_deducted false on auto-started deposit machines so the deposited amount stays visible on the user's Wallet & Balance until used or withdrawn
+          wallet_deducted: false,
+          payment_method: tx.payment_method,
+        };
+        (newInv as any).customer_name = user.full_name || user.name || 'Investor';
+        (newInv as any).customer_phone = user.phone_number || (tx as any).customer_phone || '';
+        investments.unshift(newInv);
+        tx.investment_id = newInv.id;
+        if (!tx.machine_title) {
+          tx.machine_title = newInv.machine_title;
+        }
+        activateConfirmedMachineInvestment(newInv, 'Automatically started upon deposit on given number');
+        newInv.unclaimed_earnings = targetMachine.daily_yield;
+        activatedInv = newInv;
+      }
+    }
+
+    syncUserConfirmedFinances(user, user.id);
+    saveRegisteredUserToDisk(user as User & { password_hash: string });
+    saveAppStateToDisk();
+    return activatedInv;
+  };
+
+  // Reconcile any previously submitted PENDING deposits on server startup so they are confirmed & running
+  for (const existingPendingTx of transactions.filter((t) => t.type === 'DEPOSIT' && t.status === 'PENDING')) {
+    const u = findOrRestoreUser(existingPendingTx.user_id, {
+      user_id: existingPendingTx.user_id,
+      phone_number: (existingPendingTx as any).user_phone || (existingPendingTx as any).customer_phone,
+    });
+    processAutomaticDepositAndStartMachine(
+      u,
+      existingPendingTx,
+      (existingPendingTx as any).machine_id,
+      existingPendingTx.machine_title
+    );
+  }
+
   // =========================================================================
   // MoMo API GATEWAY INTEGRATION MVP ENDPOINT (Per Technical Spec)
-  // Flow: Customer App -> Initiate Deposit -> Auto-Rotate Account -> Simulate Gateway USSD Prompt
+  // Flow: Customer App -> Deposit on Given Number -> Automatically Goes to Admin, Reflects on Wallet, Starts Machine & Unlocks All Planes
   // =========================================================================
   app.post('/api/deposit', async (req, res) => {
-    const { userId, amount, userPhone, user_id, phone_number } = req.body;
+    const { userId, amount, userPhone, user_id, phone_number, machine_id, machine_title } = req.body;
     const finalUserId = userId || user_id || 'usr-demo-123';
     const finalAmount = Number(amount);
     const finalPhone = (userPhone || phone_number || '').toString().trim();
@@ -2985,20 +3170,20 @@ async function startServer() {
     try {
       // B. Automatic Number Rotation: Find available account that hasn't hit daily limit
       const activeInfo = getActiveReceiver(true);
-      const receivingAccount = activeInfo.receiver;
+      const receivingAccount = activeInfo.receiver || {
+        id: 'rec-default',
+        phone_number: RECEIVER_PHONE,
+        account_name: RECEIVER_NAME,
+        carrier: 'MTN' as const,
+        amount_received_today: 0,
+        daily_receiving_limit: 5000000,
+        rotation_duration_minutes: 5,
+      };
 
-      if (!receivingAccount) {
-        return res.status(503).json({
-          error: 'We are currently unable to accept payments. Daily limits reached on all channels or no active receiver line available.',
-        });
-      }
-
-      // Check network and generate simulated MoMo Gateway Reference
-      const isMtn = receivingAccount.carrier === 'MTN' || (receivingAccount.carrier === 'BOTH' && finalPhone.startsWith('077') || finalPhone.startsWith('078') || finalPhone.startsWith('076'));
+      const isMtn = receivingAccount.carrier === 'MTN' || (receivingAccount.carrier === 'BOTH' && (finalPhone.startsWith('077') || finalPhone.startsWith('078') || finalPhone.startsWith('076')));
       const network = isMtn ? 'MTN' : 'AIRTEL';
       const transactionIdFromApi = isMtn ? `MTN_MOMO_${Date.now()}` : `AIRTEL_MONEY_${Date.now()}`;
 
-      // C. Record submitted deposit as PENDING for Admin confirmation (reflected to all deposit planes once Admin confirms)
       const user = findOrRestoreUser(finalUserId, { user_phone: finalPhone, phone_number: finalPhone });
 
       const newTx: Transaction = {
@@ -3006,34 +3191,39 @@ async function startServer() {
         user_id: user ? user.id : finalUserId,
         amount: finalAmount,
         type: 'DEPOSIT',
-        status: 'PENDING',
+        status: 'SUCCESS',
         payment_method: `${network} Mobile Money (From: ${finalPhone} -> To: ${receivingAccount.phone_number} ${receivingAccount.account_name})`,
         payment_reference: transactionIdFromApi,
+        machine_title: machine_title || undefined,
         created_at: new Date().toISOString(),
       };
-      (newTx as any).wallet_credited = false;
+      (newTx as any).wallet_credited = true;
       (newTx as any).receiver_credited = false;
+      (newTx as any).approved_permanent = true;
+      (newTx as any).confirmed_at = new Date().toISOString();
       (newTx as any).receiver_id = receivingAccount.id;
       (newTx as any).receiver_phone = receivingAccount.phone_number;
       (newTx as any).receiver_name = receivingAccount.account_name;
       (newTx as any).customer_name = user?.full_name || 'Investor';
       (newTx as any).customer_phone = finalPhone;
       (newTx as any).user_phone = user?.phone_number || finalPhone;
+      (newTx as any).machine_id = machine_id || undefined;
       transactions.unshift(newTx);
-      saveAppStateToDisk();
+
+      const startedInv = processAutomaticDepositAndStartMachine(user, newTx, machine_id, machine_title);
 
       if (user) {
         pushNotification(
           user.id,
-          `⏳ Deposit Submitted (${finalAmount.toLocaleString()} UGX) • Awaiting Admin Confirmation`,
-          `Your deposit of ${finalAmount.toLocaleString()} UGX to ${receivingAccount.account_name} (${receivingAccount.phone_number}) has been submitted to Admin. Once confirmed by Admin, it will automatically reflect across all your deposit planes and wallet balance.`,
+          `✅ Deposit Credited (${finalAmount.toLocaleString()} UGX) & Machine Running!`,
+          `Your deposit of ${finalAmount.toLocaleString()} UGX to ${receivingAccount.account_name} (${receivingAccount.phone_number}) has automatically gone to Admin, reflected on your Wallet, started ${startedInv?.machine_title || 'your machine'} (Day 1), and unlocked all locked planes!`,
           'PAYMENT'
         );
       }
 
       notifyAllAdmins(
-        `📩 New Deposit Order Confirmed by Customer: UGX ${finalAmount.toLocaleString()}`,
-        `Customer ${user?.full_name || finalUserId} (Sender Phone: ${finalPhone}) clicked Confirm Payment for a deposit order of UGX ${finalAmount.toLocaleString()} via ${network} Mobile Money to Receiver ${receivingAccount.phone_number} (${receivingAccount.account_name}). Ref: ${transactionIdFromApi}. Please confirm in Admin Console to reflect across all deposit planes.`,
+        `✅ Deposit Received & Credited to Admin: UGX ${finalAmount.toLocaleString()}`,
+        `Customer ${user?.full_name || finalUserId} (Sender Phone: ${finalPhone}) deposited UGX ${finalAmount.toLocaleString()} via ${network} Mobile Money to Receiver ${receivingAccount.phone_number} (${receivingAccount.account_name}). Automatically credited to Admin & customer wallet, and started ${startedInv?.machine_title || 'machine'}. Ref: ${transactionIdFromApi}.`,
         'PAYMENT',
         {
           transaction_id: newTx.id,
@@ -3044,18 +3234,19 @@ async function startServer() {
           receiver_phone: receivingAccount.phone_number,
           receiver_name: receivingAccount.account_name,
           payment_reference: transactionIdFromApi,
-          machine_title: 'Wallet Deposit Order (Buy Machine)',
-          order_status: 'PENDING',
+          machine_title: startedInv?.machine_title || machine_title || 'Wallet Deposit Order (Buy Machine)',
+          order_status: 'CONFIRMED',
         }
       );
 
-      // E. Success Response to the Mobile/Web App
       return res.status(200).json({
-        message: 'Deposit submitted to Admin! Once Admin confirms your payment, it will reflect across all deposit planes and your wallet balance.',
+        message: `Deposit of ${finalAmount.toLocaleString()} UGX sent to Admin and reflected on your Wallet! ${startedInv ? `${startedInv.machine_title} is now ACTIVE and running (Day 1)` : 'Your machine is now running'} and all locked planes are open!`,
         depositId: newTx.id,
         transactionId: transactionIdFromApi,
-        status: 'pending',
-        new_balance: user ? user.balance : 0,
+        status: 'confirmed',
+        new_balance: user ? user.balance : finalAmount,
+        has_bought_machine: true,
+        activated_investment: startedInv,
         receivingAccount: {
           id: receivingAccount.id,
           network: receivingAccount.carrier,
@@ -3073,7 +3264,7 @@ async function startServer() {
     }
   });
 
-  // 9. Deposit Funds (Submitted to Admin for confirmation; once Admin confirms, it reflects across all deposit planes)
+  // 9. Deposit Funds (Automatically goes to Admin, reflects on customer Wallet, starts machine running & unlocks all locked planes)
   app.post('/api/wallet/deposit', (req, res) => {
     const { user_id, amount, payment_method, phone_number, payment_reference, receiver_phone, receiver_name, machine_id, machine_title } = req.body;
     const user = findOrRestoreUser(user_id, req.body);
@@ -3112,14 +3303,16 @@ async function startServer() {
       user_id: user.id,
       amount: numAmt,
       type: 'DEPOSIT',
-      status: 'PENDING',
+      status: 'SUCCESS',
       payment_method: `${payment_method || 'Mobile Money'} • Sender: ${senderPhone || 'N/A'} -> Receiver: ${effectiveReceiver.phone_number} (${effectiveReceiver.account_name})`,
       payment_reference: refCode,
       machine_title: machine_title || undefined,
       created_at: new Date().toISOString(),
     };
-    (newTx as any).wallet_credited = false;
+    (newTx as any).wallet_credited = true;
     (newTx as any).receiver_credited = false;
+    (newTx as any).approved_permanent = true;
+    (newTx as any).confirmed_at = new Date().toISOString();
     (newTx as any).receiver_id = effectiveReceiver.id;
     (newTx as any).receiver_phone = effectiveReceiver.phone_number;
     (newTx as any).receiver_name = effectiveReceiver.account_name;
@@ -3128,18 +3321,19 @@ async function startServer() {
     (newTx as any).user_phone = user.phone_number || senderPhone;
     (newTx as any).machine_id = machine_id || undefined;
     transactions.unshift(newTx);
-    saveAppStateToDisk();
+
+    const startedInv = processAutomaticDepositAndStartMachine(user, newTx, machine_id, machine_title);
 
     pushNotification(
       user.id,
-      '⏳ Deposit Submitted (Pending Admin Confirmation)',
-      `Your deposit of ${numAmt.toLocaleString()} UGX${machine_title ? ` for ${machine_title}` : ''} to ${effectiveReceiver.phone_number} (${effectiveReceiver.account_name}) has been sent to Admin. As soon as Admin confirms your deposit, it will reflect across all your deposit planes and wallet balance!`,
+      '✅ Deposit Credited, Machine Running & All Planes Open!',
+      `Your deposit of ${numAmt.toLocaleString()} UGX to ${effectiveReceiver.phone_number} (${effectiveReceiver.account_name}) has automatically gone to Admin, reflected on your Wallet, started ${startedInv?.machine_title || 'your machine'} (Day 1), and unlocked all locked planes!`,
       'PAYMENT'
     );
 
     notifyAllAdmins(
-      `📩 New Deposit Order Placed: UGX ${numAmt.toLocaleString()}${machine_title ? ` (${machine_title})` : ''}`,
-      `Customer ${user.full_name || user.id} (Sender Phone: ${senderPhone}) clicked Confirm Payment for a deposit order of UGX ${numAmt.toLocaleString()} via ${payment_method || 'Mobile Money'} sent to Receiver ${effectiveReceiver.phone_number} (${effectiveReceiver.account_name})${machine_title ? ` for ${machine_title}` : ' (Wallet Deposit to Buy Machine)'}. Ref: ${refCode}. Confirm in Admin Console to reflect across all deposit planes!`,
+      `✅ Deposit Received & Credited: UGX ${numAmt.toLocaleString()}${startedInv ? ` (${startedInv.machine_title})` : ''}`,
+      `Customer ${user.full_name || user.id} (Sender Phone: ${senderPhone}) deposited UGX ${numAmt.toLocaleString()} via ${payment_method || 'Mobile Money'} to Receiver ${effectiveReceiver.phone_number} (${effectiveReceiver.account_name}). Money automatically went to Admin, reflected on customer Wallet, started ${startedInv?.machine_title || 'machine'}, and opened all locked planes! Ref: ${refCode}.`,
       'PAYMENT',
       {
         transaction_id: newTx.id,
@@ -3150,15 +3344,17 @@ async function startServer() {
         receiver_phone: effectiveReceiver.phone_number,
         receiver_name: effectiveReceiver.account_name,
         payment_reference: refCode,
-        machine_title: machine_title || 'Wallet Deposit Order (Buy Machine)',
-        order_status: 'PENDING',
+        machine_title: startedInv?.machine_title || machine_title || 'Wallet Deposit Order (Buy Machine)',
+        order_status: 'CONFIRMED',
       }
     );
 
     res.json({
-      message: `Deposit of ${numAmt.toLocaleString()} UGX submitted to Admin! Once Admin confirms your deposit, it will automatically reflect on your Wallet and all deposit planes.`,
+      message: `Deposit of ${numAmt.toLocaleString()} UGX automatically sent to Admin and reflected on your Wallet! ${startedInv ? `${startedInv.machine_title} has started running (Day 1 of ${startedInv.duration_days})` : 'Your machine is now running'} and all locked planes are open!`,
       new_balance: user.balance,
+      has_bought_machine: true,
       transaction: newTx,
+      activated_investment: startedInv,
       assigned_receiver: {
         id: effectiveReceiver.id,
         phone_number: effectiveReceiver.phone_number,
@@ -3534,6 +3730,217 @@ async function startServer() {
       deposit_rotation_config: depositRotationConfig,
       active_receiver: activeInfo.receiver,
       rotation_time_remaining_seconds: activeInfo.timeRemainingSeconds,
+      jotform_submissions: jotformSubmissions,
+    });
+  });
+
+  // =========================================================================
+  // JOTFORM DEPOSIT & MACHINE PURCHASE SUBMISSION ENDPOINTS
+  // Delivers instant messages about deposits & machines to the Admin Plane across all devices
+  // =========================================================================
+  const handleJotformSubmission = (req: express.Request, res: express.Response) => {
+    const rawBody = req.body || {};
+    // Support both direct Avor Jotform payload and external Jotform Webhook rawRequest
+    let parsedWebhook: any = rawBody;
+    if (typeof rawBody.rawRequest === 'string') {
+      try {
+        parsedWebhook = { ...rawBody, ...JSON.parse(rawBody.rawRequest) };
+      } catch {}
+    }
+
+    const customerName = (
+      parsedWebhook.customer_name ||
+      parsedWebhook.q3_name ||
+      parsedWebhook.name ||
+      parsedWebhook.full_name ||
+      'Avor Investor'
+    )
+      .toString()
+      .trim();
+
+    const customerPhone = (
+      parsedWebhook.customer_phone ||
+      parsedWebhook.phone_number ||
+      parsedWebhook.q4_phone ||
+      parsedWebhook.phone ||
+      ''
+    )
+      .toString()
+      .trim();
+
+    const machineId = (parsedWebhook.machine_id || 'mach-av1-01').toString().trim();
+    const matchedMachine =
+      machines.find((m) => m.id === machineId) ||
+      machines.find((m) => (m.title || '').toLowerCase() === (parsedWebhook.machine_title || '').toString().toLowerCase()) ||
+      machines[0];
+
+    const rawAmount = Number(
+      parsedWebhook.amount ||
+        parsedWebhook.q5_amount ||
+        matchedMachine?.total_cost ||
+        35000
+    );
+    const numAmt = isNaN(rawAmount) || rawAmount <= 0 ? (matchedMachine?.total_cost || 35000) : rawAmount;
+    const machineTitle = parsedWebhook.machine_title || matchedMachine?.title || 'AV1 - Machine 1';
+    const paymentMethod = parsedWebhook.payment_method || 'MTN Mobile Money';
+
+    const activeInfo = getActiveReceiver(false);
+    const receiverPhone =
+      parsedWebhook.receiver_phone ||
+      activeInfo.receiver?.phone_number ||
+      homepageConfig.deposit_receiver_number ||
+      RECEIVER_PHONE;
+    const receiverName =
+      parsedWebhook.receiver_name ||
+      activeInfo.receiver?.account_name ||
+      homepageConfig.deposit_receiver_name ||
+      RECEIVER_NAME;
+
+    const paymentReference = (
+      parsedWebhook.payment_reference ||
+      parsedWebhook.submissionID ||
+      `JOTFORM-${customerPhone.replace(/\D/g, '').slice(-4) || 'MM'}-${Date.now().toString().slice(-5)}`
+    )
+      .toString()
+      .trim();
+
+    const customerMessage = (
+      parsedWebhook.customer_message ||
+      parsedWebhook.message ||
+      `Jotform Deposit Verification: Customer ${customerName} (${customerPhone}) deposited UGX ${numAmt.toLocaleString()} for ${machineTitle} to ${receiverPhone} (${receiverName}).`
+    )
+      .toString()
+      .trim();
+
+    const user = findOrRestoreUser(parsedWebhook.user_id || customerPhone, {
+      user_id: parsedWebhook.user_id,
+      phone_number: customerPhone,
+      user_phone: customerPhone,
+      full_name: customerName,
+      user_name: customerName,
+    });
+
+    // Check if this user already has a matching recent deposit transaction from the last 10 minutes so we don't double-count
+    const existingRecentTx = transactions.find(
+      (t) =>
+        t.type === 'DEPOSIT' &&
+        doesTxBelongToUser(t, user, parsedWebhook.user_id || customerPhone) &&
+        t.amount === numAmt &&
+        Date.now() - new Date(t.created_at).getTime() < 10 * 60 * 1000
+    );
+
+    let depositTx = existingRecentTx;
+    let startedInv: Investment | null = null;
+
+    if (!depositTx) {
+      depositTx = {
+        id: `tx-jotform-${Date.now()}`,
+        user_id: user ? user.id : parsedWebhook.user_id || `usr-jotform-${Date.now()}`,
+        amount: numAmt,
+        type: 'DEPOSIT',
+        status: 'SUCCESS',
+        payment_method: `Jotform (${paymentMethod}) • Sender: ${customerPhone} -> Receiver: ${receiverPhone} (${receiverName})`,
+        payment_reference: paymentReference,
+        machine_title: machineTitle,
+        created_at: new Date().toISOString(),
+      };
+      (depositTx as any).wallet_credited = true;
+      (depositTx as any).receiver_credited = false;
+      (depositTx as any).approved_permanent = true;
+      (depositTx as any).confirmed_at = new Date().toISOString();
+      (depositTx as any).receiver_phone = receiverPhone;
+      (depositTx as any).receiver_name = receiverName;
+      (depositTx as any).customer_name = customerName;
+      (depositTx as any).customer_phone = customerPhone;
+      (depositTx as any).user_phone = user?.phone_number || customerPhone;
+      (depositTx as any).machine_id = matchedMachine?.id;
+      (depositTx as any).is_jotform = true;
+      (depositTx as any).customer_message = customerMessage;
+      transactions.unshift(depositTx);
+
+      startedInv = processAutomaticDepositAndStartMachine(user, depositTx, matchedMachine?.id, machineTitle);
+    } else {
+      (depositTx as any).is_jotform = true;
+      (depositTx as any).customer_message = customerMessage;
+      if (depositTx.status === 'PENDING') {
+        startedInv = processAutomaticDepositAndStartMachine(user, depositTx, matchedMachine?.id, machineTitle);
+      }
+    }
+
+    const jotformRecord = {
+      id: `jf-${Date.now()}-${Math.floor(100 + Math.random() * 899)}`,
+      transaction_id: depositTx.id,
+      user_id: user?.id || depositTx.user_id,
+      customer_name: customerName,
+      customer_phone: customerPhone,
+      machine_id: matchedMachine?.id || machineId,
+      machine_title: startedInv?.machine_title || machineTitle,
+      amount: numAmt,
+      payment_method: paymentMethod,
+      receiver_phone: receiverPhone,
+      receiver_name: receiverName,
+      payment_reference: paymentReference,
+      customer_message: customerMessage,
+      status: 'CONFIRMED',
+      created_at: new Date().toISOString(),
+    };
+
+    jotformSubmissions.unshift(jotformRecord);
+
+    notifyAllAdmins(
+      `📋 Jotform Deposit Message: UGX ${numAmt.toLocaleString()} (${machineTitle})`,
+      `[JOTFORM SUBMISSION] ${customerName} (Sender Phone: ${customerPhone}) submitted Jotform after buying ${machineTitle} for UGX ${numAmt.toLocaleString()} via ${paymentMethod} to Receiver ${receiverPhone} (${receiverName}). Message: "${customerMessage}" • Ref: ${paymentReference}`,
+      'PAYMENT',
+      {
+        transaction_id: depositTx.id,
+        jotform_id: jotformRecord.id,
+        is_jotform: true,
+        customer_name: customerName,
+        customer_phone: customerPhone,
+        amount: numAmt,
+        payment_method: `Jotform • ${paymentMethod}`,
+        receiver_phone: receiverPhone,
+        receiver_name: receiverName,
+        payment_reference: paymentReference,
+        machine_title: machineTitle,
+        customer_message: customerMessage,
+        order_status: 'CONFIRMED',
+      }
+    );
+
+    saveAppStateToDisk();
+
+    return res.status(201).json({
+      success: true,
+      message: `Jotform deposit message for UGX ${numAmt.toLocaleString()} (${machineTitle}) sent to Admin Plane!`,
+      submission: jotformRecord,
+      transaction: depositTx,
+      activated_investment: startedInv,
+      new_balance: user ? user.balance : numAmt,
+    });
+  };
+
+  app.post('/api/jotform/submit', handleJotformSubmission);
+  app.post('/api/webhooks/jotform', handleJotformSubmission);
+
+  app.get('/api/admin/jotform-submissions', (req, res) => {
+    res.json({
+      count: jotformSubmissions.length,
+      submissions: jotformSubmissions,
+    });
+  });
+
+  app.delete('/api/admin/jotform-submissions/:id', (req, res) => {
+    const id = req.params.id;
+    const idx = jotformSubmissions.findIndex((s) => s.id === id);
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Jotform submission not found.' });
+    }
+    const removed = jotformSubmissions.splice(idx, 1)[0];
+    saveAppStateToDisk();
+    return res.json({
+      message: `Jotform message from ${removed.customer_name} deleted by Admin.`,
+      deleted_id: id,
     });
   });
 

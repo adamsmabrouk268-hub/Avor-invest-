@@ -104,10 +104,11 @@ export default function App() {
     setTimeout(() => setToast(null), 5000);
   };
 
-  // Strictly require an Admin-confirmed running or completed machine (PENDING orders do NOT unlock closed/locked planes)
-  const hasBoughtMachine = investments.some(
-    (i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE'
-  );
+  // Unlock all locked planes and features once a user deposits money on the given number or has an active/completed machine
+  const hasBoughtMachine =
+    investments.some((i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') ||
+    !!user?.has_bought_machine ||
+    (user?.balance || 0) > 0;
 
   const handleSelectMachineToBuy = (m: Machine) => {
     if (!user) {

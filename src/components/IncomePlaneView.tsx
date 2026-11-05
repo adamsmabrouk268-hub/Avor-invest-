@@ -47,7 +47,11 @@ export const IncomePlaneView: React.FC<IncomePlaneViewProps> = ({
   const pendingInvs = investments.filter((i) => i.status === 'PENDING');
   const activeInvs = investments.filter((i) => i.status === 'ACTIVE');
   const completedInvs = investments.filter((i) => i.status === 'PAYOUT_COMPLETE');
-  const hasConfirmedMachine = activeInvs.length > 0 || completedInvs.length > 0;
+  const hasConfirmedMachine =
+    activeInvs.length > 0 ||
+    completedInvs.length > 0 ||
+    !!user?.has_bought_machine ||
+    (user?.balance || 0) > 0;
 
   const filteredInvestments = investments.filter((inv) => {
     if (filterStatus === 'PENDING') return inv.status === 'PENDING';

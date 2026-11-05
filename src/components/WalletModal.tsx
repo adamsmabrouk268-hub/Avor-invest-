@@ -20,7 +20,9 @@ import {
   Coins,
   PhoneCall,
   Cpu,
+  FileText,
 } from 'lucide-react';
+import { JotformDepositModal } from './JotformDepositModal';
 
 interface WalletModalProps {
   user: User | null;
@@ -100,6 +102,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [copiedField, setCopiedField] = useState<'phone' | 'name' | 'amount' | null>(null);
+  const [showJotformModal, setShowJotformModal] = useState<boolean>(false);
 
   const isEligibleCustomer = hasBoughtMachine || summaryHasMachine || userInvestments.length > 0;
   const currentDayOfWeek = new Date().getDay(); // 0 = Sun, 1 = Mon ... 5 = Fri, 6 = Sat
@@ -947,7 +950,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               )}
 
               {/* =================================================================
-                  POST-CONFIRMATION: GO BACK TO BUY MACHINE USING MONEY ON WALLET
+                  POST-CONFIRMATION: DEPOSIT AUTOMATICALLY CREDITED & MACHINE RUNNING
                  ================================================================= */}
               {depositStep === 'SUBMITTED' && (
                 <div className="p-4 rounded-2xl bg-[#070e1f] border border-blue-500/40 space-y-4 text-center animate-fade-in">
@@ -956,19 +959,28 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                   </div>
                   <div className="space-y-1.5">
                     <h4 className="text-base font-black text-white uppercase">
-                      Deposit Submitted to Admin!
+                      Deposit Credited & Machine Running!
                     </h4>
                     <p className="text-xs text-slate-300 leading-relaxed">
                       Your deposit of <strong className="text-sky-400">{depositAmt.toLocaleString()} UGX</strong> from{' '}
                       <strong className="text-white">{depositPhone}</strong> to{' '}
-                      <strong className="text-white">{displayReceiverPhone} ({displayReceiverName})</strong> has been sent to Admin for confirmation.
+                      <strong className="text-white">{displayReceiverPhone} ({displayReceiverName})</strong> has automatically gone to Admin and reflected on your Wallet!
                     </p>
                     <p className="text-[11px] text-sky-300 font-semibold">
-                      Once Admin confirms your deposit, it automatically reflects on your Wallet Balance and all deposit planes so you can buy your machine using the money on your wallet.
+                      Your machine has automatically started running (Day 1) and all locked planes and features are now open!
                     </p>
                   </div>
 
                   <div className="space-y-2.5 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowJotformModal(true)}
+                      className="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-600 hover:brightness-110 text-white font-black text-xs uppercase tracking-wider shadow-lg shadow-blue-900/50 border border-sky-300/40 transition-all cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      <FileText className="w-4 h-4 text-white" />
+                      <span>FILL JOTFORM DEPOSIT FORM (MESSAGE ADMIN)</span>
+                    </button>
+
                     <button
                       type="button"
                       onClick={() => {
@@ -980,7 +992,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                       className="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 hover:brightness-110 text-white font-black text-xs uppercase tracking-wider shadow-lg shadow-blue-900/50 border border-blue-400/40 transition-all cursor-pointer flex items-center justify-center gap-2"
                     >
                       <Cpu className="w-4 h-4 text-white" />
-                      <span>GO BACK TO BUY MACHINE (USING WALLET)</span>
+                      <span>VIEW RUNNING MACHINES & OPEN PLANES</span>
                     </button>
 
                     <button
@@ -995,6 +1007,18 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     </button>
                   </div>
                 </div>
+              )}
+
+              {/* Quick Jotform Access Button on Deposit Tab */}
+              {depositStep !== 'SUBMITTED' && (
+                <button
+                  type="button"
+                  onClick={() => setShowJotformModal(true)}
+                  className="w-full py-3 px-4 rounded-2xl bg-[#07152e] hover:bg-[#0c2147] border border-sky-500/40 text-sky-300 font-extrabold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  <FileText className="w-4 h-4 text-sky-400" />
+                  <span>Fill Jotform Deposit Form (Send Deposit Message to Admin)</span>
+                </button>
               )}
             </div>
           )}
@@ -1273,6 +1297,18 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           )}
         </div>
       </div>
+
+      {showJotformModal && (
+        <JotformDepositModal
+          user={user}
+          initialAmount={depositAmt || undefined}
+          onClose={() => setShowJotformModal(false)}
+          onSubmitted={() => {
+            fetchTransactions();
+            onRefreshUser();
+          }}
+        />
+      )}
     </div>
   );
 };
