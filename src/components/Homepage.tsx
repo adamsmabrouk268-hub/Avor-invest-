@@ -178,10 +178,7 @@ export const Homepage: React.FC<HomepageProps> = ({
 
   const hasBoughtMachine =
     investments.some((i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') ||
-    !!summary?.has_bought_machine ||
-    !!user?.has_bought_machine ||
-    Number(summary?.deposit_details?.total_deposited || 0) > 0 ||
-    (user?.balance || 0) > 0;
+    Boolean(summary?.has_bought_machine);
 
   const totalDeposited = summary?.deposit_details?.total_deposited || 0;
   const pendingDeposits = summary?.deposit_details?.pending_deposits || 0;
@@ -312,20 +309,70 @@ export const Homepage: React.FC<HomepageProps> = ({
           />
         </div>
 
-        {/* Sub-bar: Company PDF (Customers Only) & Currency Selector
-            (Install App icon moved to Profile only per Item 1;
-             WhatsApp and Machine Panel icons removed from top of Home page per Item 2) */}
+        {/* Sub-bar: WhatsApp 🔐, Company PDF 🔐, Invite 🔐, Manage 🔐 (All locked until user buys a machine, all open up once user buys a machine) */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-          <div className="flex items-center gap-1.5">
-            {/* Company's PDF Button (Customers Only per Item 3) */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {/* 1. WhatsApp 🔐 */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!hasBoughtMachine) {
+                  setActiveModal('whatsapp_gate');
+                } else {
+                  window.open(
+                    'https://wa.me/256741032838?text=Hello%20Avor%20invest%20Support%2C%20I%20am%20an%20active%20machine%20customer',
+                    '_blank',
+                    'noopener,noreferrer'
+                  );
+                }
+              }}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#062232]/90 hover:bg-[#082f45] border border-[#00d2c4]/40 text-[#80deea] hover:text-white text-[11px] font-bold transition-all cursor-pointer shadow-sm active:scale-95"
+              title="WhatsApp (Opens when you buy a machine)"
+            >
+              <span>{!hasBoughtMachine ? 'WhatsApp 🔐' : 'WhatsApp'}</span>
+              {!hasBoughtMachine && <Lock className="w-3 h-3 text-amber-400" />}
+            </button>
+
+            {/* 2. Company PDF 🔐 */}
             <button
               type="button"
               onClick={() => setActiveModal('company_pdf')}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#062232]/90 hover:bg-[#082f45] border border-[#00d2c4]/40 text-[#80deea] hover:text-white text-xs font-bold transition-all cursor-pointer shadow-sm active:scale-95"
-              title="Company's PDF (Customers Only)"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#062232]/90 hover:bg-[#082f45] border border-[#00d2c4]/40 text-[#80deea] hover:text-white text-[11px] font-bold transition-all cursor-pointer shadow-sm active:scale-95"
+              title="Company PDF (Opens when you buy a machine)"
             >
               <FileText className="w-3.5 h-3.5 text-[#00e5ff]" />
-              <span>Company&apos;s PDF</span>
+              <span>{!hasBoughtMachine ? 'Company PDF 🔐' : 'Company PDF'}</span>
+              {!hasBoughtMachine && <Lock className="w-3 h-3 text-amber-400" />}
+            </button>
+
+            {/* 3. Invite 🔐 */}
+            <button
+              type="button"
+              onClick={() => setActiveModal('invite_count')}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#062232]/90 hover:bg-[#082f45] border border-[#00d2c4]/40 text-[#80deea] hover:text-white text-[11px] font-bold transition-all cursor-pointer shadow-sm active:scale-95"
+              title="Invite (Opens when you buy a machine)"
+            >
+              <Users className="w-3.5 h-3.5 text-[#00e5ff]" />
+              <span>{!hasBoughtMachine ? 'Invite 🔐' : 'Invite'}</span>
+              {!hasBoughtMachine && <Lock className="w-3 h-3 text-amber-400" />}
+            </button>
+
+            {/* 4. Manage 🔐 */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!hasBoughtMachine) {
+                  setActiveModal('whatsapp_gate');
+                } else if (onNavigateToIncome) {
+                  onNavigateToIncome();
+                } else {
+                  onNavigateToAccount();
+                }
+              }}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#062232]/90 hover:bg-[#082f45] border border-[#00d2c4]/40 text-[#80deea] hover:text-white text-[11px] font-bold transition-all cursor-pointer shadow-sm active:scale-95"
+              title="Manage (Opens when you buy a machine)"
+            >
+              <span>{!hasBoughtMachine ? 'Manage 🔐' : 'Manage'}</span>
               {!hasBoughtMachine && <Lock className="w-3 h-3 text-amber-400" />}
             </button>
           </div>
@@ -632,22 +679,25 @@ export const Homepage: React.FC<HomepageProps> = ({
             </div>
           </div>
 
-          {/* Direction 3: AV Classes A–I */}
+          {/* Direction 3: AV Classes A–I (Locked until 4 invited people for A class) */}
           <div
             onClick={() => onNavigateToMarketplace('AVCLASSES')}
             className="bg-[#031420] hover:bg-[#062235] border border-[#00d2c4]/30 hover:border-[#00e5ff]/70 rounded-xl p-3 cursor-pointer transition-all group space-y-1.5"
           >
             <div className="flex items-center justify-between">
-              <span className="font-mono font-black text-[#a3e635] text-xs">AV Classes A–I</span>
-              <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40">
-                21-Day Lock
+              <span className="font-mono font-black text-[#a3e635] text-xs flex items-center gap-1">
+                <span>AV Classes A–I</span>
+                {(!hasBoughtMachine || teamCount < 4) && <span>🔐</span>}
+              </span>
+              <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500/40">
+                {hasBoughtMachine && teamCount >= 4 ? 'A class Open' : '🔒 Need 4 Invites'}
               </span>
             </div>
             <p className="text-[11px] text-slate-300 leading-snug">
-              <strong>30,000 – 9,000,000 UGX</strong> • Runs <strong>Mon–Mon (incl. weekends)</strong> • Unlocked by team referrals.
+              <strong>30,000 – 9,000,000 UGX</strong> • Locked to access <strong>A class</strong> until user has invited <strong>4 people</strong>.
             </p>
             <div className="flex items-center justify-between pt-1 text-[10px] font-mono text-emerald-300">
-              <span>Rewards: 25k – 8.5M</span>
+              <span>A class: 4 Invites (25k)</span>
               <span className="text-[#00e5ff] group-hover:translate-x-0.5 transition-transform flex items-center gap-0.5 font-bold">
                 Open Classes <ArrowRight className="w-3 h-3" />
               </span>
@@ -746,8 +796,8 @@ export const Homepage: React.FC<HomepageProps> = ({
               </span>
               {!summary?.deposit_details?.recent_deposits ||
               summary.deposit_details.recent_deposits.length === 0 ? (
-                <div className="text-center py-6 bg-[#031420]/70 border border-[#0c3a47] rounded-xl text-xs text-slate-400">
-                  No deposit records submitted yet.
+                <div className="text-center py-6 bg-[#031420]/70 border border-[#0c3a47] rounded-xl text-xs text-slate-400 font-semibold">
+                  No payments yet.
                 </div>
               ) : (
                 summary.deposit_details.recent_deposits.map((dep) => {
@@ -977,7 +1027,9 @@ export const Homepage: React.FC<HomepageProps> = ({
                 <div className="w-8 h-8 rounded-lg bg-[#00b4d8] flex items-center justify-center text-white">
                   <Users className="w-4 h-4 text-white" />
                 </div>
-                <h3 className="text-base font-bold text-white">Invite Count</h3>
+                <h3 className="text-base font-bold text-white">
+                  {!hasBoughtMachine ? 'Invite Locked 🔐' : 'Invite & Referral Access'}
+                </h3>
               </div>
               <button
                 onClick={() => setActiveModal(null)}
@@ -987,34 +1039,70 @@ export const Homepage: React.FC<HomepageProps> = ({
               </button>
             </div>
 
-            <div className="bg-[#031420] border border-[#00d2c4]/30 p-4 rounded-xl space-y-2 text-center">
-              <span className="text-xs text-[#7ba3b0]">Your Total Invites</span>
-              <span className="text-3xl font-black text-white font-mono block">{inviteCount}</span>
-              <div className="inline-block bg-[#00b4d8]/20 border border-[#00e5ff]/40 text-[#80deea] text-[11px] font-bold px-3 py-1 rounded-full mt-1">
-                Invitation Bonus: 8%
+            {!hasBoughtMachine ? (
+              <div className="bg-[#020f18] border border-amber-500/50 rounded-xl p-4 text-center space-y-3">
+                <div className="w-12 h-12 rounded-full bg-amber-950/80 border border-amber-500/50 flex items-center justify-center mx-auto text-amber-400">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <h4 className="text-sm font-black text-white">
+                  Invite is Locked Until You Buy a Machine 🔐
+                </h4>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  <strong>WhatsApp 🔐, Company PDF, Invite, and Manage</strong> all open up automatically once you buy a machine.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveModal(null);
+                      onNavigateToMarketplace('ALL');
+                    }}
+                    className="flex-1 py-2.5 bg-gradient-to-r from-[#0091ea] to-[#0077b6] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Cpu className="w-4 h-4" />
+                    <span>Buy a Machine Now</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveModal(null)}
+                    className="px-4 py-2.5 bg-[#062232] text-slate-300 rounded-xl text-xs font-bold cursor-pointer hover:text-white"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
-              <p className="text-[11px] text-slate-300 mt-2 leading-relaxed">
-                Your invitation bonus is <strong>8%</strong> when an invited customer buys the <strong>same machine</strong> as you (the inviter), and it is collected on your <strong>balance</strong> when the cycle of the corresponding invited customer&apos;s machine has ended. Access your personal invite code in the <strong>Profile → Invite</strong> icon.
-              </p>
-            </div>
+            ) : (
+              <>
+                <div className="bg-[#031420] border border-[#00d2c4]/30 p-4 rounded-xl space-y-2 text-center">
+                  <span className="text-xs text-[#7ba3b0]">Your Total Invites</span>
+                  <span className="text-3xl font-black text-white font-mono block">{inviteCount}</span>
+                  <div className="inline-block bg-[#00b4d8]/20 border border-[#00e5ff]/40 text-[#80deea] text-[11px] font-bold px-3 py-1 rounded-full mt-1">
+                    Invitation Bonus: 8% • A Class: 4 Invites
+                  </div>
+                  <p className="text-[11px] text-slate-300 mt-2 leading-relaxed">
+                    Invite <strong>4 people</strong> who buy a machine to unlock <strong>A class (25,000 UGX reward)</strong>. Your invitation bonus is <strong>8%</strong> when an invited customer buys the same machine as you.
+                  </p>
+                </div>
 
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  setActiveModal(null);
-                  onNavigateToAccount();
-                }}
-                className="flex-1 py-2.5 bg-gradient-to-r from-[#00b4d8] to-[#0077b6] text-white rounded-xl text-xs font-bold cursor-pointer hover:brightness-110"
-              >
-                Open Profile Invite Icon
-              </button>
-              <button
-                onClick={() => setActiveModal(null)}
-                className="px-4 py-2.5 bg-[#062232] text-slate-300 rounded-xl text-xs font-bold cursor-pointer hover:text-white"
-              >
-                Close
-              </button>
-            </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setActiveModal(null);
+                      onNavigateToAccount();
+                    }}
+                    className="flex-1 py-2.5 bg-gradient-to-r from-[#00b4d8] to-[#0077b6] text-white rounded-xl text-xs font-bold cursor-pointer hover:brightness-110"
+                  >
+                    Open Profile Invite Icon
+                  </button>
+                  <button
+                    onClick={() => setActiveModal(null)}
+                    className="px-4 py-2.5 bg-[#062232] text-slate-300 rounded-xl text-xs font-bold cursor-pointer hover:text-white"
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1282,7 +1370,7 @@ export const Homepage: React.FC<HomepageProps> = ({
         </div>
       )}
 
-      {/* Modal 9: Company WhatsApp Customer-Only Gate (Item 7 & 11) */}
+      {/* Modal 9: Company WhatsApp & Manage Customer-Only Gate */}
       {activeModal === 'whatsapp_gate' && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-[#041622] border border-amber-500/50 shadow-2xl rounded-2xl p-5 max-w-sm w-full space-y-4 text-center">
@@ -1290,10 +1378,10 @@ export const Homepage: React.FC<HomepageProps> = ({
               <Lock className="w-6 h-6" />
             </div>
             <h3 className="text-base font-black text-white">
-              Customers Only — Company WhatsApp
+              Locked Until You Buy a Machine 🔐
             </h3>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Official <strong>Avor invest</strong> WhatsApp support and community channels can only be accessed by active customers who have already bought at least one machine.
+              <strong>WhatsApp 🔐, Company PDF, Invite, and Manage</strong> are locked until you buy a machine. As soon as you buy a machine, all 4 open up automatically!
             </p>
             <div className="flex gap-2">
               <button

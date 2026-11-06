@@ -103,7 +103,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
   }, [isAV1, isAV2, remainingAV2Allowed, machine.id]);
 
   const totalCost = (machine.total_cost || machine.price || 15000) * units;
-  const [liveBalance, setLiveBalance] = useState<number>(user?.balance ?? 0);
+  const [liveBalance, setLiveBalance] = useState<number>(user?.available_wallet ?? user?.wallet_balance ?? 0);
   const [pendingDepositAmount, setPendingDepositAmount] = useState<number>(0);
 
   // Payment channel selection: 'Wallet Balance' | 'MTN Mobile Money' | 'Airtel Money' | 'Card Billing'
@@ -171,15 +171,19 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       ]);
       if (userRes.ok && (userRes.headers.get('content-type') || '').includes('application/json')) {
         const uData = await userRes.json();
-        if (uData && typeof uData.balance === 'number') {
-          setLiveBalance(uData.balance);
+        if (uData && typeof uData.available_wallet === 'number') {
+          setLiveBalance(uData.available_wallet);
+        } else if (uData && typeof uData.wallet_balance === 'number') {
+          setLiveBalance(uData.wallet_balance);
         }
       }
       if (summaryRes.ok && (summaryRes.headers.get('content-type') || '').includes('application/json')) {
         const sData = await summaryRes.json();
         if (sData) {
-          if (typeof sData.balance === 'number') {
-            setLiveBalance(sData.balance);
+          if (typeof sData.available_wallet === 'number') {
+            setLiveBalance(sData.available_wallet);
+          } else if (typeof sData.wallet_balance === 'number') {
+            setLiveBalance(sData.wallet_balance);
           }
           setPendingDepositAmount(Number(sData?.deposit_details?.pending_deposits || 0));
         }
@@ -204,14 +208,14 @@ export const InvestModal: React.FC<InvestModalProps> = ({
   }, []);
 
   useEffect(() => {
-    setLiveBalance(user?.balance ?? 0);
+    setLiveBalance(user?.available_wallet ?? user?.wallet_balance ?? 0);
     refreshWalletStatus(false);
     // Auto-poll wallet balance every 4 seconds so when admin approves deposit, it detects it immediately
     const interval = setInterval(() => {
       refreshWalletStatus(false);
     }, 4000);
     return () => clearInterval(interval);
-  }, [user?.id, user?.balance, totalCost]);
+  }, [user?.id, user?.wallet_balance, user?.available_wallet, totalCost]);
 
   const userHasEnoughBalance = liveBalance >= totalCost;
   const isMobileMoney = selectedChannel === 'MTN Mobile Money' || selectedChannel === 'Airtel Money';
@@ -249,23 +253,23 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       if (!res.ok) {
         throw new Error(data.error || 'Failed to submit wallet deposit.');
       }
-      if (typeof data.new_balance === 'number') {
-        setLiveBalance(data.new_balance);
+      if (typeof data.wallet_balance === 'number') {
+        setLiveBalance(data.wallet_balance);
       }
       if (onDepositSubmitted) {
         onDepositSubmitted();
       }
       const msg =
         data.message ||
-        `Deposit of ${currencyInfo.format(totalCost)} sent to Admin and reflected on your Wallet! ${machine.title} is now ACTIVE and running (Day 1) and all locked planes are open!`;
+        `Deposit of ${currencyInfo.format(totalCost)} submitted to Admin! Once Admin confirms your deposit, it will reflect on your Wallet and activate ${machine.title}.`;
       setDepositSuccessMessage(msg);
       setSuccessData({
         message: msg,
-        status: 'ACTIVE',
+        status: 'PENDING',
       });
       await sendMessageToAdmin(
         user.full_name || phoneNumber.trim() || user.phone_number || 'Avor Investor',
-        `Bought ${machine.title} (${units} Unit${units > 1 ? 's' : ''}) • Deposited UGX ${totalCost.toLocaleString()} via ${selectedChannel} from ${phoneNumber.trim()} to ${activeReceiver.phone_number || RECEIVER_PHONE} (${activeReceiver.account_name || RECEIVER_NAME})`,
+        `Ordered ${machine.title} (${units} Unit${units > 1 ? 's' : ''}) • Deposited UGX ${totalCost.toLocaleString()} via ${selectedChannel} from ${phoneNumber.trim()} to ${activeReceiver.phone_number || RECEIVER_PHONE} (${activeReceiver.account_name || RECEIVER_NAME}) (Pending Admin Confirmation)`,
         {
           senderPhone: phoneNumber.trim() || user.phone_number,
           receiverPhone: activeReceiver.phone_number || RECEIVER_PHONE,
@@ -274,10 +278,9 @@ export const InvestModal: React.FC<InvestModalProps> = ({
           machineTitle: `${machine.title} (${units} Unit${units > 1 ? 's' : ''})`,
           paymentMethod: selectedChannel,
           paymentReference: data.transaction?.payment_reference || `DEP-${Date.now()}`,
-          status: 'CONFIRMED',
+          status: 'PENDING',
         }
       );
-      onSuccess();
     } catch (err: any) {
       setErrorMessage(err.message || 'Unable to submit deposit.');
     } finally {

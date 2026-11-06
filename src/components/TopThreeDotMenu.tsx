@@ -287,31 +287,6 @@ export const TopThreeDotMenu: React.FC<TopThreeDotMenuProps> = ({
             </div>
           </button>
 
-          {/* DOWNLOAD FULL SOURCE CODE (.ZIP) */}
-          <a
-            href="/api/download-source-zip"
-            download="avor-invest-source-code.zip"
-            onClick={() => setIsOpen(false)}
-            className="w-full text-left p-2.5 rounded-xl bg-gradient-to-r from-emerald-950/80 to-teal-950/80 hover:from-emerald-900/90 hover:to-teal-900/90 border border-emerald-500/50 transition-all cursor-pointer flex items-center gap-3 group shadow-sm"
-          >
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-slate-950 flex items-center justify-center shrink-0 shadow-md group-hover:scale-105 transition-transform">
-              <Download className="w-4 h-4 text-slate-950 stroke-[2.5]" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black text-emerald-300 group-hover:text-white transition-colors">
-                  Download Source Code (.ZIP)
-                </span>
-                <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                  Full Code
-                </span>
-              </div>
-              <p className="text-[10px] text-emerald-100/80 mt-0.5 leading-snug">
-                One-click download of the complete Avor Invest project ZIP
-              </p>
-            </div>
-          </a>
-
           {/* Exit Admin Mode (Only if currently in admin view) */}
           {activeTab === 'admin' && onExitAdmin && (
             <button

@@ -10,8 +10,21 @@ interface CategoryTabsProps {
   viewMode?: 'table' | 'grid';
   onViewModeChange?: (mode: 'table' | 'grid') => void;
   hasBoughtMachine?: boolean;
+  invitedCount?: number;
   onLockedPlaneNotify?: (msg: string) => void;
 }
+
+const CLASS_SUB_TABS: Array<{ id: MachineCategory; label: string; requiredInvites: number }> = [
+  { id: 'AV_CLASS_A', label: 'A class', requiredInvites: 4 },
+  { id: 'AV_CLASS_B', label: 'B class', requiredInvites: 9 },
+  { id: 'AV_CLASS_C', label: 'C class', requiredInvites: 20 },
+  { id: 'AV_CLASS_D', label: 'D class', requiredInvites: 35 },
+  { id: 'AV_CLASS_E', label: 'E class', requiredInvites: 70 },
+  { id: 'AV_CLASS_F', label: 'F class', requiredInvites: 120 },
+  { id: 'AV_CLASS_G', label: 'G class', requiredInvites: 300 },
+  { id: 'AV_CLASS_H', label: 'H class', requiredInvites: 5000 },
+  { id: 'AV_CLASS_I', label: 'I class', requiredInvites: 10000 },
+];
 
 export const CategoryTabs: React.FC<CategoryTabsProps> = ({
   selectedCategory,
@@ -21,6 +34,7 @@ export const CategoryTabs: React.FC<CategoryTabsProps> = ({
   viewMode = 'grid',
   onViewModeChange,
   hasBoughtMachine = false,
+  invitedCount = 0,
   onLockedPlaneNotify,
 }) => {
   // Category states
@@ -30,6 +44,8 @@ export const CategoryTabs: React.FC<CategoryTabsProps> = ({
   const isAvClassesSelected =
     selectedCategory === 'AVCLASSES' ||
     selectedCategory.startsWith('AV_CLASS_');
+
+  const isAClassUnlocked = hasBoughtMachine && invitedCount >= 4;
 
   return (
     <div className="space-y-4 mb-6">
@@ -75,13 +91,13 @@ export const CategoryTabs: React.FC<CategoryTabsProps> = ({
             AV2 series
           </button>
 
-          {/* 4. AV Classes Series (Closed/Locked Plane until Admin confirms payment) */}
+          {/* 4. AV Classes Series (Locked until user buys a machine and invites 4+ people for A class) */}
           <button
             type="button"
             onClick={() => {
-              if (!hasBoughtMachine && onLockedPlaneNotify) {
+              if (!isAClassUnlocked && onLockedPlaneNotify) {
                 onLockedPlaneNotify(
-                  '🔒 Closed / Locked Plane: AV Class series is locked until Admin confirms your machine payment and your machine starts running.'
+                  `🔒 Class Requirements Locked: To access A class, you must buy a machine and have invited 4 people who bought a machine (Current invited buyers: ${invitedCount}/4).`
                 );
               }
               onSelectCategory('AVCLASSES');
@@ -89,16 +105,16 @@ export const CategoryTabs: React.FC<CategoryTabsProps> = ({
             className={`px-4 sm:px-5 py-2 rounded-full text-xs font-bold font-mono transition-all cursor-pointer whitespace-nowrap shrink-0 border flex items-center gap-1.5 ${
               isAvClassesSelected
                 ? 'bg-gradient-to-r from-[#0091ea] to-[#0077b6] text-white border-[#00e5ff] shadow-[0_0_16px_rgba(0,145,234,0.55)]'
-                : !hasBoughtMachine
+                : !isAClassUnlocked
                   ? 'bg-rose-950/60 text-rose-200 border-rose-500/50 hover:border-rose-400'
                   : 'bg-[#030914]/90 text-slate-300 hover:text-white border-[#00d2c4]/30 hover:border-[#00d2c4]/60'
             }`}
           >
-            {!hasBoughtMachine && <Lock className="w-3.5 h-3.5 text-rose-400" />}
+            {!isAClassUnlocked && <Lock className="w-3.5 h-3.5 text-rose-400" />}
             <span>AV Class series</span>
-            {!hasBoughtMachine && (
+            {!isAClassUnlocked && (
               <span className="text-[9px] bg-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded uppercase">
-                Locked
+                🔐 4 Invites
               </span>
             )}
           </button>
@@ -153,7 +169,7 @@ export const CategoryTabs: React.FC<CategoryTabsProps> = ({
         <div className="flex flex-wrap items-center gap-1.5 p-2 bg-[#04091a]/90 rounded-xl border border-cyan-800/40 shadow-xl overflow-x-auto animate-fade-in">
           <span className="text-xs font-mono font-bold text-cyan-300 px-2 shrink-0 flex items-center gap-1">
             <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-            <span>AV Class:</span>
+            <span>Class Requirements:</span>
           </span>
           <button
             type="button"
@@ -166,30 +182,36 @@ export const CategoryTabs: React.FC<CategoryTabsProps> = ({
           >
             All Classes (A–I)
           </button>
-          {[
-            { id: 'AV_CLASS_A', label: 'A class' },
-            { id: 'AV_CLASS_B', label: 'B class' },
-            { id: 'AV_CLASS_C', label: 'C class' },
-            { id: 'AV_CLASS_D', label: 'D class' },
-            { id: 'AV_CLASS_E', label: 'E class' },
-            { id: 'AV_CLASS_F', label: 'F class' },
-            { id: 'AV_CLASS_G', label: 'G class' },
-            { id: 'AV_CLASS_H', label: 'H class' },
-            { id: 'AV_CLASS_I', label: 'I class' },
-          ].map((cls) => (
-            <button
-              key={cls.id}
-              type="button"
-              onClick={() => onSelectCategory(cls.id as MachineCategory)}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-                selectedCategory === cls.id
-                  ? 'bg-cyan-400 text-black font-black shadow-md'
-                  : 'bg-[#061226] text-slate-300 hover:text-white hover:bg-cyan-950/50'
-              }`}
-            >
-              {cls.label}
-            </button>
-          ))}
+          {CLASS_SUB_TABS.map((cls) => {
+            const unlocked = hasBoughtMachine && invitedCount >= cls.requiredInvites;
+            return (
+              <button
+                key={cls.id}
+                type="button"
+                onClick={() => {
+                  if (!unlocked && onLockedPlaneNotify) {
+                    onLockedPlaneNotify(
+                      `🔒 ${cls.label} is Locked! To access ${cls.label}, you must buy a machine and have invited ${cls.requiredInvites.toLocaleString()} people who bought a machine (You have ${invitedCount}/${cls.requiredInvites.toLocaleString()} invited people).`
+                    );
+                  }
+                  onSelectCategory(cls.id);
+                }}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1 ${
+                  selectedCategory === cls.id
+                    ? 'bg-cyan-400 text-black font-black shadow-md'
+                    : unlocked
+                      ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-900/60'
+                      : 'bg-[#061226] text-slate-300 hover:text-white hover:bg-cyan-950/50 border border-amber-500/30'
+                }`}
+              >
+                {!unlocked && <span>🔐</span>}
+                <span>{cls.label}</span>
+                <span className="text-[10px] opacity-80 font-mono">
+                  ({cls.requiredInvites.toLocaleString()})
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

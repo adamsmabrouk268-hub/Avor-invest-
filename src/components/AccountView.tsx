@@ -84,8 +84,17 @@ export const AccountView: React.FC<AccountViewProps> = ({
         .then((data) => {
           if (data) {
             setDashboardSummary(data);
-            if (typeof data.balance === 'number' && data.balance !== user.balance && onUpdateUser) {
-              onUpdateUser({ ...user, balance: data.balance });
+            if (
+              onUpdateUser &&
+              ((typeof data.balance === 'number' && data.balance !== user.balance) ||
+                (typeof data.has_bought_machine === 'boolean' && data.has_bought_machine !== user.has_bought_machine))
+            ) {
+              onUpdateUser({
+                ...user,
+                balance: typeof data.balance === 'number' ? data.balance : user.balance,
+                has_bought_machine:
+                  typeof data.has_bought_machine === 'boolean' ? data.has_bought_machine : user.has_bought_machine,
+              });
             }
           }
         })
@@ -102,14 +111,11 @@ export const AccountView: React.FC<AccountViewProps> = ({
     loadProfileData();
     const interval = setInterval(loadProfileData, 4000);
     return () => clearInterval(interval);
-  }, [user?.id, user?.balance, investments.length]);
+  }, [user?.id, user?.balance, user?.has_bought_machine, investments.length]);
 
   const hasBoughtMachine =
     investments.some((i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') ||
-    !!dashboardSummary?.has_bought_machine ||
-    !!user?.has_bought_machine ||
-    Number(dashboardSummary?.deposit_details?.total_deposited || 0) > 0 ||
-    (user?.balance || 0) > 0;
+    Boolean(dashboardSummary?.has_bought_machine);
 
   const referralCode = user?.referral_code || 'AVOR-7789';
   const referralLink = getShareableInviteLink(referralCode);
@@ -149,16 +155,16 @@ export const AccountView: React.FC<AccountViewProps> = ({
     handleCopyFullDetails();
   };
 
-  // Card 1: Wallet & Balance
+  // Card 1: Wallet (Admin-confirmed deposited money ONLY) & Balance (3,000 UGX registration reward + earned income)
   const confirmedTxDeposits = transactions
     .filter((t) => t.type === 'DEPOSIT' && (t.status === 'SUCCESS' || t.status === 'CONFIRMED'))
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
   const totalDeposited = Math.max(
-    Number(dashboardSummary?.deposit_details?.total_deposited || 0),
+    Number(dashboardSummary?.wallet_balance ?? dashboardSummary?.deposit_details?.total_deposited ?? 0),
     confirmedTxDeposits
   );
   const pendingDeposits = dashboardSummary?.deposit_details?.pending_deposits || 0;
-  const liveBalanceValue = dashboardSummary?.balance ?? user?.balance ?? 0;
+  const liveBalanceValue = dashboardSummary?.balance ?? user?.balance ?? 3000;
   const displayWallet = totalDeposited.toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -308,37 +314,6 @@ export const AccountView: React.FC<AccountViewProps> = ({
           </div>
         </div>
 
-        {/* Direct Deposit & Withdraw Action Buttons on Wallet Card (Step 1 of Deposit Flow) */}
-        <div className="grid grid-cols-2 gap-3 mt-4 pt-3 border-t border-[#0091ea]/25">
-          <button
-            type="button"
-            onClick={() => onOpenWalletModal('deposit')}
-            className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:brightness-110 border border-blue-400/50 text-white font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md shadow-blue-900/40 active:scale-98"
-          >
-            DEPOSIT
-          </button>
-          <button
-            type="button"
-            onClick={() => onOpenWalletModal('withdraw')}
-            className="py-2.5 px-4 rounded-xl bg-[#07142e] hover:bg-[#0c1f47] border border-[#0091ea]/50 text-white font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm active:scale-98"
-          >
-            WITHDRAW
-          </button>
-        </div>
-
-        {onNavigateToMarketplace && (
-          <div className="mt-2.5">
-            <button
-              type="button"
-              onClick={onNavigateToMarketplace}
-              className="w-full py-2 px-4 rounded-xl bg-[#061229] hover:bg-[#0a1c40] border border-cyan-500/40 text-cyan-300 font-bold text-xs uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2"
-            >
-              <Cpu className="w-3.5 h-3.5 text-cyan-400" />
-              <span>BUY A MACHINE (USING WALLET)</span>
-            </button>
-          </div>
-        )}
-
         {/* Center Double Chevron ︾ Icon (Clickable to show user info details) */}
         <button
           type="button"
@@ -446,21 +421,26 @@ export const AccountView: React.FC<AccountViewProps> = ({
             </span>
           </button>
 
-          {/* 4. Invite */}
+          {/* 4. Invite 🔐 (Locked until user buys a machine; opens automatically once user buys a machine) */}
           <button
             type="button"
             onClick={() => setActiveModal('invite')}
             className="flex flex-col items-center group cursor-pointer focus:outline-none relative"
           >
-            <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-[#0091ea] hover:bg-[#0081d6] active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-[#0091ea]/35 text-white">
+            <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-[#0091ea] hover:bg-[#0081d6] active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-[#0091ea]/35 text-white relative">
               <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M11 15h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 17" />
                 <path d="m7 21 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.8-2.8L15 13" />
                 <path d="M2 13a4 4 0 0 1 4-4h2" />
               </svg>
+              {!hasBoughtMachine && (
+                <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-amber-950 border border-amber-400 text-amber-300 flex items-center justify-center shadow-md">
+                  <Lock className="w-3 h-3" />
+                </span>
+              )}
             </div>
-            <span className="text-xs text-slate-300 font-medium mt-1.5 leading-tight group-hover:text-white transition-colors">
-              Invite
+            <span className="text-xs text-slate-300 font-medium mt-1.5 leading-tight group-hover:text-white transition-colors flex items-center gap-0.5">
+              <span>{!hasBoughtMachine ? 'Invite 🔐' : 'Invite'}</span>
             </span>
           </button>
 
@@ -510,21 +490,26 @@ export const AccountView: React.FC<AccountViewProps> = ({
             </span>
           </button>
 
-          {/* 7. Manager (Customer-only access enforced inside modal per Item 16) */}
+          {/* 7. Manage / Manager 🔐 (Locked until user buys a machine; opens automatically once user buys a machine) */}
           <button
             type="button"
             onClick={() => setActiveModal('manager')}
-            className="flex flex-col items-center group cursor-pointer focus:outline-none"
+            className="flex flex-col items-center group cursor-pointer focus:outline-none relative"
           >
-            <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-[#0091ea] hover:bg-[#0081d6] active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-[#0091ea]/35 text-white">
+            <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-[#0091ea] hover:bg-[#0081d6] active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-[#0091ea]/35 text-white relative">
               <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
                 <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
                 <path d="M12 19v3" />
               </svg>
+              {!hasBoughtMachine && (
+                <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-amber-950 border border-amber-400 text-amber-300 flex items-center justify-center shadow-md">
+                  <Lock className="w-3 h-3" />
+                </span>
+              )}
             </div>
-            <span className="text-xs text-slate-300 font-medium mt-1.5 leading-tight group-hover:text-white transition-colors">
-              Manager
+            <span className="text-xs text-slate-300 font-medium mt-1.5 leading-tight group-hover:text-white transition-colors flex items-center gap-0.5">
+              <span>{!hasBoughtMachine ? 'Manage 🔐' : 'Manage'}</span>
             </span>
           </button>
 
@@ -553,16 +538,16 @@ export const AccountView: React.FC<AccountViewProps> = ({
       </div>
 
       {/* =========================================================================
-          CARD 3: CLASS REQUIREMENTS TABLE (Single monthly reward button & table;
-                  duplicate last month's salary card removed per Item 5;
-                  word "VIP" excluded per Item 17)
+          CARD 3: CLASS REQUIREMENTS TABLE (Locked until user buys a machine & invites 4+ people)
          ========================================================================= */}
       <div id="class-requirements-table">
         <VipClassTaskTable
           user={user}
           currency={currency}
+          hasBoughtMachine={hasBoughtMachine}
           invitedCount={activeInvitedCustomersCount}
           totalInvitedMachinesPrice={totalInvitedMachinesPrice}
+          onNavigateToMarketplace={onNavigateToMarketplace}
           onRewardClaimed={(newBalance) => {
             if (user && onUpdateUser) {
               onUpdateUser({ ...user, balance: newBalance });
@@ -602,7 +587,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
             <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
               {transactions.length === 0 ? (
                 <div className="text-center py-10 text-slate-400 space-y-2">
-                  <p className="text-sm">No transaction bills recorded yet.</p>
+                  <p className="text-sm font-bold text-slate-300">No payments yet.</p>
                   <p className="text-xs text-slate-500">Your deposit, withdrawal, bonus, and machine bills will display here.</p>
                 </div>
               ) : (
@@ -649,7 +634,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
         </div>
       )}
 
-      {/* Modal 2: Invite (Personal Link & Invite Code with Avor Invest Details) */}
+      {/* Modal 2: Invite (Locked until user buys a machine; opens automatically once user buys a machine) */}
       {activeModal === 'invite' && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-[#03081a] border border-[#0091ea]/60 shadow-[0_0_25px_rgba(0,145,234,0.25)] rounded-2xl p-5 max-w-md w-full space-y-3.5 max-h-[90vh] overflow-y-auto">
@@ -660,10 +645,10 @@ export const AccountView: React.FC<AccountViewProps> = ({
                 </div>
                 <div>
                   <h3 className="text-base font-black text-white leading-tight">
-                    Avor Invest Invite Plane
+                    {!hasBoughtMachine ? 'Invite Locked 🔐' : 'Avor Invest Invite Plane'}
                   </h3>
                   <span className="text-[11px] font-mono text-cyan-400 font-bold">
-                    Official Access • avorinvest.com
+                    {!hasBoughtMachine ? 'Opens when you buy a machine' : 'Official Access • avorinvest.com'}
                   </span>
                 </div>
               </div>
@@ -675,126 +660,139 @@ export const AccountView: React.FC<AccountViewProps> = ({
               </button>
             </div>
 
-            {/* Avor Invest Platform Summary Card */}
-            <div className="bg-gradient-to-br from-[#071536] via-[#06112b] to-[#040a1a] border border-blue-500/40 rounded-xl p-3.5 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-black uppercase tracking-wider text-cyan-300 font-mono">
-                  🌐 avorinvest.com Official Invitation
-                </span>
-                <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold">
-                  Active Link
-                </span>
-              </div>
-              <p className="text-xs text-slate-200 leading-relaxed">
-                Share your official <strong className="text-white">Avor Invest (avorinvest.com)</strong> link below. Anyone who opens your link is directed straight to the Avor Invest registration gateway with your invite code pre-filled:
-              </p>
-              <ul className="text-[11px] text-slate-300 space-y-1 font-mono pl-1">
-                <li>• <strong className="text-emerald-400">UGX 3,000</strong> Free Automatic Registration Welcome Bonus</li>
-                <li>• <strong className="text-sky-400">8% Invitation Commission</strong> on Same-Machine Purchases</li>
-                <li>• <strong className="text-cyan-300">5% Monthly Class Reward</strong> (4+ Active Invited Buyers)</li>
-              </ul>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="text-slate-300 font-bold block mb-1">
-                  Your Official Avor Invest Invite Code:
-                </label>
-                <div className="flex items-center gap-2 bg-[#08132c] border border-blue-500/40 p-2.5 rounded-xl">
-                  <span className="font-mono font-black text-sm text-sky-400 flex-1 select-all">
-                    {referralCode}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleCopyCode}
-                    className="px-3 py-1.5 bg-[#0091ea] hover:bg-[#0081d6] text-white rounded-lg font-bold flex items-center gap-1 cursor-pointer shrink-0"
-                  >
-                    {copiedCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedCode ? 'Copied!' : 'Copy Code'}</span>
-                  </button>
+            {!hasBoughtMachine ? (
+              <div className="bg-[#08132c] border border-amber-500/40 rounded-xl p-4 text-center space-y-3">
+                <div className="w-12 h-12 rounded-full bg-amber-950/80 border border-amber-500/50 flex items-center justify-center mx-auto text-amber-400">
+                  <Lock className="w-6 h-6" />
                 </div>
-              </div>
-
-              <div>
-                <label className="text-slate-300 font-bold block mb-1">
-                  Direct Registration Link (Opens Avor Invest on Any Device):
-                </label>
-                <div className="flex items-center gap-2 bg-[#08132c] border border-blue-500/40 p-2.5 rounded-xl">
-                  <input
-                    type="text"
-                    readOnly
-                    value={referralLink}
-                    onClick={(e) => (e.target as HTMLInputElement).select()}
-                    className="font-mono text-[11px] text-cyan-200 bg-transparent outline-none w-full flex-1 select-all"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleCopyLink}
-                    className="px-3 py-1.5 bg-[#0091ea] hover:bg-[#0081d6] text-white rounded-lg font-bold flex items-center gap-1 cursor-pointer shrink-0"
-                  >
-                    {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedLink ? 'Link Copied!' : 'Copy Link'}</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Preview of Avor Invest Invite Details */}
-              <div className="bg-[#050d21] border border-[#122b57] rounded-xl p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-slate-300">
-                    Avor Invest Invitation Package (With Link & Details):
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleCopyFullDetails}
-                    className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 flex items-center gap-1 cursor-pointer"
-                  >
-                    {copiedDetails ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedDetails ? 'Copied Package!' : 'Copy Full Details'}</span>
-                  </button>
-                </div>
-                <pre className="text-[10px] text-slate-300 font-mono whitespace-pre-wrap break-all bg-[#030816] p-2.5 rounded-lg border border-blue-950/80 select-all">
-                  {fullInviteMessage}
-                </pre>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                <a
-                  href={`https://wa.me/?text=${encodeURIComponent(fullInviteMessage)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer text-center"
-                >
-                  <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
-                  <span>Send on WhatsApp</span>
-                </a>
-
-                <button
-                  type="button"
-                  onClick={handleNativeShare}
-                  className="w-full py-2.5 px-3 bg-gradient-to-r from-blue-600 to-cyan-500 hover:brightness-110 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer"
-                >
-                  <ExternalLink className="w-4 h-4 shrink-0" />
-                  <span>{copiedDetails ? 'Copied to Clipboard!' : 'Share Invite Link'}</span>
-                </button>
-              </div>
-
-              {!hasBoughtMachine && onNavigateToMarketplace && (
-                <div className="p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/30 flex items-center justify-between gap-2 text-[11px] text-amber-200">
-                  <span>Activate a compute machine to unlock 8% same-machine commission payouts.</span>
+                <h4 className="text-sm font-black text-white">
+                  Invite Link &amp; Code Locked 🔐
+                </h4>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  <strong>WhatsApp 🔐, Company PDF, Invite, and Manage</strong> are locked until you buy a machine. As soon as you buy a machine, your personal Invite code &amp; link open up automatically!
+                </p>
+                {onNavigateToMarketplace && (
                   <button
                     type="button"
                     onClick={() => {
                       setActiveModal(null);
                       onNavigateToMarketplace();
                     }}
-                    className="px-2.5 py-1 bg-amber-500 text-slate-950 font-black rounded-lg shrink-0 cursor-pointer"
+                    className="w-full py-2.5 bg-gradient-to-r from-[#0091ea] to-[#0077b6] hover:brightness-110 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-md"
                   >
-                    Machines
+                    <Cpu className="w-4 h-4" />
+                    <span>Buy a Machine to Unlock Invite</span>
                   </button>
+                )}
+              </div>
+            ) : (
+              <>
+                {/* Avor Invest Platform Summary Card */}
+                <div className="bg-gradient-to-br from-[#071536] via-[#06112b] to-[#040a1a] border border-blue-500/40 rounded-xl p-3.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-cyan-300 font-mono">
+                      🌐 avorinvest.com Official Invitation
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold">
+                      Unlocked ✅
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-200 leading-relaxed">
+                    Share your official <strong className="text-white">Avor Invest (avorinvest.com)</strong> link below. Anyone who opens your link is directed straight to the Avor Invest registration gateway with your invite code pre-filled:
+                  </p>
+                  <ul className="text-[11px] text-slate-300 space-y-1 font-mono pl-1">
+                    <li>• <strong className="text-emerald-400">UGX 3,000</strong> Free Automatic Registration Welcome Bonus</li>
+                    <li>• <strong className="text-sky-400">8% Invitation Commission</strong> on Same-Machine Purchases</li>
+                    <li>• <strong className="text-cyan-300">5% Monthly Class Reward</strong> (4+ Active Invited Buyers)</li>
+                  </ul>
                 </div>
-              )}
-            </div>
+
+                <div className="space-y-3 text-xs">
+                  <div>
+                    <label className="text-slate-300 font-bold block mb-1">
+                      Your Official Avor Invest Invite Code:
+                    </label>
+                    <div className="flex items-center gap-2 bg-[#08132c] border border-blue-500/40 p-2.5 rounded-xl">
+                      <span className="font-mono font-black text-sm text-sky-400 flex-1 select-all">
+                        {referralCode}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleCopyCode}
+                        className="px-3 py-1.5 bg-[#0091ea] hover:bg-[#0081d6] text-white rounded-lg font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                      >
+                        {copiedCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedCode ? 'Copied!' : 'Copy Code'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-300 font-bold block mb-1">
+                      Direct Registration Link (Opens Avor Invest on Any Device):
+                    </label>
+                    <div className="flex items-center gap-2 bg-[#08132c] border border-blue-500/40 p-2.5 rounded-xl">
+                      <input
+                        type="text"
+                        readOnly
+                        value={referralLink}
+                        onClick={(e) => (e.target as HTMLInputElement).select()}
+                        className="font-mono text-[11px] text-cyan-200 bg-transparent outline-none w-full flex-1 select-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCopyLink}
+                        className="px-3 py-1.5 bg-[#0091ea] hover:bg-[#0081d6] text-white rounded-lg font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                      >
+                        {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedLink ? 'Link Copied!' : 'Copy Link'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Preview of Avor Invest Invite Details */}
+                  <div className="bg-[#050d21] border border-[#122b57] rounded-xl p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-slate-300">
+                        Avor Invest Invitation Package (With Link &amp; Details):
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleCopyFullDetails}
+                        className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedDetails ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                        <span>{copiedDetails ? 'Copied Package!' : 'Copy Full Details'}</span>
+                      </button>
+                    </div>
+                    <pre className="text-[10px] text-slate-300 font-mono whitespace-pre-wrap break-all bg-[#030816] p-2.5 rounded-lg border border-blue-950/80 select-all">
+                      {fullInviteMessage}
+                    </pre>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    <a
+                      href={`https://wa.me/?text=${encodeURIComponent(fullInviteMessage)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer text-center"
+                    >
+                      <WhatsAppIcon className="w-4 h-4 fill-white shrink-0" />
+                      <span>Send on WhatsApp</span>
+                    </a>
+
+                    <button
+                      type="button"
+                      onClick={handleNativeShare}
+                      className="w-full py-2.5 px-3 bg-gradient-to-r from-blue-600 to-cyan-500 hover:brightness-110 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                    >
+                      <ExternalLink className="w-4 h-4 shrink-0" />
+                      <span>{copiedDetails ? 'Copied to Clipboard!' : 'Share Invite Link'}</span>
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

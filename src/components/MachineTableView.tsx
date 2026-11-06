@@ -7,13 +7,27 @@ interface MachineTableViewProps {
   machines: Machine[];
   currency: Currency;
   hasBoughtMachine?: boolean;
+  invitedCount?: number;
   onInvestClick: (machine: Machine) => void;
 }
+
+const DEFAULT_CLASS_INVITES: Record<string, number> = {
+  'A class': 4,
+  'B class': 9,
+  'C class': 20,
+  'D class': 35,
+  'E class': 70,
+  'F class': 120,
+  'G class': 300,
+  'H class': 5000,
+  'I class': 10000,
+};
 
 export const MachineTableView: React.FC<MachineTableViewProps> = ({
   machines,
   currency,
   hasBoughtMachine = false,
+  invitedCount = 0,
   onInvestClick,
 }) => {
   const currencyInfo = CURRENCY_MAP[currency];
@@ -50,6 +64,10 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                   machine.is_av_class ||
                   machine.category?.startsWith('AV_CLASS') ||
                   ['A class', 'B class', 'C class', 'D class', 'E class', 'F class', 'G class', 'H class', 'I class'].includes(series);
+                const requiredInvites =
+                  machine.required_referral_buyers || DEFAULT_CLASS_INVITES[series] || (isAvClass ? 4 : 0);
+                const isLockedPlane = isAvClass && (!hasBoughtMachine || invitedCount < requiredInvites);
+
                 const isAV1 =
                   machine.category === 'AV1' ||
                   series === 'AV1' ||
@@ -103,7 +121,13 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                           <span>{machine.hashrate_or_capacity || '85 TH/s'}</span>
                         </div>
                         <div className="text-[10px] text-slate-400 truncate max-w-[140px]">
-                          {isAV1 ? 'Max 1 Unit per User' : isAV2 ? 'Max 2 Units per User' : machine.power_consumption || '650W'}
+                          {isAvClass
+                            ? `Requires ${requiredInvites.toLocaleString()} Invites (${invitedCount}/${requiredInvites.toLocaleString()})`
+                            : isAV1
+                              ? 'Max 1 Unit per User'
+                              : isAV2
+                                ? 'Max 2 Units per User'
+                                : machine.power_consumption || '650W'}
                         </div>
                       </div>
                     </td>
@@ -119,12 +143,14 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                     <td className="py-3.5 px-3 text-right">
                       <span
                         className={`inline-block border text-[10px] font-extrabold font-mono px-2.5 py-1 rounded-lg uppercase tracking-wider ${
-                          isAvClass
-                            ? 'bg-cyan-950/80 border-cyan-500/50 text-cyan-300'
-                            : 'bg-blue-950/80 border-blue-500/50 text-blue-300'
+                          isLockedPlane
+                            ? 'bg-rose-950/80 border-rose-500/50 text-rose-300'
+                            : isAvClass
+                              ? 'bg-cyan-950/80 border-cyan-500/50 text-cyan-300'
+                              : 'bg-blue-950/80 border-blue-500/50 text-blue-300'
                         }`}
                       >
-                        {isAvClass ? `AVclasses • ${series}` : `AVs • ${series}`}
+                        {isAvClass ? `${isLockedPlane ? '🔐 ' : ''}AVclasses • ${series}` : `AVs • ${series}`}
                       </span>
                     </td>
 
@@ -138,7 +164,12 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
 
                     {/* Time Lock / Everyday badge */}
                     <td className="py-3.5 px-3 text-right">
-                      {isAvClass ? (
+                      {isLockedPlane ? (
+                        <span className="inline-flex items-center gap-1 bg-rose-950/80 border border-rose-500/50 text-rose-300 font-bold text-[10px] font-mono px-2.5 py-1 rounded-lg">
+                          <Lock className="w-3 h-3 text-rose-400" />
+                          <span>Need {requiredInvites.toLocaleString()} Invites ({invitedCount}/{requiredInvites.toLocaleString()})</span>
+                        </span>
+                      ) : isAvClass ? (
                         <span className="inline-flex items-center gap-1 bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 font-bold text-[10px] font-mono px-2.5 py-1 rounded-lg">
                           <Zap className="w-3 h-3 text-emerald-400" />
                           <span>Mon to Mon (Weekends)</span>
@@ -188,15 +219,15 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                       <button
                         onClick={() => onInvestClick(machine)}
                         className={`px-3.5 py-2 font-bold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 mx-auto cursor-pointer whitespace-nowrap border ${
-                          isAvClass && !hasBoughtMachine
+                          isLockedPlane
                             ? 'bg-rose-950/90 text-rose-200 border-rose-500/60'
                             : 'bg-gradient-to-r from-[#0091ea] to-[#0077b6] text-white hover:brightness-110 border-[#00e5ff]/50 shadow-[0_0_12px_rgba(0,145,234,0.35)]'
                         }`}
                       >
-                        {isAvClass && !hasBoughtMachine ? (
+                        {isLockedPlane ? (
                           <>
                             <Lock className="w-3.5 h-3.5 text-rose-400" />
-                            <span>Locked Plane</span>
+                            <span>Locked ({requiredInvites.toLocaleString()} Invites)</span>
                           </>
                         ) : (
                           <>
@@ -228,6 +259,8 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
             machine.is_av_class ||
             machine.category?.startsWith('AV_CLASS') ||
             ['A class', 'B class', 'C class', 'D class', 'E class', 'F class', 'G class', 'H class', 'I class'].includes(series);
+          const requiredInvites =
+            machine.required_referral_buyers || DEFAULT_CLASS_INVITES[series] || (isAvClass ? 4 : 0);
           const isAV1 =
             machine.category === 'AV1' ||
             series === 'AV1' ||
@@ -242,7 +275,7 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
             machine.max_units_per_user === 2;
 
           const walletOnly = isAV1 || isAV2;
-          const isLockedPlane = isAvClass && !hasBoughtMachine;
+          const isLockedPlane = isAvClass && (!hasBoughtMachine || invitedCount < requiredInvites);
 
           return (
             <div
@@ -273,11 +306,11 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                             : 'bg-blue-950/80 border-blue-500/50 text-blue-300'
                       }`}
                     >
-                      {isAvClass ? `AVclasses • ${series}` : `AVs • ${series}`}
+                      {isAvClass ? `${isLockedPlane ? '🔐 ' : ''}AVclasses • ${series}` : `AVs • ${series}`}
                     </span>
                     {isLockedPlane ? (
                       <span className="text-[10px] font-bold text-rose-300 bg-rose-950/80 border border-rose-500/40 px-1.5 py-0.5 rounded font-mono">
-                        🔒 Locked Plane
+                        🔒 Need {requiredInvites.toLocaleString()} Invites
                       </span>
                     ) : isAvClass ? (
                       <span className="text-[10px] font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-500/40 px-1.5 py-0.5 rounded font-mono">
@@ -320,6 +353,14 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                     {currencyInfo.format(payoutAfterLock)}
                   </span>
                 </div>
+                {isAvClass && (
+                  <div className="flex justify-between items-center text-amber-300">
+                    <span className="text-slate-400 text-[11px]">Class Requirement:</span>
+                    <span className="font-bold font-mono text-[11px]">
+                      {isLockedPlane ? `🔐 Need ${requiredInvites.toLocaleString()} Invited Buyers (${invitedCount}/${requiredInvites.toLocaleString()})` : `✅ ${requiredInvites.toLocaleString()}+ Invites Met`}
+                    </span>
+                  </div>
+                )}
                 {isAvClass && machine.referral_reward_ugx && (
                   <div className="flex justify-between items-center text-[#a3e635]">
                     <span className="text-slate-400 text-[11px]">Account Reward:</span>
@@ -335,10 +376,10 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-400 text-[11px]">Payment Rule:</span>
+                  <span className="text-slate-400 text-[11px]">Access Rule:</span>
                   <span className="font-mono text-xs font-bold text-blue-300">
                     {isLockedPlane
-                      ? '🔒 Admin Payment Confirmation Required'
+                      ? `🔒 Locked — Must Invite ${requiredInvites.toLocaleString()} People`
                       : walletOnly
                         ? 'Wallet Balance Only'
                         : isAV1
@@ -362,7 +403,7 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                 {isLockedPlane ? (
                   <>
                     <Lock className="w-3.5 h-3.5 text-rose-400" />
-                    <span>Locked Plane (Admin Confirm Required)</span>
+                    <span>Locked (Invite {requiredInvites.toLocaleString()} People to Access {series})</span>
                   </>
                 ) : (
                   <>

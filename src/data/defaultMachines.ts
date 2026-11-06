@@ -487,7 +487,7 @@ export const DEFAULT_MACHINES: Machine[] = [
     created_at: new Date().toISOString(),
   },
 
-  // Class F: 120 people -> Reward 900,000 | Cost: 1,000,000 | 21 days | Returns: 1,950,000
+  // Class F: 120 people -> Reward 850,000 | Cost: 900,000 | 21 days | Returns: 1,900,000
   {
     id: 'mach-avclass-f',
     title: 'Avor Invest AV Class F Titan Datacenter',
@@ -495,7 +495,7 @@ export const DEFAULT_MACHINES: Machine[] = [
     category: 'AV_CLASS_F',
     series_tag: 'F class',
     series: 'AVclasses F class',
-    description: 'Unlocked after bringing 120 people who joined using your shared link and bought a machine. Reward: 900,000 UGX credited to account. Cost: 900,000 UGX - 21 days giving back 1,900,000 UGX. Runs Monday to Monday counting weekends. Wallet only.',
+    description: 'Unlocked after bringing 120 people who joined using your shared link and bought a machine. Reward: 850,000 UGX credited to account. Cost: 900,000 UGX - 21 days giving back 1,900,000 UGX. Runs Monday to Monday counting weekends. Wallet only.',
     total_cost: 900000,
     price: 900000,
     funded_amount: 0,
@@ -512,7 +512,7 @@ export const DEFAULT_MACHINES: Machine[] = [
     available_units: 8,
     vip_level_required: 0,
     required_referral_buyers: 120,
-    referral_reward_ugx: 900000,
+    referral_reward_ugx: 850000,
     is_av_class: true,
     runs_everyday: true,
     runs_on_weekends: true,
@@ -523,7 +523,7 @@ export const DEFAULT_MACHINES: Machine[] = [
     created_at: new Date().toISOString(),
   },
 
-  // Class G: 300 people -> Reward 1,200,000 | Cost: 1,300,000 | 21 days | Returns: 2,800,000
+  // Class G: 300 people -> Reward 1,200,000 | Cost: 1,300,000 | 21 days | Returns: 3,000,000
   {
     id: 'mach-avclass-g',
     title: 'Avor Invest AV Class G Stellar Sovereign',
@@ -559,7 +559,7 @@ export const DEFAULT_MACHINES: Machine[] = [
     created_at: new Date().toISOString(),
   },
 
-  // Class H: 500 people -> Reward 3,000,000 | Cost: 3,500,000 | 21 days | Returns: 7,000,000
+  // Class H: 5,000 people -> Reward 3,000,000 | Cost: 3,100,000 | 21 days | Returns: 7,000,000
   {
     id: 'mach-avclass-h',
     title: 'Avor Invest AV Class H Infinity Megavault',
@@ -567,7 +567,7 @@ export const DEFAULT_MACHINES: Machine[] = [
     category: 'AV_CLASS_H',
     series_tag: 'H class',
     series: 'AVclasses H class',
-    description: 'Unlocked after bringing 500 people who joined using your shared link and bought a machine. Reward: 3,000,000 UGX credited to account. Cost: 3,100,000 UGX - 21 days giving back 7,000,000 UGX. Runs Monday to Monday counting weekends. Wallet only.',
+    description: 'Unlocked after bringing 5,000 people who joined using your shared link and bought a machine. Reward: 3,000,000 UGX credited to account. Cost: 3,100,000 UGX - 21 days giving back 7,000,000 UGX. Runs Monday to Monday counting weekends. Wallet only.',
     total_cost: 3100000,
     price: 3100000,
     funded_amount: 0,
@@ -583,7 +583,7 @@ export const DEFAULT_MACHINES: Machine[] = [
     expected_usage: 'Keep running Monday to Monday counting weekends. Wallet only purchase.',
     available_units: 4,
     vip_level_required: 0,
-    required_referral_buyers: 500,
+    required_referral_buyers: 5000,
     referral_reward_ugx: 3000000,
     is_av_class: true,
     runs_everyday: true,
@@ -595,7 +595,7 @@ export const DEFAULT_MACHINES: Machine[] = [
     created_at: new Date().toISOString(),
   },
 
-  // Class I: 1000 people -> Reward 8,500,000 | Cost: 9,000,000 | 21 days | Returns: 25,000,000
+  // Class I: 10,000 people -> Reward 8,500,000 | Cost: 9,000,000 | 21 days | Returns: 25,000,000
   {
     id: 'mach-avclass-i',
     title: 'Avor Invest AV Class I Supreme Genesis',
@@ -603,7 +603,7 @@ export const DEFAULT_MACHINES: Machine[] = [
     category: 'AV_CLASS_I',
     series_tag: 'I class',
     series: 'AVclasses I class',
-    description: 'Unlocked after bringing 1,000 people who joined using your shared link and bought a machine. Reward: 8,500,000 UGX credited to account. Cost: 9,000,000 UGX - 21 days giving back 25,000,000 UGX. Runs Monday to Monday counting weekends. Wallet only.',
+    description: 'Unlocked after bringing 10,000 people who joined using your shared link and bought a machine. Reward: 8,500,000 UGX credited to account. Cost: 9,000,000 UGX - 21 days giving back 25,000,000 UGX. Runs Monday to Monday counting weekends. Wallet only.',
     total_cost: 9000000,
     price: 9000000,
     funded_amount: 0,
@@ -619,7 +619,7 @@ export const DEFAULT_MACHINES: Machine[] = [
     expected_usage: 'Keep running Monday to Monday counting weekends. Wallet only purchase.',
     available_units: 3,
     vip_level_required: 0,
-    required_referral_buyers: 1000,
+    required_referral_buyers: 10000,
     referral_reward_ugx: 8500000,
     is_av_class: true,
     runs_everyday: true,

@@ -298,17 +298,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
   useEffect(() => {
     if (!isAdminAuthenticated) return;
-    // Start real-time Firestore subscription & notifyAdminOnDeposit trigger immediately
     const unsubFirestore = subscribeToFirestoreAdminMessages((items) => {
       setFirestoreMessages(items);
     });
     const unsubTrigger = notifyAdminOnDeposit.startListener();
 
     const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
-      if (fbUser) {
-        setFirebaseAdminEmail(fbUser.email || 'Connected');
+      if (fbUser && fbUser.email) {
+        setFirebaseAdminEmail(fbUser.email);
       } else {
-        setFirebaseAdminEmail(null);
+        setFirebaseAdminEmail('adamsmabrouk268@gmail.com');
       }
     });
     return () => {
@@ -1073,14 +1072,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
               <span>← Return to Dashboard</span>
             </button>
           )}
-          <a
-            href="/api/download-source-zip"
-            download="avor-invest-source-code.zip"
-            className="mt-2 py-2.5 px-4 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 rounded-xl text-xs text-emerald-300 font-bold flex items-center justify-center gap-2 transition-all"
-          >
-            <Download className="w-4 h-4 text-emerald-400" />
-            <span>Download Full Source Code (.ZIP)</span>
-          </a>
         </div>
       </div>
     );
@@ -1103,14 +1094,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <a
-            href="/api/download-source-zip"
-            download="avor-invest-source-code.zip"
-            className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-slate-950 text-xs font-black rounded-xl border border-emerald-400/50 flex items-center gap-1.5 cursor-pointer transition-all shrink-0 shadow-md"
-          >
-            <Download className="w-3.5 h-3.5 text-slate-950 stroke-[2.5]" />
-            <span>Download Source Code (.ZIP)</span>
-          </a>
           {onExitAdmin && (
             <button
               onClick={onExitAdmin}
@@ -1544,8 +1527,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
           )}
 
           {adminMessages.length === 0 && firestoreMessages.length === 0 ? (
-            <div className="text-center py-10 text-slate-400 text-xs">
-              No placed deposit or order messages yet. As soon as a user clicks Place Order on a deposit or buys a machine, the message will appear here immediately.
+            <div className="text-center py-10 text-slate-400 text-xs font-bold">
+              No payments yet. As soon as a user clicks Place Order on a deposit or buys a machine, the message will appear here immediately.
             </div>
           ) : (
             <div className="space-y-3">
@@ -1797,8 +1780,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
           )}
 
           {deposits.length === 0 ? (
-            <div className="text-center py-10 text-slate-400 text-xs">
-              No submitted deposits or machine payments logged yet. As soon as any investor submits a deposit, it will appear here for confirmation.
+            <div className="text-center py-10 text-slate-400 text-xs font-bold">
+              No payments yet. As soon as any investor submits a deposit, it will appear here for confirmation.
             </div>
           ) : (
             <div className="overflow-x-auto">

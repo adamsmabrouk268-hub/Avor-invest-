@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Currency, User } from '../types';
 import { CURRENCY_MAP } from '../data/defaultMachines';
-import { CheckCircle2, AlertCircle, Sparkles, X, Gift } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Sparkles, X, Gift, Lock, Unlock } from 'lucide-react';
 
 export interface VipClassRequirement {
   classLevel: string;
@@ -26,9 +26,11 @@ export const VIP_CLASS_REQUIREMENTS: VipClassRequirement[] = [
 interface VipClassTaskTableProps {
   user: User | null;
   currency: Currency;
+  hasBoughtMachine?: boolean;
   invitedCount?: number;
   totalInvitedMachinesPrice?: number;
   onRewardClaimed?: (newBalance: number) => void;
+  onNavigateToMarketplace?: () => void;
   onClose?: () => void;
   isModal?: boolean;
 }
@@ -36,9 +38,11 @@ interface VipClassTaskTableProps {
 export const VipClassTaskTable: React.FC<VipClassTaskTableProps> = ({
   user,
   currency,
+  hasBoughtMachine = false,
   invitedCount = 0,
   totalInvitedMachinesPrice = 0,
   onRewardClaimed,
+  onNavigateToMarketplace,
   onClose,
   isModal = false,
 }) => {
@@ -47,12 +51,16 @@ export const VipClassTaskTable: React.FC<VipClassTaskTableProps> = ({
   const [claimMessage, setClaimMessage] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
   const [showRewardRules, setShowRewardRules] = useState<boolean>(true);
 
-  // Determine current achieved class and next class target
-  const currentClass = [...VIP_CLASS_REQUIREMENTS]
-    .reverse()
-    .find((r) => invitedCount >= r.requiredInvites);
+  // Determine current achieved class and next class target (requires both machine purchase AND required invited people)
+  const currentClass = hasBoughtMachine
+    ? [...VIP_CLASS_REQUIREMENTS]
+        .reverse()
+        .find((r) => invitedCount >= r.requiredInvites)
+    : undefined;
 
-  const nextClass = VIP_CLASS_REQUIREMENTS.find((r) => invitedCount < r.requiredInvites);
+  const nextClass = VIP_CLASS_REQUIREMENTS.find(
+    (r) => !hasBoughtMachine || invitedCount < r.requiredInvites
+  );
 
   const formatReward = (rewardUGX: number) => {
     if (currency === 'UGX') {
@@ -62,13 +70,55 @@ export const VipClassTaskTable: React.FC<VipClassTaskTableProps> = ({
   };
 
   const calculated5PctReward = Math.round((Number(totalInvitedMachinesPrice) || 0) * 0.05);
+  const isAClassUnlocked = hasBoughtMachine && invitedCount >= 4;
+
+  const handleRowClick = (tier: VipClassRequirement) => {
+    const isUnlocked = hasBoughtMachine && invitedCount >= tier.requiredInvites;
+    if (isUnlocked) {
+      setClaimMessage({
+        type: 'success',
+        text: `✅ ${tier.name} Unlocked! You have invited ${invitedCount.toLocaleString()} people (Required: ${tier.requiredInvites.toLocaleString()}). Reward tier: ${formatReward(tier.rewardUGX)}.`,
+      });
+      return;
+    }
+
+    const needed = Math.max(0, tier.requiredInvites - invitedCount);
+    if (!hasBoughtMachine) {
+      setClaimMessage({
+        type: 'error',
+        text: `🔐 ${tier.name} is Locked! You must first buy a machine and invite ${tier.requiredInvites.toLocaleString()} people to access ${tier.name} (${formatReward(tier.rewardUGX)} reward).`,
+      });
+    } else {
+      setClaimMessage({
+        type: 'error',
+        text: `🔐 ${tier.name} is Locked! To access ${tier.name} (${formatReward(tier.rewardUGX)} reward), you must have invited ${tier.requiredInvites.toLocaleString()} people who bought a machine (You have ${invitedCount}/${tier.requiredInvites.toLocaleString()} — need ${needed.toLocaleString()} more).`,
+      });
+    }
+  };
 
   const handleClaimReward = async () => {
     setShowRewardRules(true);
     if (!user) {
       setClaimMessage({
         type: 'info',
-        text: 'Please sign in to your account to claim last month\'s reward.',
+        text: "Please sign in to your account to claim last month's reward.",
+      });
+      return;
+    }
+
+    if (!hasBoughtMachine) {
+      setClaimMessage({
+        type: 'error',
+        text: '🔐 Class Requirements Locked! You must buy a machine first and invite at least 4 people to unlock A class and claim rewards.',
+      });
+      return;
+    }
+
+    if (invitedCount < 4) {
+      const needed = Math.max(1, 4 - invitedCount);
+      setClaimMessage({
+        type: 'error',
+        text: `🔐 A class is Locked! To access A class and collect rewards, you must have invited 4 people who bought a machine. You currently have ${invitedCount}/4 invited people (${needed} more needed).`,
       });
       return;
     }
@@ -109,10 +159,10 @@ export const VipClassTaskTable: React.FC<VipClassTaskTableProps> = ({
       } else {
         const needed = Math.max(1, 4 - invitedCount);
         setClaimMessage({
-          type: 'info',
+          type: 'error',
           text:
             err?.message ||
-            `You currently have ${invitedCount} invited customer(s) who bought machines. Invite ${needed} more customer(s) to collect last month's 5% reward!`,
+            `🔐 Locked: You currently have ${invitedCount} invited customer(s) who bought machines. Invite ${needed} more customer(s) (minimum 4 people) to unlock A class and collect last month's 5% reward!`,
         });
       }
     } finally {
@@ -130,10 +180,13 @@ export const VipClassTaskTable: React.FC<VipClassTaskTableProps> = ({
               <Sparkles className="w-4 h-4 text-white" />
             </div>
             <div>
-              <h2 className="text-sm sm:text-base font-black text-white tracking-wide">
-                Class Requirements
+              <h2 className="text-sm sm:text-base font-black text-white tracking-wide flex items-center gap-1.5">
+                <span>Class Requirements</span>
+                {!isAClassUnlocked && <span className="text-xs">🔐</span>}
               </h2>
-              <p className="text-[10px] text-slate-400">Monthly referral reward settlement table</p>
+              <p className="text-[10px] text-slate-400">
+                Locked until user buys a machine &amp; invites required people (4 for A class)
+              </p>
             </div>
           </div>
           {onClose && (
@@ -150,9 +203,30 @@ export const VipClassTaskTable: React.FC<VipClassTaskTableProps> = ({
       {/* Section Title Header */}
       {!isModal && (
         <div className="flex items-center justify-between pb-1">
-          <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-sky-400 font-mono">
-            Class Requirements
-          </h3>
+          <div className="flex items-center gap-1.5">
+            <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-sky-400 font-mono">
+              Class Requirements {!isAClassUnlocked ? '🔐' : ''}
+            </h3>
+            <span
+              className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 ${
+                isAClassUnlocked
+                  ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
+                  : 'bg-amber-950/80 border-amber-500/50 text-amber-300'
+              }`}
+            >
+              {isAClassUnlocked ? (
+                <>
+                  <Unlock className="w-3 h-3 text-emerald-400" />
+                  <span>{currentClass?.name || 'A class'} Open</span>
+                </>
+              ) : (
+                <>
+                  <Lock className="w-3 h-3 text-amber-400" />
+                  <span>Locked • Need 4 Invites for A class</span>
+                </>
+              )}
+            </span>
+          </div>
           <span className="text-[10px] font-mono text-slate-400">A class – I class</span>
         </div>
       )}
@@ -164,8 +238,18 @@ export const VipClassTaskTable: React.FC<VipClassTaskTableProps> = ({
         disabled={isClaiming}
         className="w-full py-3.5 sm:py-4 bg-[#0091ea] hover:bg-[#0081d6] active:scale-[0.99] disabled:opacity-75 text-white font-extrabold text-sm sm:text-base rounded-2xl shadow-[0_0_25px_rgba(0,145,234,0.45)] transition-all cursor-pointer flex items-center justify-center gap-2 border border-[#00e5ff]/50"
       >
-        <Gift className="w-4 h-4 text-white" />
-        <span>{isClaiming ? 'Processing Settlement...' : "Get last month's reward"}</span>
+        {!isAClassUnlocked ? (
+          <Lock className="w-4 h-4 text-amber-300" />
+        ) : (
+          <Gift className="w-4 h-4 text-white" />
+        )}
+        <span>
+          {isClaiming
+            ? 'Processing Settlement...'
+            : !isAClassUnlocked
+              ? "🔐 Get last month's reward"
+              : "Get last month's reward"}
+        </span>
       </button>
 
       {/* CLEAR STATEMENTS FOR LAST MONTH'S REWARD */}
@@ -198,31 +282,53 @@ export const VipClassTaskTable: React.FC<VipClassTaskTableProps> = ({
           className={`p-3 rounded-xl text-xs font-medium flex items-center gap-2.5 animate-fade-in ${
             claimMessage.type === 'success'
               ? 'bg-emerald-950/80 border border-emerald-500/50 text-emerald-300'
-              : 'bg-[#08132c] border border-[#0091ea]/50 text-sky-200'
+              : claimMessage.type === 'error'
+                ? 'bg-amber-950/80 border border-amber-500/50 text-amber-200'
+                : 'bg-[#08132c] border border-[#0091ea]/50 text-sky-200'
           }`}
         >
           {claimMessage.type === 'success' ? (
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          ) : claimMessage.type === 'error' ? (
+            <Lock className="w-4 h-4 text-amber-400 shrink-0" />
           ) : (
             <AlertCircle className="w-4 h-4 text-[#0091ea] shrink-0" />
           )}
-          <span>{claimMessage.text}</span>
+          <div className="flex-1 space-y-1.5">
+            <span className="block">{claimMessage.text}</span>
+            {!hasBoughtMachine && onNavigateToMarketplace && (
+              <button
+                type="button"
+                onClick={onNavigateToMarketplace}
+                className="px-3 py-1 bg-[#0091ea] hover:bg-[#0081d6] text-white font-bold rounded-lg text-[11px] cursor-pointer inline-block"
+              >
+                Buy a Machine Now
+              </button>
+            )}
+          </div>
         </div>
       )}
 
       {/* Progress Strip */}
       <div className="flex items-center justify-between px-3 py-2.5 bg-[#08132c] rounded-xl border border-[#0e2748] text-xs font-mono">
         <span className="text-slate-300">
-          Invited Customers: <strong className="text-white font-bold">{invitedCount}</strong>
+          Invited Customers: <strong className="text-white font-bold">{invitedCount}</strong> / 4 for A class
         </span>
-        <span className="text-sky-400 font-bold">
-          {nextClass
-            ? `Need ${Math.max(0, nextClass.requiredInvites - invitedCount)} more`
-            : 'All Classes Unlocked'}
+        <span className="text-amber-300 font-bold flex items-center gap-1">
+          {nextClass ? (
+            <>
+              <Lock className="w-3 h-3 text-amber-400" />
+              <span>
+                Need {Math.max(0, nextClass.requiredInvites - invitedCount)} more for {nextClass.name}
+              </span>
+            </>
+          ) : (
+            <span className="text-emerald-400">All Classes Unlocked</span>
+          )}
         </span>
       </div>
 
-      {/* TABLE FORMAT (MATCHING SCREENSHOT LAYOUT: Invite | Class | Reward) */}
+      {/* TABLE FORMAT (MATCHING SCREENSHOT LAYOUT: Invite | Class | Reward, with Lock 🔐 on locked classes) */}
       <div className="w-full overflow-hidden">
         {/* Table Header */}
         <div className="grid grid-cols-3 text-xs font-bold text-slate-400 py-2.5 border-b border-[#0e2748] tracking-wider uppercase">
@@ -234,18 +340,24 @@ export const VipClassTaskTable: React.FC<VipClassTaskTableProps> = ({
         {/* Table Rows: 4 to 10,000 */}
         <div className="divide-y divide-[#0e2748]/80">
           {VIP_CLASS_REQUIREMENTS.map((tier) => {
-            const isQualified = invitedCount >= tier.requiredInvites;
+            const isQualified = hasBoughtMachine && invitedCount >= tier.requiredInvites;
             const isNext = nextClass?.classLevel === tier.classLevel;
 
             return (
               <div
                 key={tier.classLevel}
-                className={`grid grid-cols-3 items-center py-3 sm:py-3.5 transition-colors ${
+                onClick={() => handleRowClick(tier)}
+                title={
+                  isQualified
+                    ? `${tier.name} Unlocked`
+                    : `Locked: Invite ${tier.requiredInvites.toLocaleString()} people who buy a machine to unlock ${tier.name}`
+                }
+                className={`grid grid-cols-3 items-center py-3 sm:py-3.5 transition-colors cursor-pointer ${
                   isQualified
                     ? 'bg-[#0091ea]/15 text-white font-semibold'
                     : isNext
-                    ? 'bg-[#08132c]/60 text-slate-200'
-                    : 'text-slate-300 hover:bg-[#08132c]/30'
+                      ? 'bg-[#08132c]/60 text-slate-200 hover:bg-[#08132c]'
+                      : 'text-slate-300 hover:bg-[#08132c]/40'
                 }`}
               >
                 {/* 1. Invited Count */}
@@ -253,28 +365,32 @@ export const VipClassTaskTable: React.FC<VipClassTaskTableProps> = ({
                   <span className={isQualified ? 'text-[#00e5ff]' : 'text-slate-200'}>
                     {tier.requiredInvites.toLocaleString()}
                   </span>
-                  {isQualified && (
+                  {isQualified ? (
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#10b981]" />
+                  ) : (
+                    <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                   )}
                 </div>
 
-                {/* 2. Class Name (A class, B class, etc.) */}
+                {/* 2. Class Name (A class, B class, etc.) with Lock 🔐 when locked */}
                 <div className="text-center">
                   <span
-                    className={`inline-block text-xs sm:text-sm font-black px-2.5 py-0.5 rounded-md font-mono ${
+                    className={`inline-flex items-center justify-center gap-1 text-xs sm:text-sm font-black px-2.5 py-0.5 rounded-md font-mono ${
                       isQualified
                         ? 'bg-[#0091ea] text-white shadow-sm border border-[#00e5ff]/50'
                         : isNext
-                        ? 'bg-[#082038] text-sky-300 border border-sky-500/40'
-                        : 'text-slate-300'
+                          ? 'bg-[#082038] text-sky-300 border border-sky-500/40'
+                          : 'bg-[#061226]/80 text-slate-300 border border-[#0e2748]'
                     }`}
                   >
-                    {tier.name}
+                    {!isQualified && <span className="text-[11px]">🔐</span>}
+                    <span>{tier.name}</span>
                   </span>
                 </div>
 
                 {/* 3. Reward Amount */}
-                <div className="text-right font-mono text-xs sm:text-sm font-extrabold pr-1">
+                <div className="text-right font-mono text-xs sm:text-sm font-extrabold pr-1 flex items-center justify-end gap-1">
+                  {!isQualified && <Lock className="w-3 h-3 text-amber-400/80 shrink-0 sm:hidden" />}
                   <span className={isQualified ? 'text-emerald-400' : 'text-white'}>
                     {formatReward(tier.rewardUGX)}
                   </span>
@@ -287,7 +403,9 @@ export const VipClassTaskTable: React.FC<VipClassTaskTableProps> = ({
 
       {/* Footer Details */}
       <div className="pt-2 border-t border-[#0e2748] text-[10px] text-slate-400 text-center leading-relaxed">
-        <span>Class Requirements monthly settlements calculate active invited members. Claim rewards via the button above.</span>
+        <span>
+          🔐 All classes are locked until you buy a machine and invite the required number of people (4 invited people to access A class).
+        </span>
       </div>
     </div>
   );

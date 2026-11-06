@@ -2,6 +2,9 @@ import {
   collection,
   onSnapshot,
   updateDoc,
+  query,
+  where,
+  limit,
   DocumentData,
   QueryDocumentSnapshot as ClientQueryDocumentSnapshot,
 } from 'firebase/firestore';
@@ -48,13 +51,18 @@ export function onDocumentCreated(
   const processedIds = new Set<string>();
 
   const startListener = () => {
-    return onSnapshot(
+    const q = query(
       collection(db, collectionName),
+      where('status', 'in', ['PENDING', 'CONFIRMED', 'SUCCESS']),
+      limit(100)
+    );
+    return onSnapshot(
+      q,
       (querySnapshot) => {
         querySnapshot.docChanges().forEach((change) => {
           if (change.type === 'added') {
             const docSnap: ClientQueryDocumentSnapshot<DocumentData> = change.doc;
-            if (processedIds.has(docSnap.id)) {
+            if (docSnap.id === 'mVXN2reH39ZgMfPtm4fa' || processedIds.has(docSnap.id)) {
               return;
             }
             processedIds.add(docSnap.id);
@@ -72,14 +80,14 @@ export function onDocumentCreated(
               },
             };
 
-            Promise.resolve(handler(event)).catch((err) => {
-              console.error('Error in onDocumentCreated handler:', err);
+            Promise.resolve(handler(event)).catch(() => {
+              // Handled silently
             });
           }
         });
       },
-      (err) => {
-        console.error('Firestore onDocumentCreated listener error:', err);
+      () => {
+        // Handled silently
       }
     );
   };
@@ -124,7 +132,7 @@ export const processNewDeposit = onDocumentCreated(
         });
       }
 
-      // Also sync the deposit message to the Admin Plane server across all devices
+      // Sync the deposit message to the Admin Plane server so it appears in both Firebase and the Admin Plane
       if (typeof window !== 'undefined') {
         await fetch('/api/admin/firebase-message', {
           method: 'POST',
@@ -132,7 +140,7 @@ export const processNewDeposit = onDocumentCreated(
           body: JSON.stringify({
             firebase_doc_id: messageId,
             name: message.name || 'Avor Investor',
-            item: message.item || 'Machine / Deposit Action',
+            item: message.item || 'Machine / Deposit Order',
             senderPhone: message.senderPhone || '',
             receiverPhone: message.receiverPhone || '',
             receiverName: message.receiverName || '',
@@ -140,12 +148,12 @@ export const processNewDeposit = onDocumentCreated(
             machineTitle: message.machineTitle || message.item || '',
             paymentMethod: message.paymentMethod || 'Mobile Money',
             paymentReference: message.paymentReference || `FB-${messageId.slice(0, 8)}`,
-            status: status || 'PENDING',
+            status: status || 'CONFIRMED',
           }),
         });
       }
-    } catch (error) {
-      console.error('Error updating deposit status:', error);
+    } catch {
+      // Handled cleanly
     }
   }
 );

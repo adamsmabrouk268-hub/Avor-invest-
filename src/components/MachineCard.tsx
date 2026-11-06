@@ -1,19 +1,33 @@
 import React from 'react';
 import { Machine, Currency } from '../types';
 import { CURRENCY_MAP } from '../data/defaultMachines';
-import { ArrowRight, Clock, Zap, Lock, Wallet, Sparkles, Cpu } from 'lucide-react';
+import { ArrowRight, Lock } from 'lucide-react';
 
 interface MachineCardProps {
   machine: Machine;
   currency: Currency;
   hasBoughtMachine?: boolean;
+  invitedCount?: number;
   onInvestClick: (machine: Machine) => void;
 }
+
+const DEFAULT_CLASS_INVITES: Record<string, number> = {
+  'A class': 4,
+  'B class': 9,
+  'C class': 20,
+  'D class': 35,
+  'E class': 70,
+  'F class': 120,
+  'G class': 300,
+  'H class': 5000,
+  'I class': 10000,
+};
 
 export const MachineCard: React.FC<MachineCardProps> = ({
   machine,
   currency,
   hasBoughtMachine = false,
+  invitedCount = 0,
   onInvestClick,
 }) => {
   const currencyInfo = CURRENCY_MAP[currency];
@@ -31,6 +45,9 @@ export const MachineCard: React.FC<MachineCardProps> = ({
     machine.category?.startsWith('AV_CLASS') ||
     ['A class', 'B class', 'C class', 'D class', 'E class', 'F class', 'G class', 'H class', 'I class'].includes(series);
 
+  const requiredInvites =
+    machine.required_referral_buyers || DEFAULT_CLASS_INVITES[series] || (isAvClass ? 4 : 0);
+
   const isAV1 =
     machine.category === 'AV1' ||
     series === 'AV1' ||
@@ -45,14 +62,14 @@ export const MachineCard: React.FC<MachineCardProps> = ({
     machine.max_units_per_user === 2;
 
   const walletOnly = isAV1 || isAV2;
-  const isLockedPlane = isAvClass && !hasBoughtMachine;
+  const isLockedPlane = isAvClass && (!hasBoughtMachine || invitedCount < requiredInvites);
 
   return (
     <div
       onClick={() => onInvestClick(machine)}
       className={`group relative rounded-2xl bg-[#030914]/95 hover:bg-[#050e1f] border ${
         isLockedPlane
-          ? 'border-rose-500/40 hover:border-rose-500/70 opacity-90'
+          ? 'border-rose-500/40 hover:border-rose-500/70 opacity-95'
           : 'border-[#00d2c4]/25 hover:border-[#00e5ff]/60'
       } shadow-[0_8px_25px_rgba(0,10,24,0.7)] hover:shadow-[0_12px_32px_rgba(0,145,234,0.3)] transition-all flex flex-row overflow-hidden cursor-pointer select-none active:scale-[0.99] min-h-[135px] sm:min-h-[145px]`}
     >
@@ -87,11 +104,11 @@ export const MachineCard: React.FC<MachineCardProps> = ({
           </span>
         </div>
 
-        {/* Policy Indicator (Max Unit: 1 / Max Unit: 2 / Mon-Mon / Locked Plane) */}
+        {/* Policy Indicator (Max Unit: 1 / Max Unit: 2 / Mon-Mon / Locked Class Requirement) */}
         <div className="absolute bottom-2 left-2 right-2">
           {isLockedPlane ? (
             <span className="text-[8px] font-mono font-extrabold px-1.5 py-0.5 rounded bg-rose-950/95 text-rose-300 border border-rose-500/60 block truncate">
-              🔒 Admin Confirm Required
+              🔒 Need {requiredInvites.toLocaleString()} Invites ({invitedCount}/{requiredInvites.toLocaleString()})
             </span>
           ) : isAV1 ? (
             <span className="text-[8px] font-mono font-extrabold px-1.5 py-0.5 rounded bg-amber-950/90 text-amber-300 border border-amber-500/40 block truncate">
@@ -103,7 +120,7 @@ export const MachineCard: React.FC<MachineCardProps> = ({
             </span>
           ) : isAvClass ? (
             <span className="text-[8px] font-mono font-extrabold px-1.5 py-0.5 rounded bg-emerald-950/90 text-emerald-300 border border-emerald-500/40 block truncate">
-              Mon–Mon ⚡
+              Unlocked ({requiredInvites.toLocaleString()}+ Invites) ⚡
             </span>
           ) : null}
         </div>
@@ -120,7 +137,7 @@ export const MachineCard: React.FC<MachineCardProps> = ({
             {isLockedPlane ? (
               <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-rose-950/90 text-rose-300 border border-rose-500/50 shrink-0 inline-flex items-center gap-1">
                 <Lock className="w-2.5 h-2.5" />
-                <span>Locked Plane</span>
+                <span>Need {requiredInvites.toLocaleString()} Invites</span>
               </span>
             ) : walletOnly ? (
               <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-950/90 text-sky-300 border border-sky-500/50 shrink-0 inline-block">
@@ -172,7 +189,7 @@ export const MachineCard: React.FC<MachineCardProps> = ({
             {isLockedPlane ? (
               <>
                 <Lock className="w-3 h-3 text-rose-400" />
-                <span>Locked</span>
+                <span>Locked ({requiredInvites.toLocaleString()} Invites)</span>
               </>
             ) : (
               <>

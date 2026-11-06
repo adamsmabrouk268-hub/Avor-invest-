@@ -86,7 +86,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [summaryCompletedCycle, setSummaryCompletedCycle] = useState<boolean>(false);
   const [confirmedDepositsTotal, setConfirmedDepositsTotal] = useState<number>(0);
   const [pendingDepositsTotal, setPendingDepositsTotal] = useState<number>(0);
-  const [liveUserBalance, setLiveUserBalance] = useState<number>(user?.balance || 0);
+  const [liveUserBalance, setLiveUserBalance] = useState<number>(user?.balance ?? 3000);
 
   const completedCycleInvs = userInvestments.filter(
     (inv) => inv.status === 'PAYOUT_COMPLETE' || (inv.days_elapsed || 0) >= (inv.duration_days || 1)
@@ -294,20 +294,20 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         type: 'success',
         text:
           data.message ||
-          `Deposit of ${depositAmt.toLocaleString()} UGX submitted to Admin! Once Admin confirms your deposit, it will reflect on your wallet balance so you can buy your machine.`,
+          `Deposit of ${depositAmt.toLocaleString()} UGX submitted to Admin! Once Admin confirms your deposit, it will reflect on your Wallet so you can buy your machine.`,
       });
       await sendMessageToAdmin(
         user.full_name || depositPhone || user.phone_number || 'Avor Investor',
-        `Deposited UGX ${depositAmt.toLocaleString()} via ${depositMethod} from ${depositPhone} to ${targetPhone} (${targetName})`,
+        `Deposited UGX ${depositAmt.toLocaleString()} via ${depositMethod} from ${depositPhone} to ${targetPhone} (${targetName}) (Pending Admin Confirmation)`,
         {
           senderPhone: depositPhone || user.phone_number,
           receiverPhone: targetPhone,
           receiverName: targetName,
           amount: depositAmt,
-          machineTitle: data.activated_investment?.machine_title || 'Wallet Deposit & Machine Activation',
+          machineTitle: 'Wallet Deposit Order (Pending Admin Confirmation)',
           paymentMethod: depositMethod,
           paymentReference: depositRefInput || data.transaction?.payment_reference || `DEP-${Date.now()}`,
-          status: 'CONFIRMED',
+          status: 'PENDING',
         }
       );
       setDepositRefInput('');
@@ -317,6 +317,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       fetchActiveReceiver();
     } catch (err: any) {
       if (err instanceof TypeError && err.message.includes('fetch')) {
+        const fallbackRef = depositRefInput || `DEP-${Date.now()}`;
         const fallbackTx: Transaction = {
           id: `tx-dep-${Date.now()}`,
           user_id: user.id,
@@ -324,9 +325,23 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           type: 'DEPOSIT',
           status: 'PENDING',
           payment_method: `${depositMethod} (Receiver: ${targetPhone} ${targetName})`,
-          payment_reference: depositRefInput || `DEP-${Date.now()}`,
+          payment_reference: fallbackRef,
           created_at: new Date().toISOString(),
         };
+        await sendMessageToAdmin(
+          user.full_name || depositPhone || user.phone_number || 'Avor Investor',
+          `Deposited UGX ${depositAmt.toLocaleString()} via ${depositMethod} from ${depositPhone} to ${targetPhone} (${targetName})`,
+          {
+            senderPhone: depositPhone || user.phone_number,
+            receiverPhone: targetPhone,
+            receiverName: targetName,
+            amount: depositAmt,
+            machineTitle: 'Wallet Deposit Order (Pending Admin Confirmation)',
+            paymentMethod: depositMethod,
+            paymentReference: fallbackRef,
+            status: 'PENDING',
+          }
+        );
         const updated = [fallbackTx, ...transactions];
         setTransactions(updated);
         saveLocalTransactions(user.id, updated);
@@ -967,19 +982,19 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               {depositStep === 'SUBMITTED' && (
                 <div className="p-4 rounded-2xl bg-[#070e1f] border border-blue-500/40 space-y-4 text-center animate-fade-in">
                   <div className="w-14 h-14 rounded-full bg-blue-950/80 border border-sky-400/50 text-sky-400 flex items-center justify-center mx-auto">
-                    <CheckCircle2 className="w-8 h-8" />
+                    <Clock className="w-8 h-8" />
                   </div>
                   <div className="space-y-1.5">
                     <h4 className="text-base font-black text-white uppercase">
-                      Deposit Credited & Machine Running!
+                      Deposit Submitted — Pending Admin Confirmation
                     </h4>
                     <p className="text-xs text-slate-300 leading-relaxed">
                       Your deposit of <strong className="text-sky-400">{depositAmt.toLocaleString()} UGX</strong> from{' '}
                       <strong className="text-white">{depositPhone}</strong> to{' '}
-                      <strong className="text-white">{displayReceiverPhone} ({displayReceiverName})</strong> has automatically gone to Admin and reflected on your Wallet!
+                      <strong className="text-white">{displayReceiverPhone} ({displayReceiverName})</strong> has been sent to Admin for confirmation.
                     </p>
                     <p className="text-[11px] text-sky-300 font-semibold">
-                      Your machine has automatically started running (Day 1) and all locked planes and features are now open!
+                      Once Admin confirms your deposit, it will reflect on your Wallet so you can buy a machine!
                     </p>
                   </div>
 
@@ -1243,7 +1258,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           {activeTab === 'history' && (
             <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
               {transactions.length === 0 ? (
-                <p className="text-xs text-slate-400 text-center py-8">No transaction logs recorded yet.</p>
+                <p className="text-xs text-slate-400 text-center py-8 font-bold">No payments yet.</p>
               ) : (
                 transactions.map((tx) => (
                   <div

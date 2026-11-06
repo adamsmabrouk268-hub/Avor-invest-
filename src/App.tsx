@@ -35,6 +35,7 @@ export default function App() {
 
   // User Portfolio Investments
   const [investments, setInvestments] = useState<Investment[]>([]);
+  const [invitedCount, setInvitedCount] = useState<number>(0);
 
   // Modal States
   const [selectedMachineToInvest, setSelectedMachineToInvest] = useState<Machine | null>(null);
@@ -104,11 +105,22 @@ export default function App() {
     setTimeout(() => setToast(null), 5000);
   };
 
-  // Unlock all locked planes and features once a user deposits money on the given number or has an active/completed machine
+  // Unlock WhatsApp, Company PDF, Invite, and Manage once the user buys a machine
   const hasBoughtMachine =
     investments.some((i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') ||
-    !!user?.has_bought_machine ||
-    (user?.balance || 0) > 0;
+    Boolean(user?.has_bought_machine);
+
+  const CLASS_INVITE_REQUIREMENTS: Record<string, number> = {
+    'A class': 4,
+    'B class': 9,
+    'C class': 20,
+    'D class': 35,
+    'E class': 70,
+    'F class': 120,
+    'G class': 300,
+    'H class': 5000,
+    'I class': 10000,
+  };
 
   const handleSelectMachineToBuy = (m: Machine) => {
     if (!user) {
@@ -123,12 +135,25 @@ export default function App() {
       !!m.category?.startsWith('AV_CLASS') ||
       ['A class', 'B class', 'C class', 'D class', 'E class', 'F class', 'G class', 'H class', 'I class'].includes(series);
 
-    if (isClosedOrLockedPlane && !hasBoughtMachine) {
-      showNotification(
-        `🔒 Access Denied: "${m.title}" is in a closed/locked plane. You cannot access closed or locked planes until Admin confirms your payment and your machine starts running.`,
-        'error'
+    if (isClosedOrLockedPlane) {
+      const requiredInvites = Number(
+        m.required_referral_buyers || CLASS_INVITE_REQUIREMENTS[series] || 4
       );
-      return;
+      if (!hasBoughtMachine) {
+        showNotification(
+          `🔒 Class Locked: Buy a machine first and invite ${requiredInvites.toLocaleString()} people to unlock ${series || m.title} (Currently ${invitedCount}/${requiredInvites.toLocaleString()} invited).`,
+          'error'
+        );
+        return;
+      }
+      if (invitedCount < requiredInvites) {
+        const remaining = requiredInvites - invitedCount;
+        showNotification(
+          `🔒 ${series || m.title} Locked: You must invite ${requiredInvites.toLocaleString()} people to access ${series || m.title} (${invitedCount}/${requiredInvites.toLocaleString()} invited — invite ${remaining.toLocaleString()} more).`,
+          'error'
+        );
+        return;
+      }
     }
 
     setSelectedMachineToInvest(m);
@@ -168,13 +193,21 @@ export default function App() {
   const fetchUserData = async () => {
     if (!user) return;
     try {
-      const res = await fetch(`/api/user/${encodeURIComponent(user.id)}`);
+      const [res, sumRes] = await Promise.all([
+        fetch(`/api/user/${encodeURIComponent(user.id)}`),
+        fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}`),
+      ]);
       const ct = res.headers.get('content-type') || '';
       if (res.ok && ct.includes('application/json')) {
         const data = await res.json();
         if (data && data.id) {
-          syncUserToStorage(data);
+          syncUserToStorage({ ...user, ...data });
         }
+      }
+      const sumCt = sumRes.headers.get('content-type') || '';
+      if (sumRes.ok && sumCt.includes('application/json')) {
+        const sumData = await sumRes.json();
+        setInvitedCount(Number(sumData.active_buyer_referrals ?? sumData.invited_people_count ?? 0));
       }
     } catch {
       // Keep existing user session if backend is momentarily unreachable
@@ -289,7 +322,7 @@ export default function App() {
                 if (mode === 'login') {
                   showNotification(`Welcome back to Avor invest, ${loggedInUser.full_name}!`);
                 } else {
-                  showNotification(`Welcome to Avor invest, ${loggedInUser.full_name}!`);
+                  showNotification(`Welcome to Avor invest, ${loggedInUser.full_name}! You received a 3,000 UGX registration reward on your Balance.`);
                 }
                 setActiveTab('home');
               }}
@@ -341,6 +374,7 @@ export default function App() {
                     viewMode={marketplaceViewMode}
                     onViewModeChange={setMarketplaceViewMode}
                     hasBoughtMachine={hasBoughtMachine}
+                    invitedCount={invitedCount}
                     onLockedPlaneNotify={(msg) => showNotification(msg, 'error')}
                   />
 
@@ -349,6 +383,7 @@ export default function App() {
                       machines={filteredMachines}
                       currency={currency}
                       hasBoughtMachine={hasBoughtMachine}
+                      invitedCount={invitedCount}
                       onInvestClick={(m) => handleSelectMachineToBuy(m)}
                     />
                   ) : filteredMachines.length === 0 ? (
@@ -376,6 +411,7 @@ export default function App() {
                           machine={machine}
                           currency={currency}
                           hasBoughtMachine={hasBoughtMachine}
+                          invitedCount={invitedCount}
                           onInvestClick={(m) => handleSelectMachineToBuy(m)}
                         />
                       ))}

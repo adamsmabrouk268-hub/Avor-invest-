@@ -28,6 +28,8 @@ export interface User {
   kyc_status: 'PENDING' | 'VERIFIED' | 'REJECTED';
   role: 'INVESTOR' | 'ADMIN';
   balance: number;
+  wallet_balance?: number;
+  available_wallet?: number;
   referral_code: string;
   referred_by?: string;
   created_at: string;

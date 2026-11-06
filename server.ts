@@ -67,26 +67,70 @@ if (!fs.existsSync(REGISTRATION_EVENTS_FILE)) {
   }
 }
 
+const DELETED_DEMO_IDS = new Set([
+  'mVXN2reH39ZgMfPtm4fa',
+  '9lB4x8f3sfySWbccJpQs',
+  'DEP-032838-916837',
+  'IBE1kSI80LLSZEWXTZPC',
+  'QUaVEnnLMICjrqqCvJ7m',
+  'QsJeM5oMFY2L8IiawzNv',
+  'RVSOi02GrYWTRYxoevPT',
+  'Tk9PE6WUE12PJs34qoBv',
+  'c5TMqgzjEWNNjilAGubx',
+  'r8W9OClO23IN2wcwEspw',
+  'sdX7pGtep1DtSMe6izj5',
+  'w8UmlixTw9p6WqJi9DVK',
+  'xz6gy3HVphWxCjuC71an',
+  'DEP-552548-170060',
+  'DEP-552548-726100',
+  'DEP-552548-980588',
+  'DEP-552548-271662',
+  'DEP-552548-737262',
+  'DEP-552548-610514',
+  'DEP-552548-137425',
+  'inv-1793875178533',
+  'inv-1793875128696',
+  'DEP-552548-879568',
+  'DEP-552548-926486',
+]);
+
+function isDemoRecord(rec: any): boolean {
+  if (!rec) return false;
+  if (rec.firebase_doc_id && DELETED_DEMO_IDS.has(rec.firebase_doc_id)) return true;
+  if (rec.payment_reference && DELETED_DEMO_IDS.has(rec.payment_reference)) return true;
+  if (rec.id && Array.from(DELETED_DEMO_IDS).some((d) => String(rec.id).includes(d))) return true;
+  if (rec.customer_phone === '+256750552548' || rec.user_phone === '+256750552548') return true;
+  return false;
+}
+
 function loadAppStateFromDisk() {
   try {
     if (fs.existsSync(TRANSACTIONS_FILE)) {
       const loadedTx = JSON.parse(fs.readFileSync(TRANSACTIONS_FILE, 'utf-8'));
       if (Array.isArray(loadedTx)) {
-        transactions.splice(0, transactions.length, ...loadedTx);
+        const cleanTx = loadedTx.filter((t) => !isDemoRecord(t));
+        transactions.splice(0, transactions.length, ...cleanTx);
       }
     }
     if (fs.existsSync(INVESTMENTS_FILE)) {
       const loadedInv = JSON.parse(fs.readFileSync(INVESTMENTS_FILE, 'utf-8'));
       if (Array.isArray(loadedInv)) {
-        investments.splice(0, investments.length, ...loadedInv);
+        const cleanInv = loadedInv.filter(
+          (inv) =>
+            !isDemoRecord(inv) &&
+            !transactions.every((t) => t.investment_id !== inv.id)
+        );
+        investments.splice(0, investments.length, ...cleanInv);
       }
     }
     if (fs.existsSync(NOTIFICATIONS_FILE)) {
       const loadedNotif = JSON.parse(fs.readFileSync(NOTIFICATIONS_FILE, 'utf-8'));
       if (Array.isArray(loadedNotif)) {
-        notifications.splice(0, notifications.length, ...loadedNotif);
+        const cleanNotif = loadedNotif.filter((n) => !isDemoRecord(n));
+        notifications.splice(0, notifications.length, ...cleanNotif);
       }
     }
+    saveAppStateToDisk();
   } catch (err) {
     console.error('Error loading app state from disk:', err);
   }
@@ -256,7 +300,9 @@ function findOrRestoreUser(userId?: string, body: any = {}): (User & { password_
       country: 'Uganda',
       kyc_status: 'VERIFIED',
       role: 'INVESTOR',
-      balance: 0,
+      balance: 3000,
+      wallet_balance: 0,
+      available_wallet: 0,
       referral_code: `AVOR-${Math.floor(1000 + Math.random() * 9000)}`,
       created_at: new Date().toISOString(),
       password_hash: 'restored',
@@ -286,6 +332,8 @@ function doesTxBelongToUser(t: Transaction, user?: User, explicitUserId?: string
   );
 }
 
+const REGISTRATION_REWARD_UGX = 3000;
+
 function syncUserConfirmedFinances(user: User & { password_hash?: string }, explicitUserId?: string) {
   let userDeposits = transactions.filter((t) => doesTxBelongToUser(t, user, explicitUserId) && t.type === 'DEPOSIT');
   let confirmedDeposits = userDeposits
@@ -312,6 +360,17 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
   const userPhoneTail = (user.phone_number || user.phoneNumber || '').replace(/\D/g, '').slice(-9);
+  const userConfirmedInvestments = investments.filter((inv) => {
+    const sameUser =
+      inv.user_id === user.id ||
+      (explicitUserId && inv.user_id === explicitUserId) ||
+      (userPhoneTail &&
+        userPhoneTail.length >= 7 &&
+        ((inv as any).customer_phone || '').replace(/\D/g, '').slice(-9) === userPhoneTail);
+    return sameUser && (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE');
+  });
+  const hasBoughtMachine = userConfirmedInvestments.length > 0;
+
   const deductedInvestments = investments
     .filter((inv) => {
       const sameUser =
@@ -328,41 +387,15 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     })
     .reduce((sum, inv) => sum + Number(inv.amount_invested || 0), 0);
 
-  let computedBalance = Math.max(
+  // Deposited money (once confirmed by Admin) reflects on the Wallet ONLY:
+  const computedWallet = Math.max(0, confirmedDeposits - deductedInvestments);
+  // Money on the Balance is 3,000 UGX got as a reward after registration (+ earned yields/rewards - withdrawals):
+  const computedBalance = Math.max(
     0,
-    confirmedDeposits + userYieldsAndBonuses - deductedInvestments - deductedWithdrawals
+    REGISTRATION_REWARD_UGX + userYieldsAndBonuses - deductedWithdrawals
   );
 
-  // GUARANTEE: Approved money in user.balance must NEVER disappear if not deleted by Admin.
-  // If user.balance on disk is higher than computedBalance (e.g., approved credit without a matching tx),
-  // preserve it and create a permanent confirmed deposit record so it never disappears.
-  const currentSavedBalance = Number(user.balance || 0);
-  if (currentSavedBalance > computedBalance && user.id !== 'usr-admin-owner') {
-    const missingApprovedAmt = currentSavedBalance - computedBalance;
-    const preservedTx: Transaction = {
-      id: `tx-dep-approved-${user.id}-${Date.now()}`,
-      user_id: user.id,
-      amount: missingApprovedAmt,
-      type: 'DEPOSIT',
-      status: 'SUCCESS',
-      payment_method: 'Admin Approved Wallet Deposit',
-      payment_reference: `APPROVED-${Date.now().toString().slice(-6)}`,
-      created_at: new Date().toISOString(),
-    };
-    (preservedTx as any).wallet_credited = true;
-    (preservedTx as any).confirmed_at = new Date().toISOString();
-    (preservedTx as any).customer_name = user.full_name || user.name || 'Investor';
-    (preservedTx as any).customer_phone = user.phone_number || user.phoneNumber || '';
-    (preservedTx as any).user_phone = user.phone_number || user.phoneNumber || '';
-    transactions.unshift(preservedTx);
-    saveAppStateToDisk();
-
-    userDeposits = transactions.filter((t) => doesTxBelongToUser(t, user, explicitUserId) && t.type === 'DEPOSIT');
-    confirmedDeposits += missingApprovedAmt;
-    computedBalance = currentSavedBalance;
-  }
-
-  let balanceChanged = false;
+  let stateChanged = false;
   for (const u of users.values()) {
     if (u.id === 'usr-admin-owner') continue;
     const uPhoneTail = (u.phone_number || u.phoneNumber || '').replace(/\D/g, '').slice(-9);
@@ -371,17 +404,33 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
       (explicitUserId && u.id === explicitUserId) ||
       (userPhoneTail && userPhoneTail.length >= 7 && uPhoneTail === userPhoneTail)
     ) {
-      if (u.balance !== computedBalance) {
+      if (
+        u.balance !== computedBalance ||
+        u.wallet_balance !== confirmedDeposits ||
+        u.available_wallet !== computedWallet ||
+        u.has_bought_machine !== hasBoughtMachine
+      ) {
         u.balance = computedBalance;
-        balanceChanged = true;
+        u.wallet_balance = confirmedDeposits;
+        u.available_wallet = computedWallet;
+        u.has_bought_machine = hasBoughtMachine;
+        stateChanged = true;
       }
     }
   }
-  if (user.balance !== computedBalance) {
+  if (
+    user.balance !== computedBalance ||
+    user.wallet_balance !== confirmedDeposits ||
+    user.available_wallet !== computedWallet ||
+    user.has_bought_machine !== hasBoughtMachine
+  ) {
     user.balance = computedBalance;
-    balanceChanged = true;
+    user.wallet_balance = confirmedDeposits;
+    user.available_wallet = computedWallet;
+    user.has_bought_machine = hasBoughtMachine;
+    stateChanged = true;
   }
-  if (balanceChanged && user.id !== 'usr-admin-owner') {
+  if (stateChanged && user.id !== 'usr-admin-owner') {
     saveRegisteredUserToDisk(user as User & { password_hash: string });
   }
 
@@ -391,6 +440,8 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     pendingDeposits,
     userWithdrawals,
     computedBalance,
+    computedWallet,
+    hasBoughtMachine,
   };
 }
 
@@ -644,26 +695,8 @@ function notifyAllAdmins(
   saveAppStateToDisk();
 }
 
-// Helper to seed a demo default user (0 balance)
+// No demo user seeded — system starts with clean accounts and 0 demo payments
 const demoUserId = 'usr-demo-123';
-const demoUser: User & { password_hash: string } = {
-  id: demoUserId,
-  full_name: 'Alex Johnson',
-  email: 'investor@avorinvest.com',
-  phone_number: '+256700123456',
-  age: 28,
-  country: 'Uganda',
-  kyc_status: 'VERIFIED',
-  role: 'INVESTOR',
-  balance: 0,
-  referral_code: 'AVOR-7789',
-  created_at: new Date().toISOString(),
-  password_hash: 'demo123',
-};
-users.set(demoUser.id, demoUser);
-users.set(demoUser.email, demoUser);
-users.set(demoUser.phone_number, demoUser);
-users.set('usr_demo', demoUser);
 
 // Seed Owner / Admin User (Secure owner credentials, 0 balance)
 const ADMIN_MASTER_PASSWORD = 'adams@268#';
@@ -1104,15 +1137,15 @@ async function startServer() {
   // API ENDPOINTS
   // ==========================================
 
-  // 1. Platform Global Stats Overview
+  // 1. Platform Global Stats Overview (No demo payments — starts at 0)
   app.get('/api/stats/overview', (req, res) => {
-    const totalInvested = investments.reduce((sum, inv) => sum + inv.amount_invested, 0) + 148500000;
-    const totalPayouts = investments.reduce((sum, inv) => sum + inv.total_claimed, 0) + 212000000;
+    const totalInvested = investments.reduce((sum, inv) => sum + inv.amount_invested, 0);
+    const totalPayouts = investments.reduce((sum, inv) => sum + inv.total_claimed, 0);
     res.json({
       total_invested: totalInvested,
       total_payouts_delivered: totalPayouts,
       active_machines_count: machines.length,
-      total_investors_count: users.size + 1420,
+      total_investors_count: users.size,
       system_status: 'ONLINE_SECURE',
     });
   });
@@ -1194,7 +1227,8 @@ async function startServer() {
 
       const userEmail = rawEmail || `${cleanDigits || Date.now()}@avorinvest.com`;
       const userName = (name || full_name || `Investor ${cleanDigits ? cleanDigits.slice(-4) : 'Verified'}`).toString().trim();
-      const initialBalance = 0;
+      // Money on the balance is 3,000 UGX got as a reward after registration (Wallet starts at 0 until Admin confirms a deposit)
+      const initialBalance = REGISTRATION_REWARD_UGX;
       const refCodeUsed = (referral_code || referralCode || inviteCode || '').toString().trim();
       const userCountry = (country || 'Uganda').toString().trim();
       const userCountryCode = (country_code || countryCode || '+256').toString().trim();
@@ -1222,6 +1256,8 @@ async function startServer() {
         kyc_status: 'VERIFIED',
         role: 'INVESTOR',
         balance: initialBalance,
+        wallet_balance: 0,
+        available_wallet: 0,
         referral_code: `AVOR-${Math.floor(1000 + Math.random() * 9000)}`,
         referred_by: refCodeUsed || undefined,
         created_at: new Date().toISOString(),
@@ -1249,6 +1285,13 @@ async function startServer() {
       // 2. Persistent file storage to data/registered_users.json
       saveRegisteredUserToDisk(newUser);
 
+      pushNotification(
+        newUser.id,
+        '🎁 3,000 UGX Registration Reward Credited!',
+        'Welcome to Avor Invest! You have received 3,000 UGX as a reward after registration on your Balance. Deposit money and have it confirmed by Admin to fund your Wallet and buy machines.',
+        'YIELD'
+      );
+
       // 3. Persistent audit log to data/registration_events.json
       saveRegistrationEventLog({
         eventId: `ev-reg-${Date.now()}`,
@@ -1268,7 +1311,7 @@ async function startServer() {
             {
               phoneNumber: newUser.phoneNumber,
               name: newUser.name,
-              balance: 0,
+              balance: REGISTRATION_REWARD_UGX,
               password: newUser.password,
               age: newUser.age,
               country: newUser.country,
@@ -1706,51 +1749,46 @@ async function startServer() {
 
     const totalCost = machine.total_cost * units;
 
-    // Sync confirmed finances before checking balance or lock status
-    const finSummary = syncUserConfirmedFinances(user, user_id);
+    // Sync confirmed finances before checking wallet balance or lock status
+    const { computedWallet } = syncUserConfirmedFinances(user, user_id);
     const userConfirmedInvs = investments.filter(
       (i) => i.user_id === user.id && (i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE')
     );
-    const hasUnlockedAllPlanes =
-      userConfirmedInvs.length > 0 ||
-      finSummary.confirmedDeposits > 0 ||
-      user.balance > 0 ||
-      !!user.has_bought_machine;
+    const hasBoughtAnyMachine = userConfirmedInvs.length > 0;
 
-    // Verify locked plane access: once someone deposits money on the given number, all locked things open automatically
+    // Verify Class Requirements lock: To access A class (4 invites), B class (9 invites), etc., user must have bought a machine AND invited the required number of active buyers
     if ((machine.is_av_class || (machine.required_referral_buyers && machine.required_referral_buyers > 0)) && user.role !== 'ADMIN') {
-      if (!hasUnlockedAllPlanes) {
+      const requiredInvites = machine.required_referral_buyers || 4;
+      const classLabel = machine.series_tag || machine.title || 'A class';
+
+      if (!hasBoughtAnyMachine) {
         return res.status(400).json({
-          error: `Access Denied: ${machine.title} is a locked plane. Deposit money on the given number first so your machine starts running and all locked planes open.`,
+          error: `🔒 ${classLabel} is Locked! You must first buy an AV1 or AV2 machine and invite ${requiredInvites.toLocaleString()} people who buy a machine to access ${classLabel}.`,
+        });
+      }
+
+      const userRefCode = (user.referral_code || '').toLowerCase();
+      const seenReferredIds = new Set<string>();
+      const allReferred: User[] = [];
+      for (const u of users.values()) {
+        if (u.id && u.id !== user.id && !seenReferredIds.has(u.id) && (u.referred_by || '').toLowerCase() === userRefCode) {
+          seenReferredIds.add(u.id);
+          allReferred.push(u);
+        }
+      }
+      const activeBuyers = allReferred.filter((m) =>
+        investments.some((i) => i.user_id === m.id && (i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE'))
+      );
+
+      if (activeBuyers.length < requiredInvites) {
+        return res.status(400).json({
+          error: `🔒 ${classLabel} is Locked! To access ${classLabel}, you must have invited ${requiredInvites.toLocaleString()} people who bought a machine (You currently have ${activeBuyers.length}/${requiredInvites.toLocaleString()} invited people).`,
         });
       }
     }
 
-    // If this exact machine was already auto-started by the user's recent deposit, return success immediately
-    const recentAutoStartedInv = investments.find(
-      (i) =>
-        i.user_id === user.id &&
-        i.machine_id === machine.id &&
-        i.status === 'ACTIVE' &&
-        !i.wallet_deducted
-    );
-    if (recentAutoStartedInv && user.balance < totalCost) {
-      recentAutoStartedInv.wallet_deducted = true;
-      syncUserConfirmedFinances(user, user_id);
-      saveRegisteredUserToDisk(user);
-      saveAppStateToDisk();
-      return res.status(200).json({
-        message: `Your ${machine.title} is ACTIVE and running (Day ${recentAutoStartedInv.days_elapsed || 1} of ${machine.duration_days})! All locked planes are open.`,
-        investment: recentAutoStartedInv,
-        user_balance: user.balance,
-        has_bought_machine: true,
-        status: 'ACTIVE',
-        claimed_tier_rewards: (user as any).claimed_tier_rewards || [],
-      });
-    }
-
-    // Every buyer must deposit money on their wallet (via MTN Mobile Money or Airtel Money)
-    if (user.balance < totalCost) {
+    // Every buyer must use Admin-confirmed deposited money on their Wallet (NOT the 3,000 UGX registration reward on Balance)
+    if (computedWallet < totalCost) {
       const pendingDeposits = transactions.filter(
         (t) => doesTxBelongToUser(t, user, user_id) && t.type === 'DEPOSIT' && t.status === 'PENDING'
       );
@@ -1758,20 +1796,24 @@ async function startServer() {
 
       pushNotification(
         user.id,
-        '⚠️ Wallet Balance Not Enough',
-        `Wallet balance is not enough to access machine (${machine.title}). Required: ${totalCost.toLocaleString()} UGX • Your Wallet Balance: ${user.balance.toLocaleString()} UGX. Please deposit money on the given number first.`,
+        '⚠️ Confirmed Wallet Balance Not Enough',
+        `Your confirmed Wallet balance is not enough to buy ${machine.title}. Required: ${totalCost.toLocaleString()} UGX • Confirmed Wallet: ${computedWallet.toLocaleString()} UGX.${
+          pendingTotal > 0 ? ` You have ${pendingTotal.toLocaleString()} UGX pending Admin confirmation.` : ' Please deposit money and wait for Admin confirmation.'
+        }`,
         'PAYMENT'
       );
 
       return res.status(400).json({
-        error: `Wallet balance is not enough to access machine (${totalCost.toLocaleString()} UGX required • Available Wallet Balance: ${user.balance.toLocaleString()} UGX). Please deposit money on the given number via MTN Mobile Money or Airtel Money.`,
-        requires_deposit: true,
+        error:
+          pendingTotal > 0
+            ? `Your deposit of ${pendingTotal.toLocaleString()} UGX is awaiting Admin confirmation. Once Admin confirms your deposit, it will reflect on your Wallet so you can buy ${machine.title}.`
+            : `Confirmed Wallet balance is not enough to buy ${machine.title} (${totalCost.toLocaleString()} UGX required • Available Wallet: ${computedWallet.toLocaleString()} UGX). Please deposit money via MTN Mobile Money or Airtel Money and wait for Admin confirmation.`,
+        requires_deposit: pendingTotal === 0,
         requires_deposit_approval: pendingTotal > 0,
       });
     }
 
-    // Deduct from the user's wallet balance
-    user.balance -= totalCost;
+    // Mark user as having bought a machine (wallet deduction is tracked via wallet_deducted: true on the investment)
     user.has_bought_machine = true;
     saveRegisteredUserToDisk(user);
 
@@ -1880,8 +1922,33 @@ async function startServer() {
     notifyAllAdmins(
       `✅ Machine Purchased & Activated: ${newInvestment.machine_title}`,
       `Customer ${user.full_name || user.id} (${phone_number || user.phone_number || 'No Phone'}) purchased ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} using their Admin-confirmed wallet balance (Ref: ${refCode}).`,
-      'PAYMENT'
+      'PAYMENT',
+      {
+        transaction_id: newTx.id,
+        customer_name: user.full_name || user.name || user.id,
+        customer_phone: phone_number || user.phone_number || '',
+        amount: totalCost,
+        payment_method: `Wallet (${selectedChannel})`,
+        receiver_phone: RECEIVER_PHONE,
+        receiver_name: RECEIVER_NAME,
+        payment_reference: refCode,
+        machine_title: newInvestment.machine_title,
+        order_status: 'CONFIRMED',
+      }
     );
+    void ensureOrderSavedInFirestore({
+      docId: refCode.replace(/[^a-zA-Z0-9_-]/g, ''),
+      name: user.full_name || user.name || phone_number || user.phone_number || 'Avor Investor',
+      item: `Bought ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} using Wallet Balance (${phone_number || user.phone_number || 'N/A'})`,
+      senderPhone: phone_number || user.phone_number || '',
+      receiverPhone: RECEIVER_PHONE,
+      receiverName: RECEIVER_NAME,
+      amount: totalCost,
+      machineTitle: newInvestment.machine_title,
+      paymentMethod: `Wallet (${selectedChannel})`,
+      paymentReference: refCode,
+      status: 'CONFIRMED',
+    });
     saveAppStateToDisk();
 
     res.status(201).json({
@@ -2045,11 +2112,13 @@ async function startServer() {
       } catch (e) {}
     }
 
-    // Safe fallback if user is not in database: return 200 with 0 balance so UI never crashes
+    // Safe fallback if user is not in database: return 200 with 3000 registration reward on balance and 0 on wallet
     if (!user) {
       return res.json({
         user_id: userId,
-        balance: 0,
+        balance: REGISTRATION_REWARD_UGX,
+        wallet_balance: 0,
+        available_wallet: 0,
         deposit_details: {
           total_deposited: 0,
           pending_deposits: 0,
@@ -2060,7 +2129,7 @@ async function startServer() {
           total_withdrawn: 0,
           pending_withdrawals: 0,
           withdrawals_count: 0,
-          withdrawable_balance: 0,
+          withdrawable_balance: REGISTRATION_REWARD_UGX,
           can_withdraw: false,
           min_withdrawal: 3000,
           recent_withdrawals: [],
@@ -2083,12 +2152,13 @@ async function startServer() {
       });
     }
 
-    // 1. Sync & compute Deposit details (reflects across Homepage Deposit Details, AccountView Wallet, WalletModal, InvestModal, etc.)
+    // 1. Sync & compute Deposit details (confirmed deposits reflect on Wallet ONLY; Balance has 3,000 registration reward + yields)
     const {
       userDeposits,
       confirmedDeposits: totalDeposited,
       pendingDeposits,
       userWithdrawals,
+      computedWallet,
     } = syncUserConfirmedFinances(user, userId);
 
     // 2. Withdraw details
@@ -2195,16 +2265,12 @@ async function startServer() {
       }
     });
 
-    // Check if current user has an active/completed machine or has deposited money on the given number
+    // Check if current user has an active/completed machine (strictly false when 0 machines bought, true when user buys a machine)
     const userInvestments = investments.filter((i) => i.user_id === userId || doesTxBelongToUser({ user_id: i.user_id } as any, user, userId));
     const confirmedUserInvestments = userInvestments.filter(
       (i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE'
     );
-    const hasBoughtMachine =
-      confirmedUserInvestments.length > 0 ||
-      totalDeposited > 0 ||
-      user.balance > 0 ||
-      !!user.has_bought_machine;
+    const hasBoughtMachine = confirmedUserInvestments.length > 0;
     user.has_bought_machine = hasBoughtMachine;
     const inviterOwnedMachineIds = new Set(confirmedUserInvestments.map((i) => i.machine_id));
     const inviterOwnedMachineTitles = new Set(
@@ -2284,8 +2350,12 @@ async function startServer() {
     res.json({
       user_id: user.id,
       balance: user.balance,
+      wallet_balance: totalDeposited,
+      available_wallet: computedWallet,
       deposit_details: {
         total_deposited: totalDeposited,
+        wallet_balance: totalDeposited,
+        available_wallet: computedWallet,
         pending_deposits: pendingDeposits,
         deposits_count: userDeposits.length,
         confirmed_deposits_count: userDeposits.filter((t) => t.status === 'SUCCESS' || t.status === 'CONFIRMED').length,
@@ -3126,23 +3196,9 @@ async function startServer() {
     return activatedInv;
   };
 
-  // Reconcile any previously submitted PENDING deposits on server startup so they are confirmed & running
-  for (const existingPendingTx of transactions.filter((t) => t.type === 'DEPOSIT' && t.status === 'PENDING')) {
-    const u = findOrRestoreUser(existingPendingTx.user_id, {
-      user_id: existingPendingTx.user_id,
-      phone_number: (existingPendingTx as any).user_phone || (existingPendingTx as any).customer_phone,
-    });
-    processAutomaticDepositAndStartMachine(
-      u,
-      existingPendingTx,
-      (existingPendingTx as any).machine_id,
-      existingPendingTx.machine_title
-    );
-  }
-
   // =========================================================================
   // MoMo API GATEWAY INTEGRATION MVP ENDPOINT (Per Technical Spec)
-  // Flow: Customer App -> Deposit on Given Number -> Automatically Goes to Admin, Reflects on Wallet, Starts Machine & Unlocks All Planes
+  // Flow: Customer App -> Deposit on Given Number -> Submitted as PENDING -> Must be confirmed by Admin to reflect on Wallet
   // =========================================================================
   app.post('/api/deposit', async (req, res) => {
     const { userId, amount, userPhone, user_id, phone_number, machine_id, machine_title } = req.body;
@@ -3183,16 +3239,15 @@ async function startServer() {
         user_id: user ? user.id : finalUserId,
         amount: finalAmount,
         type: 'DEPOSIT',
-        status: 'SUCCESS',
+        status: 'PENDING',
         payment_method: `${network} Mobile Money (From: ${finalPhone} -> To: ${receivingAccount.phone_number} ${receivingAccount.account_name})`,
         payment_reference: transactionIdFromApi,
         machine_title: machine_title || undefined,
         created_at: new Date().toISOString(),
       };
-      (newTx as any).wallet_credited = true;
+      (newTx as any).wallet_credited = false;
       (newTx as any).receiver_credited = false;
-      (newTx as any).approved_permanent = true;
-      (newTx as any).confirmed_at = new Date().toISOString();
+      (newTx as any).approved_permanent = false;
       (newTx as any).receiver_id = receivingAccount.id;
       (newTx as any).receiver_phone = receivingAccount.phone_number;
       (newTx as any).receiver_name = receivingAccount.account_name;
@@ -3202,20 +3257,19 @@ async function startServer() {
       (newTx as any).machine_id = machine_id || undefined;
       transactions.unshift(newTx);
 
-      const startedInv = processAutomaticDepositAndStartMachine(user, newTx, machine_id, machine_title);
-
       if (user) {
+        syncUserConfirmedFinances(user, user.id);
         pushNotification(
           user.id,
-          `✅ Deposit Credited (${finalAmount.toLocaleString()} UGX) & Machine Running!`,
-          `Your deposit of ${finalAmount.toLocaleString()} UGX to ${receivingAccount.account_name} (${receivingAccount.phone_number}) has automatically gone to Admin, reflected on your Wallet, started ${startedInv?.machine_title || 'your machine'} (Day 1), and unlocked all locked planes!`,
+          `⏳ Deposit Submitted (${finalAmount.toLocaleString()} UGX) — Awaiting Admin Confirmation`,
+          `Your deposit of ${finalAmount.toLocaleString()} UGX to ${receivingAccount.account_name} (${receivingAccount.phone_number}) has been submitted to Admin. Once Admin confirms your deposit, it will reflect on your Wallet!`,
           'PAYMENT'
         );
       }
 
       notifyAllAdmins(
-        `✅ Deposit Received & Credited to Admin: UGX ${finalAmount.toLocaleString()}`,
-        `Customer ${user?.full_name || finalUserId} (Sender Phone: ${finalPhone}) deposited UGX ${finalAmount.toLocaleString()} via ${network} Mobile Money to Receiver ${receivingAccount.phone_number} (${receivingAccount.account_name}). Automatically credited to Admin & customer wallet, and started ${startedInv?.machine_title || 'machine'}. Ref: ${transactionIdFromApi}.`,
+        `🔔 New Deposit Pending Confirmation: UGX ${finalAmount.toLocaleString()}`,
+        `Customer ${user?.full_name || finalUserId} (Sender Phone: ${finalPhone}) submitted a deposit of UGX ${finalAmount.toLocaleString()} via ${network} Mobile Money to Receiver ${receivingAccount.phone_number} (${receivingAccount.account_name}). Please confirm in Admin Console so it reflects on the customer's Wallet. Ref: ${transactionIdFromApi}.`,
         'PAYMENT',
         {
           transaction_id: newTx.id,
@@ -3226,19 +3280,35 @@ async function startServer() {
           receiver_phone: receivingAccount.phone_number,
           receiver_name: receivingAccount.account_name,
           payment_reference: transactionIdFromApi,
-          machine_title: startedInv?.machine_title || machine_title || 'Wallet Deposit Order (Buy Machine)',
-          order_status: 'CONFIRMED',
+          machine_title: machine_title || 'Wallet Deposit Order (Pending Admin Confirmation)',
+          order_status: 'PENDING',
         }
       );
 
+      void ensureOrderSavedInFirestore({
+        docId: transactionIdFromApi.replace(/[^a-zA-Z0-9_-]/g, ''),
+        name: user?.full_name || finalPhone || finalUserId || 'Avor Investor',
+        item: `Deposited UGX ${finalAmount.toLocaleString()} via ${network} Mobile Money from ${finalPhone} to ${receivingAccount.phone_number} (${receivingAccount.account_name})${machine_title ? ` • ${machine_title}` : ''} (Pending Admin Confirmation)`,
+        senderPhone: finalPhone,
+        receiverPhone: receivingAccount.phone_number,
+        receiverName: receivingAccount.account_name,
+        amount: finalAmount,
+        machineTitle: machine_title || 'Wallet Deposit Order (Pending Admin Confirmation)',
+        paymentMethod: `${network} Mobile Money`,
+        paymentReference: transactionIdFromApi,
+        status: 'PENDING',
+      });
+
+      saveAppStateToDisk();
+
       return res.status(200).json({
-        message: `Deposit of ${finalAmount.toLocaleString()} UGX sent to Admin and reflected on your Wallet! ${startedInv ? `${startedInv.machine_title} is now ACTIVE and running (Day 1)` : 'Your machine is now running'} and all locked planes are open!`,
+        message: `Deposit of ${finalAmount.toLocaleString()} UGX submitted! Once Admin confirms your deposit, it will reflect on your Wallet.`,
         depositId: newTx.id,
         transactionId: transactionIdFromApi,
-        status: 'confirmed',
-        new_balance: user ? user.balance : finalAmount,
-        has_bought_machine: true,
-        activated_investment: startedInv,
+        status: 'PENDING',
+        new_balance: user ? user.balance : REGISTRATION_REWARD_UGX,
+        wallet_balance: user ? user.wallet_balance || 0 : 0,
+        has_bought_machine: user ? Boolean(user.has_bought_machine) : false,
         receivingAccount: {
           id: receivingAccount.id,
           network: receivingAccount.carrier,
@@ -3256,7 +3326,7 @@ async function startServer() {
     }
   });
 
-  // 9. Deposit Funds (Automatically goes to Admin, reflects on customer Wallet, starts machine running & unlocks all locked planes)
+  // 9. Deposit Funds (Submitted as PENDING — Must be confirmed by Admin to reflect on customer Wallet ONLY)
   app.post('/api/wallet/deposit', (req, res) => {
     const { user_id, amount, payment_method, phone_number, payment_reference, receiver_phone, receiver_name, machine_id, machine_title } = req.body;
     const user = findOrRestoreUser(user_id, req.body);
@@ -3295,16 +3365,15 @@ async function startServer() {
       user_id: user.id,
       amount: numAmt,
       type: 'DEPOSIT',
-      status: 'SUCCESS',
+      status: 'PENDING',
       payment_method: `${payment_method || 'Mobile Money'} • Sender: ${senderPhone || 'N/A'} -> Receiver: ${effectiveReceiver.phone_number} (${effectiveReceiver.account_name})`,
       payment_reference: refCode,
       machine_title: machine_title || undefined,
       created_at: new Date().toISOString(),
     };
-    (newTx as any).wallet_credited = true;
+    (newTx as any).wallet_credited = false;
     (newTx as any).receiver_credited = false;
-    (newTx as any).approved_permanent = true;
-    (newTx as any).confirmed_at = new Date().toISOString();
+    (newTx as any).approved_permanent = false;
     (newTx as any).receiver_id = effectiveReceiver.id;
     (newTx as any).receiver_phone = effectiveReceiver.phone_number;
     (newTx as any).receiver_name = effectiveReceiver.account_name;
@@ -3314,18 +3383,58 @@ async function startServer() {
     (newTx as any).machine_id = machine_id || undefined;
     transactions.unshift(newTx);
 
-    const startedInv = processAutomaticDepositAndStartMachine(user, newTx, machine_id, machine_title);
+    // If user selected a machine while depositing, record it as PENDING until Admin confirms the deposit
+    let pendingInv: Investment | null = null;
+    if (machine_id || machine_title) {
+      const targetMachine =
+        (machine_id && machines.find((m) => m.id === machine_id)) ||
+        (machine_title && machines.find((m) => (m.title || '').toLowerCase() === machine_title.split('(')[0].trim().toLowerCase()));
+      if (targetMachine) {
+        const startDate = new Date();
+        const endDate = new Date(startDate.getTime() + targetMachine.duration_days * 24 * 60 * 60 * 1000);
+        pendingInv = {
+          id: `inv-pend-${Date.now()}`,
+          user_id: user.id,
+          machine_id: targetMachine.id,
+          machine_title: machine_title || `${targetMachine.title} (1 Unit)`,
+          series_tag: targetMachine.series_tag,
+          units: 1,
+          amount_invested: numAmt,
+          daily_yield: targetMachine.daily_yield,
+          total_return: targetMachine.total_return,
+          duration_days: targetMachine.duration_days,
+          days_elapsed: 0,
+          last_claim_at: startDate.toISOString(),
+          unclaimed_earnings: 0,
+          total_claimed: 0,
+          status: 'PENDING',
+          start_date: startDate.toISOString(),
+          end_date: endDate.toISOString(),
+          machine: targetMachine,
+          wallet_deducted: false,
+          payment_method: newTx.payment_method,
+        };
+        (pendingInv as any).customer_name = user.full_name || user.name || 'Investor';
+        (pendingInv as any).customer_phone = senderPhone;
+        investments.unshift(pendingInv);
+        newTx.investment_id = pendingInv.id;
+      }
+    }
+
+    syncUserConfirmedFinances(user, user.id);
+    saveRegisteredUserToDisk(user);
+    saveAppStateToDisk();
 
     pushNotification(
       user.id,
-      '✅ Deposit Credited, Machine Running & All Planes Open!',
-      `Your deposit of ${numAmt.toLocaleString()} UGX to ${effectiveReceiver.phone_number} (${effectiveReceiver.account_name}) has automatically gone to Admin, reflected on your Wallet, started ${startedInv?.machine_title || 'your machine'} (Day 1), and unlocked all locked planes!`,
+      '⏳ Deposit Submitted — Awaiting Admin Confirmation',
+      `Your deposit of ${numAmt.toLocaleString()} UGX to ${effectiveReceiver.phone_number} (${effectiveReceiver.account_name}) has been submitted to Admin. Once Admin confirms your deposit, it will reflect on your Wallet!`,
       'PAYMENT'
     );
 
     notifyAllAdmins(
-      `✅ Deposit Received & Credited: UGX ${numAmt.toLocaleString()}${startedInv ? ` (${startedInv.machine_title})` : ''}`,
-      `Customer ${user.full_name || user.id} (Sender Phone: ${senderPhone}) deposited UGX ${numAmt.toLocaleString()} via ${payment_method || 'Mobile Money'} to Receiver ${effectiveReceiver.phone_number} (${effectiveReceiver.account_name}). Money automatically went to Admin, reflected on customer Wallet, started ${startedInv?.machine_title || 'machine'}, and opened all locked planes! Ref: ${refCode}.`,
+      `🔔 New Deposit Pending Confirmation: UGX ${numAmt.toLocaleString()}${machine_title ? ` (${machine_title})` : ''}`,
+      `Customer ${user.full_name || user.id} (Sender Phone: ${senderPhone}) submitted a deposit of UGX ${numAmt.toLocaleString()} via ${payment_method || 'Mobile Money'} to Receiver ${effectiveReceiver.phone_number} (${effectiveReceiver.account_name}). Please confirm in Admin Console so it reflects on the customer's Wallet. Ref: ${refCode}.`,
       'PAYMENT',
       {
         transaction_id: newTx.id,
@@ -3336,17 +3445,33 @@ async function startServer() {
         receiver_phone: effectiveReceiver.phone_number,
         receiver_name: effectiveReceiver.account_name,
         payment_reference: refCode,
-        machine_title: startedInv?.machine_title || machine_title || 'Wallet Deposit Order (Buy Machine)',
-        order_status: 'CONFIRMED',
+        machine_title: machine_title || 'Wallet Deposit Order (Pending Admin Confirmation)',
+        order_status: 'PENDING',
       }
     );
 
+    void ensureOrderSavedInFirestore({
+      docId: refCode.replace(/[^a-zA-Z0-9_-]/g, ''),
+      name: user.full_name || user.name || senderPhone || 'Avor Investor',
+      item: `Deposited UGX ${numAmt.toLocaleString()} via ${payment_method || 'Mobile Money'} from ${senderPhone} to ${effectiveReceiver.phone_number} (${effectiveReceiver.account_name})${machine_title ? ` • ${machine_title}` : ''} (Pending Admin Confirmation)`,
+      senderPhone,
+      receiverPhone: effectiveReceiver.phone_number,
+      receiverName: effectiveReceiver.account_name,
+      amount: numAmt,
+      machineTitle: machine_title || 'Wallet Deposit Order (Pending Admin Confirmation)',
+      paymentMethod: payment_method || 'Mobile Money',
+      paymentReference: refCode,
+      status: 'PENDING',
+    });
+
     res.json({
-      message: `Deposit of ${numAmt.toLocaleString()} UGX automatically sent to Admin and reflected on your Wallet! ${startedInv ? `${startedInv.machine_title} has started running (Day 1 of ${startedInv.duration_days})` : 'Your machine is now running'} and all locked planes are open!`,
+      message: `Deposit of ${numAmt.toLocaleString()} UGX submitted to Admin! Once Admin confirms your deposit, it will reflect on your Wallet.`,
       new_balance: user.balance,
-      has_bought_machine: true,
+      wallet_balance: user.wallet_balance || 0,
+      has_bought_machine: Boolean(user.has_bought_machine),
+      status: 'PENDING',
       transaction: newTx,
-      activated_investment: startedInv,
+      pending_investment: pendingInv,
       assigned_receiver: {
         id: effectiveReceiver.id,
         phone_number: effectiveReceiver.phone_number,
@@ -3725,6 +3850,73 @@ async function startServer() {
     });
   });
 
+  // Helper to write an order directly to Firebase Firestore (`admin_messages`) from the server
+  // so every order placed via API is guaranteed to appear in both the Admin Plane and Firebase Firestore.
+  const ensureOrderSavedInFirestore = async (order: {
+    docId?: string;
+    name: string;
+    item: string;
+    senderPhone?: string;
+    receiverPhone?: string;
+    receiverName?: string;
+    amount?: number;
+    machineTitle?: string;
+    paymentMethod?: string;
+    paymentReference?: string;
+    status?: 'PENDING' | 'CONFIRMED' | 'SUCCESS';
+  }) => {
+    try {
+      const projectId = firebaseAppletConfig.projectId;
+      const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+      const apiKey = firebaseAppletConfig.apiKey;
+      if (!projectId || !apiKey) return;
+
+      const rawId = (order.docId || order.paymentReference || `ord-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '');
+      const cleanDocId = rawId.slice(0, 120) || `ord-${Date.now()}`;
+      const baseDocsPath = `projects/${projectId}/databases/${databaseId}/documents`;
+      const commitUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:commit?key=${encodeURIComponent(apiKey)}`;
+
+      const fields: Record<string, any> = {
+        name: { stringValue: (order.name || 'Avor Investor').slice(0, 190) },
+        item: { stringValue: (order.item || 'Machine / Deposit Action').slice(0, 1900) },
+        status: { stringValue: order.status || 'CONFIRMED' },
+      };
+      if (order.senderPhone) fields.senderPhone = { stringValue: String(order.senderPhone).slice(0, 95) };
+      if (order.receiverPhone) fields.receiverPhone = { stringValue: String(order.receiverPhone).slice(0, 95) };
+      if (order.receiverName) fields.receiverName = { stringValue: String(order.receiverName).slice(0, 190) };
+      if (typeof order.amount === 'number' && !isNaN(order.amount) && order.amount >= 0) {
+        fields.amount = { integerValue: String(Math.round(order.amount)) };
+      }
+      if (order.machineTitle) fields.machineTitle = { stringValue: String(order.machineTitle).slice(0, 290) };
+      if (order.paymentMethod) fields.paymentMethod = { stringValue: String(order.paymentMethod).slice(0, 190) };
+      if (order.paymentReference) fields.paymentReference = { stringValue: String(order.paymentReference).slice(0, 190) };
+
+      await fetch(commitUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          writes: [
+            {
+              update: {
+                name: `${baseDocsPath}/admin_messages/${cleanDocId}`,
+                fields,
+              },
+              currentDocument: { exists: false },
+              updateTransforms: [
+                {
+                  fieldPath: 'timestamp',
+                  setToServerValue: 'REQUEST_TIME',
+                },
+              ],
+            },
+          ],
+        }),
+      });
+    } catch {
+      // Non-blocking background sync to Firestore
+    }
+  };
+
   // Helper to ingest a Firebase admin_messages document into server transactions & Admin notifications
   const ingestFirebaseAdminMessage = (payload: {
     firebase_doc_id?: string;
@@ -3738,6 +3930,7 @@ async function startServer() {
     paymentMethod?: string;
     paymentReference?: string;
     status?: string;
+    createdAt?: string;
   }) => {
     const {
       firebase_doc_id,
@@ -3750,9 +3943,23 @@ async function startServer() {
       machineTitle,
       paymentMethod,
       paymentReference,
+      createdAt,
     } = payload || {};
 
-    if (firebase_doc_id && notifications.some((n: any) => n.firebase_doc_id === firebase_doc_id)) {
+    // Ignore deleted historical demo/test documents
+    if (
+      (firebase_doc_id && DELETED_DEMO_IDS.has(firebase_doc_id)) ||
+      (paymentReference && DELETED_DEMO_IDS.has(paymentReference)) ||
+      name === 'Verification User' ||
+      name === 'Test Investor'
+    ) {
+      return { duplicate: true };
+    }
+
+    if (
+      (firebase_doc_id && notifications.some((n: any) => n.firebase_doc_id === firebase_doc_id)) ||
+      (paymentReference && notifications.some((n: any) => n.payment_reference === paymentReference))
+    ) {
       return { duplicate: true };
     }
 
@@ -3761,8 +3968,11 @@ async function startServer() {
     const customerPhone = (senderPhone || '').trim();
     const targetReceiverPhone = receiverPhone || RECEIVER_PHONE;
     const targetReceiverName = receiverName || RECEIVER_NAME;
+    const effectiveCreatedAt = createdAt || new Date().toISOString();
+    const effectiveRef = paymentReference || `FB-${(firebase_doc_id || Date.now().toString()).slice(0, 8)}`;
 
-    // Ensure there is also a corresponding DEPOSIT transaction if none was created in the last 5 minutes for this phone/amount
+    // Ensure there is also a corresponding DEPOSIT transaction in the Admin Plane for every order in Firebase
+    let linkedTxId: string | undefined;
     if (numAmt > 0) {
       const user = findOrRestoreUser(customerPhone || customerName, {
         phone_number: customerPhone,
@@ -3771,49 +3981,53 @@ async function startServer() {
         user_name: customerName,
       });
 
-      const recentMatchingTx = transactions.find(
+      const existingMatchingTx = transactions.find(
         (t) =>
-          t.type === 'DEPOSIT' &&
-          t.amount === numAmt &&
-          ((t as any).firebase_doc_id === firebase_doc_id ||
-            (customerPhone &&
-              ((t as any).customer_phone === customerPhone || (t as any).user_phone === customerPhone) &&
-              Date.now() - new Date(t.created_at).getTime() < 5 * 60 * 1000))
+          (firebase_doc_id && (t as any).firebase_doc_id === firebase_doc_id) ||
+          (paymentReference && t.payment_reference === paymentReference)
       );
 
-      if (!recentMatchingTx) {
+      if (existingMatchingTx) {
+        linkedTxId = existingMatchingTx.id;
+        if (firebase_doc_id && !(existingMatchingTx as any).firebase_doc_id) {
+          (existingMatchingTx as any).firebase_doc_id = firebase_doc_id;
+        }
+      } else {
         const depositTx: Transaction = {
-          id: `tx-fb-${Date.now()}-${Math.floor(100 + Math.random() * 899)}`,
+          id: `tx-fb-${firebase_doc_id || Date.now()}-${Math.floor(100 + Math.random() * 899)}`,
           user_id: user ? user.id : `usr-fb-${Date.now()}`,
           amount: numAmt,
           type: 'DEPOSIT',
-          status: 'SUCCESS',
+          status: 'PENDING',
           payment_method: `${paymentMethod || 'Mobile Money'} • Sender: ${customerPhone || customerName} -> Receiver: ${targetReceiverPhone} (${targetReceiverName})`,
-          payment_reference: paymentReference || `FB-${(firebase_doc_id || Date.now().toString()).slice(0, 8)}`,
+          payment_reference: effectiveRef,
           machine_title: machineTitle || item || undefined,
-          created_at: new Date().toISOString(),
+          created_at: effectiveCreatedAt,
         };
         (depositTx as any).firebase_doc_id = firebase_doc_id;
-        (depositTx as any).wallet_credited = true;
+        (depositTx as any).wallet_credited = false;
         (depositTx as any).receiver_credited = false;
-        (depositTx as any).approved_permanent = true;
-        (depositTx as any).confirmed_at = new Date().toISOString();
+        (depositTx as any).approved_permanent = false;
         (depositTx as any).receiver_phone = targetReceiverPhone;
         (depositTx as any).receiver_name = targetReceiverName;
         (depositTx as any).customer_name = customerName;
         (depositTx as any).customer_phone = customerPhone;
         (depositTx as any).user_phone = user?.phone_number || customerPhone;
         transactions.unshift(depositTx);
+        linkedTxId = depositTx.id;
 
-        processAutomaticDepositAndStartMachine(user, depositTx, undefined, machineTitle);
+        if (user) {
+          syncUserConfirmedFinances(user, user.id);
+        }
       }
     }
 
     notifyAllAdmins(
-      `🔥 Deposit & Machine Message: ${customerName}${machineTitle ? ` • ${machineTitle}` : ''}`,
-      `${item || `Processing new deposit of UGX ${numAmt.toLocaleString()} from ${customerName}`}`,
+      `🔥 Deposit & Machine Order (Pending Admin Confirmation): ${customerName}${machineTitle ? ` • ${machineTitle}` : ''}`,
+      `${item || `Order of UGX ${numAmt.toLocaleString()} from ${customerName}`}`,
       'PAYMENT',
       {
+        transaction_id: linkedTxId,
         firebase_doc_id: firebase_doc_id || `fb-${Date.now()}`,
         customer_name: customerName,
         customer_phone: customerPhone,
@@ -3822,8 +4036,8 @@ async function startServer() {
         amount: numAmt,
         machine_title: machineTitle || '',
         payment_method: paymentMethod || 'Mobile Money',
-        payment_reference: paymentReference || '',
-        order_status: 'CONFIRMED',
+        payment_reference: effectiveRef,
+        order_status: 'PENDING',
       }
     );
 
@@ -3833,8 +4047,9 @@ async function startServer() {
 
   // =========================================================================
   // SERVER-SIDE FIRESTORE TRIGGER: notifyAdminOnDeposit ("admin_messages/{messageId}")
-  // Uses stateless Firestore REST API to avoid Node.js gRPC idle stream disconnects,
-  // confirms status, and guarantees all deposit & machine messages reach the Admin Plane.
+  // Uses stateless Firestore REST :runQuery API to avoid Node.js gRPC idle stream disconnects,
+  // satisfies security rules (status IN ['PENDING', 'CONFIRMED', 'SUCCESS']),
+  // and guarantees all deposit & machine orders appear in both Firebase and the Admin Plane.
   // =========================================================================
   try {
     const processedFirestoreIds = new Set<string>();
@@ -3863,6 +4078,7 @@ async function startServer() {
         params: { messageId: string };
         data: {
           id: string;
+          createTime?: string;
           data: () => Record<string, any>;
           ref: { update: (fields: Record<string, any>) => Promise<void> };
         } | null;
@@ -3871,23 +4087,51 @@ async function startServer() {
       const colName = collectionPath.split('/')[0] || 'admin_messages';
       const pollFirestoreDocuments = async () => {
         try {
-          const url = `${baseFirestoreRestUrl}/${encodeURIComponent(colName)}?pageSize=50&key=${encodeURIComponent(apiKey)}`;
-          const res = await fetch(url);
+          const url = `${baseFirestoreRestUrl}:runQuery?key=${encodeURIComponent(apiKey)}`;
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              structuredQuery: {
+                from: [{ collectionId: colName }],
+                where: {
+                  fieldFilter: {
+                    field: { fieldPath: 'status' },
+                    op: 'IN',
+                    value: {
+                      arrayValue: {
+                        values: [
+                          { stringValue: 'PENDING' },
+                          { stringValue: 'CONFIRMED' },
+                          { stringValue: 'SUCCESS' },
+                        ],
+                      },
+                    },
+                  },
+                },
+                limit: 100,
+              },
+            }),
+          });
           if (!res.ok) return;
-          const json: any = await res.json();
-          const docs: any[] = Array.isArray(json?.documents) ? json.documents : [];
+          const rows: any[] = await res.json();
+          if (!Array.isArray(rows)) return;
 
-          for (const rawDoc of docs) {
+          for (const row of rows) {
+            const rawDoc = row?.document;
+            if (!rawDoc || !rawDoc.name) continue;
             const fullPath: string = rawDoc.name || '';
             const docId = fullPath.split('/').pop() || '';
             if (!docId || processedFirestoreIds.has(docId)) continue;
             processedFirestoreIds.add(docId);
 
             const parsedData = parseFirestoreFields(rawDoc.fields);
+            const docCreateTime: string | undefined = rawDoc.createTime || parsedData.timestamp;
             const event = {
               params: { messageId: docId },
               data: {
                 id: docId,
+                createTime: docCreateTime,
                 data: () => parsedData,
                 ref: {
                   update: async (fieldsToUpdate: Record<string, any>) => {
@@ -3916,7 +4160,7 @@ async function startServer() {
       };
 
       pollFirestoreDocuments();
-      setInterval(pollFirestoreDocuments, 6000);
+      setInterval(pollFirestoreDocuments, 5000);
     };
 
     interface DepositMessage {
@@ -3948,6 +4192,9 @@ async function startServer() {
 
         // Wildcard parameters are automatically accessible via event.params
         const messageId = event.params.messageId;
+        if (messageId === 'mVXN2reH39ZgMfPtm4fa' || message.name === 'Verification User') {
+          return;
+        }
         console.log(`Processing message with ID: ${messageId}`);
 
         const { name, amount, status } = message;
@@ -3969,12 +4216,13 @@ async function startServer() {
             machineTitle: message.machineTitle || message.item || '',
             paymentMethod: message.paymentMethod || 'Mobile Money',
             paymentReference: message.paymentReference || `FB-${messageId.slice(0, 8)}`,
-            status: status || 'PENDING',
+            status: status || 'CONFIRMED',
+            createdAt: snapshot.createTime,
           });
 
           // Safely perform actions on the triggering document
           await snapshot.ref.update({
-            status: status || 'PENDING',
+            status: status || 'CONFIRMED',
           });
         } catch (error) {
           console.error('Error updating deposit status:', error);
@@ -3988,8 +4236,73 @@ async function startServer() {
 
   // Mirror Firebase Firestore admin_messages to server notifications so all devices stay in sync
   app.post('/api/admin/firebase-message', (req, res) => {
-    const result = ingestFirebaseAdminMessage(req.body || {});
+    const body = req.body || {};
+    const result = ingestFirebaseAdminMessage(body);
+    if (!result.duplicate) {
+      void ensureOrderSavedInFirestore({
+        docId: body.firebase_doc_id || body.paymentReference,
+        name: body.name || 'Avor Investor',
+        item: body.item || 'Machine / Deposit Order',
+        senderPhone: body.senderPhone,
+        receiverPhone: body.receiverPhone,
+        receiverName: body.receiverName,
+        amount: Number(body.amount) || 0,
+        machineTitle: body.machineTitle,
+        paymentMethod: body.paymentMethod,
+        paymentReference: body.paymentReference,
+        status: body.status || 'CONFIRMED',
+      });
+    }
     return res.status(result.duplicate ? 200 : 201).json({ synced: true, ...result });
+  });
+
+  // Firebase Billing Setup State & Endpoints (Visa or Mobile Money)
+  let firebaseBillingConfig: {
+    configured: boolean;
+    method?: 'VISA' | 'MOBILE_MONEY';
+    provider?: string;
+    account_or_card_masked?: string;
+    holder_name?: string;
+    plan_name?: string;
+    amount_ugx?: number;
+    reference?: string;
+    updated_at?: string;
+  } = {
+    configured: false,
+  };
+
+  app.get('/api/admin/firebase-billing', (req, res) => {
+    res.json(firebaseBillingConfig);
+  });
+
+  app.post('/api/admin/firebase-billing', (req, res) => {
+    const {
+      method = 'VISA',
+      provider = 'Visa Card',
+      account_or_card_masked = '',
+      holder_name = 'Admin',
+      plan_name = 'Firebase Blaze Pay-As-You-Go Billing',
+      amount_ugx = 50000,
+      reference = '',
+    } = req.body || {};
+
+    firebaseBillingConfig = {
+      configured: true,
+      method: method === 'MOBILE_MONEY' ? 'MOBILE_MONEY' : 'VISA',
+      provider,
+      account_or_card_masked,
+      holder_name,
+      plan_name,
+      amount_ugx: Number(amount_ugx) || 50000,
+      reference: reference || `FB-BILL-${Date.now().toString().slice(-6)}`,
+      updated_at: new Date().toISOString(),
+    };
+
+    res.json({
+      success: true,
+      message: `Firebase Billing successfully configured with ${provider}!`,
+      billing: firebaseBillingConfig,
+    });
   });
 
   // Admin Toggle Investment Status (Pending -> Active -> Completed)
@@ -4156,7 +4469,6 @@ async function startServer() {
           (rDep as any).approved_permanent = true;
           creditReceiverOnConfirm(rDep);
           if (user && !(rDep as any).wallet_credited) {
-            user.balance = (user.balance || 0) + rDep.amount;
             (rDep as any).wallet_credited = true;
           }
         }
@@ -4195,9 +4507,8 @@ async function startServer() {
 
         if (inv && inv.status === 'PENDING') {
           if (user) {
-            syncUserConfirmedFinances(user, user.id);
-            if (!inv.wallet_deducted && user.balance >= inv.amount_invested) {
-              user.balance -= inv.amount_invested;
+            const { computedWallet } = syncUserConfirmedFinances(user, user.id);
+            if (!inv.wallet_deducted && computedWallet >= inv.amount_invested) {
               inv.wallet_deducted = true;
             }
             syncUserConfirmedFinances(user, user.id);
@@ -4206,7 +4517,7 @@ async function startServer() {
           activateConfirmedMachineInvestment(inv, notes);
           saveAppStateToDisk();
           return res.json({
-            message: `Payment of UGX ${tx.amount.toLocaleString()} confirmed and permanently saved across all deposit planes! ${inv.machine_title} is now ACTIVE (Day 1 of ${inv.duration_days}).`,
+            message: `Payment of UGX ${tx.amount.toLocaleString()} confirmed and reflected on customer Wallet! ${inv.machine_title} is now ACTIVE (Day 1 of ${inv.duration_days}).`,
             transaction: tx,
             investment: inv,
           });
@@ -4218,27 +4529,29 @@ async function startServer() {
         }
         saveAppStateToDisk();
         return res.json({
-          message: `Machine payment of UGX ${tx.amount.toLocaleString()} confirmed and permanently saved across all deposit planes!`,
+          message: `Machine payment of UGX ${tx.amount.toLocaleString()} confirmed and reflected on customer Wallet!`,
           transaction: tx,
         });
       }
 
-      // Case 2: Wallet Deposit Confirmation -> Credit Balance, Update Receiver Totals & Activate Pending Machines
+      // Case 2: Wallet Deposit Confirmation -> Reflects on Customer Wallet ONLY & Activates Pending Machines
       creditReceiverOnConfirm(tx);
 
       if (user) {
         (tx as any).wallet_credited = true;
-        syncUserConfirmedFinances(user, user.id);
+        const { computedWallet } = syncUserConfirmedFinances(user, user.id);
         saveRegisteredUserToDisk(user);
 
         // Check if this user has any PENDING machine waiting for payment confirmation
         const pendingUserInvs = investments.filter((i) => doesTxBelongToUser({ user_id: i.user_id } as any, user, user.id) && i.status === 'PENDING');
         const activatedTitles: string[] = [];
+        let runningWallet = computedWallet;
 
         for (const pendingInv of pendingUserInvs) {
-          if (pendingInv.wallet_deducted || user.balance >= pendingInv.amount_invested) {
+          if (pendingInv.wallet_deducted || runningWallet >= pendingInv.amount_invested) {
             if (!pendingInv.wallet_deducted) {
               pendingInv.wallet_deducted = true;
+              runningWallet = Math.max(0, runningWallet - pendingInv.amount_invested);
             }
             activateConfirmedMachineInvestment(pendingInv, notes);
             activatedTitles.push(pendingInv.machine_title);
@@ -4260,11 +4573,11 @@ async function startServer() {
 
         pushNotification(
           user.id,
-          '✅ Deposit Confirmed by Admin & Permanently Credited!',
-          `Your deposit of ${tx.amount.toLocaleString()} UGX sent to ${(tx as any).receiver_phone || homepageConfig.deposit_receiver_number} (${(tx as any).receiver_name || homepageConfig.deposit_receiver_name}) has been confirmed by Admin and permanently credited to your wallet and deposit planes.${
+          '✅ Deposit Confirmed by Admin & Credited to Wallet!',
+          `Your deposit of ${tx.amount.toLocaleString()} UGX sent to ${(tx as any).receiver_phone || homepageConfig.deposit_receiver_number} (${(tx as any).receiver_name || homepageConfig.deposit_receiver_name}) has been confirmed by Admin and reflected on your Wallet.${
             activatedTitles.length > 0
               ? ` Your machine(s) (${activatedTitles.join(', ')}) are now ACTIVE and have started counting days (Day 1)!`
-              : ' Your wallet balance is now funded and ready to buy compute machines!'
+              : ' Your Wallet is now funded and ready to buy compute machines!'
           } ${notes || ''}`,
           'PAYMENT'
         );
@@ -4272,10 +4585,11 @@ async function startServer() {
         return res.json({
           message:
             activatedTitles.length > 0
-              ? `Deposit of ${tx.amount.toLocaleString()} UGX confirmed, permanently saved across all deposit planes, and ${activatedTitles.join(', ')} started counting days!`
-              : `Deposit of ${tx.amount.toLocaleString()} UGX confirmed and permanently saved across all deposit planes!`,
+              ? `Deposit of ${tx.amount.toLocaleString()} UGX confirmed, reflected on customer Wallet, and ${activatedTitles.join(', ')} started counting days!`
+              : `Deposit of ${tx.amount.toLocaleString()} UGX confirmed and reflected on customer Wallet!`,
           transaction: tx,
           new_balance: user.balance,
+          wallet_balance: user.wallet_balance || 0,
         });
       }
 
@@ -4352,25 +4666,7 @@ async function startServer() {
       phone_number: (removed as any).user_phone || (removed as any).customer_phone,
     });
     if (user && user.id !== 'usr-admin-owner') {
-      // Recalculate from remaining transactions
-      const remainingConfirmed = transactions
-        .filter((t) => doesTxBelongToUser(t, user, user.id) && t.type === 'DEPOSIT' && (t.status === 'SUCCESS' || t.status === 'CONFIRMED'))
-        .reduce((s, t) => s + Number(t.amount || 0), 0);
-      const remainingYields = transactions
-        .filter(
-          (t) =>
-            doesTxBelongToUser(t, user, user.id) &&
-            (t.type === 'DAILY_YIELD' || t.type === 'REFERRAL_BONUS' || t.type === 'COMMISSION') &&
-            (t.status === 'SUCCESS' || t.status === 'CONFIRMED')
-        )
-        .reduce((s, t) => s + Number(t.amount || 0), 0);
-      const deductedInvs = investments
-        .filter((inv) => inv.user_id === user.id && inv.wallet_deducted && (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE' || inv.status === 'PENDING'))
-        .reduce((s, inv) => s + Number(inv.amount_invested || 0), 0);
-      const deductedWdrs = transactions
-        .filter((t) => doesTxBelongToUser(t, user, user.id) && t.type === 'WITHDRAWAL' && (t.status === 'SUCCESS' || t.status === 'CONFIRMED' || t.status === 'PENDING'))
-        .reduce((s, t) => s + Number(t.amount || 0), 0);
-      user.balance = Math.max(0, remainingConfirmed + remainingYields - deductedInvs - deductedWdrs);
+      syncUserConfirmedFinances(user, user.id);
       saveRegisteredUserToDisk(user);
     }
     saveAppStateToDisk();
@@ -4419,8 +4715,8 @@ async function startServer() {
         saveRegisteredUserToDisk(user);
         pushNotification(
           user.id,
-          '✅ Deposit Confirmed by Admin & Permanently Credited!',
-          `Your submitted deposit of ${tx.amount.toLocaleString()} UGX has been confirmed by Admin and permanently credited across all your deposit planes and wallet balance!`,
+          '✅ Deposit Confirmed by Admin & Credited to Wallet!',
+          `Your submitted deposit of ${tx.amount.toLocaleString()} UGX has been confirmed by Admin and reflected on your Wallet!`,
           'PAYMENT'
         );
       }
@@ -4447,8 +4743,8 @@ async function startServer() {
       );
       if (inv && inv.status === 'PENDING') {
         if (user) {
-          syncUserConfirmedFinances(user, user.id);
-          if (!inv.wallet_deducted && user.balance >= inv.amount_invested) {
+          const { computedWallet } = syncUserConfirmedFinances(user, user.id);
+          if (!inv.wallet_deducted && computedWallet >= inv.amount_invested) {
             inv.wallet_deducted = true;
           }
           syncUserConfirmedFinances(user, user.id);
@@ -4463,8 +4759,8 @@ async function startServer() {
     for (const inv of investments.filter((i) => i.status === 'PENDING')) {
       const user = Array.from(users.values()).find((u) => u.id === inv.user_id);
       if (user) {
-        syncUserConfirmedFinances(user, user.id);
-        if (inv.wallet_deducted || user.balance >= inv.amount_invested) {
+        const { computedWallet } = syncUserConfirmedFinances(user, user.id);
+        if (inv.wallet_deducted || computedWallet >= inv.amount_invested) {
           if (!inv.wallet_deducted) {
             inv.wallet_deducted = true;
           }
@@ -4478,7 +4774,7 @@ async function startServer() {
     saveAppStateToDisk();
 
     return res.json({
-      message: `Confirmed ${confirmedCount} submitted deposit(s) totaling UGX ${totalConfirmedUgx.toLocaleString()} and permanently saved across all deposit planes!`,
+      message: `Confirmed ${confirmedCount} submitted deposit(s) totaling UGX ${totalConfirmedUgx.toLocaleString()} and credited to customer Wallet(s)!`,
       confirmed_count: confirmedCount,
       total_confirmed_ugx: totalConfirmedUgx,
     });
@@ -4517,19 +4813,19 @@ async function startServer() {
         pushNotification(
           user.id,
           '❌ Withdrawal Request Declined',
-          `Your withdrawal request of ${tx.amount.toLocaleString()} UGX was declined by admin and the funds have been returned to your wallet. ${notes || ''}`,
+          `Your withdrawal request of ${tx.amount.toLocaleString()} UGX was declined by admin and the funds have been returned to your balance. ${notes || ''}`,
           'PAYMENT'
         );
       }
       saveAppStateToDisk();
-      return res.json({ message: `Withdrawal rejected and ${tx.amount.toLocaleString()} UGX refunded to user wallet.`, transaction: tx });
+      return res.json({ message: `Withdrawal rejected and ${tx.amount.toLocaleString()} UGX refunded to user balance.`, transaction: tx });
     }
 
     res.status(400).json({ error: 'Invalid action provided.' });
   });
 
 
-  // Admin Credit or Deduct User Balance Directly
+  // Admin Credit or Deduct User Wallet Directly
   app.post('/api/admin/user/credit', (req, res) => {
     const { user_id, amount, note } = req.body;
     const user = Array.from(users.values()).find((u) => u.id === user_id);
@@ -4567,14 +4863,15 @@ async function startServer() {
 
     pushNotification(
       user.id,
-      numAmt > 0 ? '💰 Wallet Credit Added' : ' Wallet Balance Adjusted',
+      numAmt > 0 ? '💰 Wallet Credit Added' : 'Wallet Adjusted',
       `Admin updated your wallet by ${numAmt > 0 ? '+' : ''}${numAmt.toLocaleString()} UGX. ${note || ''}`,
       'PAYMENT'
     );
 
     res.json({
-      message: `User ${user.full_name} balance updated by ${numAmt.toLocaleString()} UGX. New balance: ${user.balance.toLocaleString()} UGX`,
+      message: `User ${user.full_name} wallet updated by ${numAmt.toLocaleString()} UGX. Confirmed Wallet: ${(user.wallet_balance || 0).toLocaleString()} UGX • Balance: ${user.balance.toLocaleString()} UGX`,
       new_balance: user.balance,
+      wallet_balance: user.wallet_balance || 0,
     });
   });
 
@@ -4637,7 +4934,15 @@ async function startServer() {
         }
       } catch (e) {}
     }
-    if (!user) return res.status(404).json({ error: 'User not found.' });
+    if (!user) {
+      return res.json({
+        id: targetId,
+        balance: REGISTRATION_REWARD_UGX,
+        wallet_balance: 0,
+        available_wallet: 0,
+        has_bought_machine: false,
+      });
+    }
     syncUserConfirmedFinances(user, targetId);
     const { password_hash, ...profile } = user;
     res.json(profile);
