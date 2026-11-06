@@ -1,1 +1,44 @@
-[]
+[
+  {
+    "id": "tx-fb-DEP-552548-379787-567",
+    "user_id": "+256750552548",
+    "amount": 50000,
+    "type": "DEPOSIT",
+    "status": "SUCCESS",
+    "payment_method": "AIRTEL MOBILE MONEY • Sender: +256750552548 -> Receiver: 0741032838 (SULAINH NAKASEETA)",
+    "payment_reference": "DEP-552548-379787",
+    "machine_title": "Wallet Deposit Order",
+    "created_at": "2026-11-06T08:05:09.417Z",
+    "confirmed_at": "2026-11-06T08:05:46.417Z",
+    "firebase_doc_id": "DEP-552548-379787",
+    "wallet_credited": true,
+    "receiver_credited": true,
+    "approved_permanent": true,
+    "receiver_phone": "0741032838",
+    "receiver_name": "SULAINH NAKASEETA",
+    "customer_name": "Investor 2548",
+    "customer_phone": "+256750552548",
+    "user_phone": "+256750552548"
+  },
+  {
+    "id": "tx-fb-DEP-834700-229546-941",
+    "user_id": "+256749834700",
+    "amount": 35000,
+    "type": "DEPOSIT",
+    "status": "SUCCESS",
+    "payment_method": "AIRTEL MOBILE MONEY • Sender: +256749834700 -> Receiver: 0741032838 (SULAINH NAKASEETA)",
+    "payment_reference": "DEP-834700-229546",
+    "machine_title": "Wallet Deposit Order",
+    "created_at": "2026-11-06T08:05:09.248Z",
+    "confirmed_at": "2026-11-06T08:05:38.262Z",
+    "firebase_doc_id": "DEP-834700-229546",
+    "wallet_credited": true,
+    "receiver_credited": true,
+    "approved_permanent": true,
+    "receiver_phone": "0741032838",
+    "receiver_name": "SULAINH NAKASEETA",
+    "customer_name": "Investor 4700",
+    "customer_phone": "+256749834700",
+    "user_phone": "+256749834700"
+  }
+]

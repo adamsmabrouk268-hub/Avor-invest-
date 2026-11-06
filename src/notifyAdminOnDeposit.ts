@@ -148,7 +148,7 @@ export const processNewDeposit = onDocumentCreated(
             machineTitle: message.machineTitle || message.item || '',
             paymentMethod: message.paymentMethod || 'Mobile Money',
             paymentReference: message.paymentReference || `FB-${messageId.slice(0, 8)}`,
-            status: status || 'CONFIRMED',
+            status: status || 'PENDING',
           }),
         });
       }

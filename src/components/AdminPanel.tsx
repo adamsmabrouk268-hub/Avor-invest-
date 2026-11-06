@@ -1469,7 +1469,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                 </button>
               ) : (
                 <span className="px-2.5 py-1.5 rounded-xl bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 text-[11px] font-mono">
-                  Firebase Live: {firebaseAdminEmail} ({firestoreMessages.length} docs)
+                  Firebase Live: {firebaseAdminEmail} ({
+                    firestoreMessages.filter(
+                      (fb) =>
+                        fb.status !== 'CONFIRMED' &&
+                        fb.status !== 'SUCCESS' &&
+                        !deposits.some(
+                          (d) =>
+                            (d.status === 'SUCCESS' || d.status === 'CONFIRMED') &&
+                            (d.firebase_doc_id === fb.id ||
+                              (fb.paymentReference && d.payment_reference === fb.paymentReference))
+                        )
+                    ).length
+                  } pending)
                 </span>
               )}
               {deposits.filter((d) => d.status === 'PENDING').length > 0 && (
@@ -1494,130 +1506,133 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
             </div>
           </div>
 
-          {firestoreMessages.length > 0 && (
-            <div className="p-3.5 rounded-2xl bg-[#07152e] border border-sky-500/40 space-y-2">
-              <div className="text-xs font-black text-sky-300 uppercase tracking-wider flex items-center justify-between">
-                <span>Live Firestore `admin_messages` Collection ({firestoreMessages.length})</span>
-              </div>
-              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                {firestoreMessages.map((fbMsg) => (
-                  <div
-                    key={fbMsg.id}
-                    className="p-3 rounded-xl bg-[#050c1d] border border-blue-900/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
-                  >
-                    <div className="space-y-0.5">
-                      <div className="font-bold text-white">
-                        {fbMsg.name}{' '}
-                        {fbMsg.senderPhone && <span className="text-cyan-300 font-mono">({fbMsg.senderPhone})</span>}
-                        {fbMsg.amount > 0 && (
-                          <span className="text-sky-400 font-mono ml-2">
-                            • UGX {Number(fbMsg.amount).toLocaleString()}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-slate-300 text-[11px]">{fbMsg.item}</p>
+          {(() => {
+            const pendingFb = firestoreMessages.filter(
+              (fbMsg) =>
+                fbMsg.status !== 'CONFIRMED' &&
+                fbMsg.status !== 'SUCCESS' &&
+                !deposits.some(
+                  (d) =>
+                    (d.status === 'SUCCESS' || d.status === 'CONFIRMED') &&
+                    (d.firebase_doc_id === fbMsg.id ||
+                      (fbMsg.paymentReference && d.payment_reference === fbMsg.paymentReference))
+                )
+            );
+            const pendingMsgs = adminMessages.filter((m: any) => m.order_status === 'PENDING');
+
+            return (
+              <>
+                {pendingFb.length > 0 && (
+                  <div className="p-3.5 rounded-2xl bg-[#07152e] border border-sky-500/40 space-y-2">
+                    <div className="text-xs font-black text-sky-300 uppercase tracking-wider flex items-center justify-between">
+                      <span>Pending Firestore `admin_messages` ({pendingFb.length})</span>
                     </div>
-                    <span className="text-[10px] font-mono text-slate-400 shrink-0">
-                      {new Date(fbMsg.created_at).toLocaleString()}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {adminMessages.length === 0 && firestoreMessages.length === 0 ? (
-            <div className="text-center py-10 text-slate-400 text-xs font-bold">
-              No payments yet. As soon as a user clicks Place Order on a deposit or buys a machine, the message will appear here immediately.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {adminMessages.map((msg: any) => {
-                const isPendingOrder = msg.order_status === 'PENDING';
-                const isConfirmedOrder = msg.order_status === 'CONFIRMED' || msg.order_status === 'SUCCESS';
-                return (
-                  <div
-                    key={msg.id}
-                    className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-                      isPendingOrder
-                        ? 'bg-[#07132c] border-blue-500/60 shadow-[0_0_20px_rgba(0,145,234,0.2)]'
-                        : 'bg-[#060d1f] border-blue-950/80'
-                    }`}
-                  >
-                    <div className="space-y-1.5 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span
-                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase font-mono ${
-                            isPendingOrder
-                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse'
-                              : isConfirmedOrder
-                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                                : 'bg-blue-500/20 text-sky-300 border border-blue-500/40'
-                          }`}
+                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                      {pendingFb.map((fbMsg) => (
+                        <div
+                          key={fbMsg.id}
+                          className="p-3 rounded-xl bg-[#050c1d] border border-blue-900/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
                         >
-                          {isPendingOrder ? 'NEW ORDER AWAITING CONFIRMATION' : isConfirmedOrder ? 'CONFIRMED & REFLECTED' : msg.order_status || 'ORDER MESSAGE'}
-                        </span>
-                        <span className="text-sm font-black text-white">{msg.title}</span>
-                        <span className="text-[11px] font-mono text-slate-400">
-                          {new Date(msg.created_at).toLocaleString()}
-                        </span>
-                      </div>
-
-                      <p className="text-xs text-slate-200 leading-relaxed">{msg.message}</p>
-
-                      <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] font-mono">
-                        {msg.customer_name && (
-                          <span className="px-2 py-0.5 rounded bg-[#0b1b3d] border border-blue-800/60 text-white">
-                            Customer: <strong>{msg.customer_name}</strong>
+                          <div className="space-y-0.5">
+                            <div className="font-bold text-white">
+                              {fbMsg.name}{' '}
+                              {fbMsg.senderPhone && <span className="text-cyan-300 font-mono">({fbMsg.senderPhone})</span>}
+                              {fbMsg.amount > 0 && (
+                                <span className="text-sky-400 font-mono ml-2">
+                                  • UGX {Number(fbMsg.amount).toLocaleString()}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-slate-300 text-[11px]">{fbMsg.item}</p>
+                          </div>
+                          <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                            {new Date(fbMsg.created_at).toLocaleString()}
                           </span>
-                        )}
-                        {msg.customer_phone && (
-                          <span className="px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/40 text-cyan-300">
-                            Sender Phone: <strong>{msg.customer_phone}</strong>
-                          </span>
-                        )}
-                        {msg.receiver_phone && (
-                          <span className="px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 text-emerald-300">
-                            Receiver: <strong>{msg.receiver_phone} ({msg.receiver_name || 'Company'})</strong>
-                          </span>
-                        )}
-                        {Number(msg.amount) > 0 && (
-                          <span className="px-2 py-0.5 rounded bg-blue-950/90 border border-sky-400/40 text-sky-300 font-bold">
-                            Amount: UGX {Number(msg.amount).toLocaleString()}
-                          </span>
-                        )}
-                        {msg.payment_reference && (
-                          <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-300">
-                            Ref: {msg.payment_reference}
-                          </span>
-                        )}
-                      </div>
+                        </div>
+                      ))}
                     </div>
-
-                    {msg.transaction_id && isPendingOrder && (
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleDepositAction(msg.transaction_id, 'APPROVE')}
-                          className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-xs font-black rounded-xl border border-emerald-400/50 flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
-                        >
-                          <Check className="w-4 h-4" />
-                          <span>Confirm Deposit &amp; Reflect</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDepositAction(msg.transaction_id, 'REJECT')}
-                          className="px-3 py-2 bg-rose-950/70 hover:bg-rose-900/70 text-rose-300 text-xs font-bold rounded-xl border border-rose-500/40 cursor-pointer"
-                        >
-                          Decline
-                        </button>
-                      </div>
-                    )}
                   </div>
-                );
-              })}
-            </div>
-          )}
+                )}
+
+                {pendingMsgs.length === 0 && pendingFb.length === 0 ? (
+                  <div className="text-center py-10 text-slate-400 text-xs font-bold">
+                    No pending payments awaiting confirmation. Confirmed payments have been removed from the pending queue and credited to user wallets.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {pendingMsgs.map((msg: any) => (
+                      <div
+                        key={msg.id}
+                        className="p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#07132c] border-blue-500/60 shadow-[0_0_20px_rgba(0,145,234,0.2)]"
+                      >
+                        <div className="space-y-1.5 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
+                              NEW ORDER AWAITING CONFIRMATION
+                            </span>
+                            <span className="text-sm font-black text-white">{msg.title}</span>
+                            <span className="text-[11px] font-mono text-slate-400">
+                              {new Date(msg.created_at).toLocaleString()}
+                            </span>
+                          </div>
+
+                          <p className="text-xs text-slate-200 leading-relaxed">{msg.message}</p>
+
+                          <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] font-mono">
+                            {msg.customer_name && (
+                              <span className="px-2 py-0.5 rounded bg-[#0b1b3d] border border-blue-800/60 text-white">
+                                Customer: <strong>{msg.customer_name}</strong>
+                              </span>
+                            )}
+                            {msg.customer_phone && (
+                              <span className="px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/40 text-cyan-300">
+                                Sender Phone: <strong>{msg.customer_phone}</strong>
+                              </span>
+                            )}
+                            {msg.receiver_phone && (
+                              <span className="px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 text-emerald-300">
+                                Receiver: <strong>{msg.receiver_phone} ({msg.receiver_name || 'Company'})</strong>
+                              </span>
+                            )}
+                            {Number(msg.amount) > 0 && (
+                              <span className="px-2 py-0.5 rounded bg-blue-950/90 border border-sky-400/40 text-sky-300 font-bold">
+                                Amount: UGX {Number(msg.amount).toLocaleString()}
+                              </span>
+                            )}
+                            {msg.payment_reference && (
+                              <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-300">
+                                Ref: {msg.payment_reference}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {msg.transaction_id && (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleDepositAction(msg.transaction_id, 'APPROVE')}
+                              className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-xs font-black rounded-xl border border-emerald-400/50 flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
+                            >
+                              <Check className="w-4 h-4" />
+                              <span>Confirm Deposit &amp; Reflect</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDepositAction(msg.transaction_id, 'REJECT')}
+                              className="px-3 py-2 bg-rose-950/70 hover:bg-rose-900/70 text-rose-300 text-xs font-bold rounded-xl border border-rose-500/40 cursor-pointer"
+                            >
+                              Decline
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
       )}
 
@@ -1626,9 +1641,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         <div className="shining-card border border-blue-950/80 rounded-2xl p-6 space-y-4 shadow-xl text-white">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-blue-950/80">
             <div>
-              <h3 className="text-base font-extrabold text-white">Submitted Deposits & Machine Payments</h3>
+              <h3 className="text-base font-extrabold text-white">Pending Deposits &amp; Machine Payments</h3>
               <p className="text-xs text-slate-300">
-                All submitted deposits sent to receiver <strong>{depositReceiverNumber} ({depositReceiverName})</strong> arrive here in real time. Confirming a deposit credits the investor&apos;s wallet and immediately reflects across all deposit planes (Home Deposit Details, Profile Wallet &amp; Bill, Vault Logs, Receiver Numbers, and Machine Plane).
+                All submitted deposits sent to receiver <strong>{depositReceiverNumber} ({depositReceiverName})</strong> arrive here in real time. Once confirmed, the pending payment is removed from this queue and immediately credited to the user&apos;s Wallet balance.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto shrink-0">
@@ -1653,65 +1668,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                 className="px-3 py-2 bg-[#09152e] hover:bg-[#0f2147] text-cyan-300 text-xs font-bold rounded-xl border border-cyan-500/40 flex items-center gap-1.5 cursor-pointer"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`} />
-                <span>Refresh Submitted Deposits</span>
+                <span>Refresh Pending Deposits</span>
               </button>
             </div>
           </div>
 
-          {/* Live Firestore notifyAdminOnDeposit ("admin_messages/{messageId}") Stream */}
-          {firestoreMessages.length > 0 && (
-            <div className="p-4 bg-[#06152f] border border-sky-500/50 rounded-2xl space-y-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-sky-300 font-black text-xs uppercase tracking-wider">
-                  <Megaphone className="w-4 h-4 text-sky-400" />
-                  <span>
-                    Live Firestore `admin_messages` (`notifyAdminOnDeposit` • {firestoreMessages.length} Received)
-                  </span>
-                </div>
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                  AUTO-CONFIRMED
-                </span>
-              </div>
-              <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
-                {firestoreMessages.slice(0, 6).map((fbMsg) => (
-                  <div
-                    key={fbMsg.id}
-                    className="p-3 rounded-xl bg-[#040c1d] border border-sky-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
-                  >
-                    <div className="space-y-0.5">
-                      <div className="font-bold text-white flex flex-wrap items-center gap-2">
-                        <span>{fbMsg.name}</span>
-                        {fbMsg.senderPhone && (
-                          <span className="text-cyan-300 font-mono">({fbMsg.senderPhone})</span>
-                        )}
-                        {fbMsg.amount > 0 && (
-                          <span className="text-sky-400 font-mono">
-                            UGX {Number(fbMsg.amount).toLocaleString()}
-                          </span>
-                        )}
-                        <span className="px-2 py-0.5 rounded text-[9px] font-mono bg-emerald-950 text-emerald-300 border border-emerald-500/40">
-                          {fbMsg.status || 'CONFIRMED'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-300">{fbMsg.item}</p>
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-400 shrink-0">
-                      {new Date(fbMsg.created_at).toLocaleString()}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* Incoming Confirmation Messages Banner */}
-          {deposits.filter((d) => d.status === 'PENDING').length > 0 && (
+          {deposits.filter((d) => d.status === 'PENDING').length > 0 ? (
             <div className="p-4 bg-amber-950/70 border border-amber-500/50 rounded-2xl space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-amber-300 font-black text-xs uppercase tracking-wider">
                   <Megaphone className="w-4 h-4 text-amber-400 animate-bounce" />
                   <span>
-                    Incoming Submitted Deposits ({deposits.filter((d) => d.status === 'PENDING').length} Awaiting Admin Confirmation)
+                    Incoming Pending Deposits ({deposits.filter((d) => d.status === 'PENDING').length} Awaiting Admin Confirmation)
                   </span>
                 </div>
                 <button
@@ -1721,7 +1690,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                   className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-black rounded-lg border border-emerald-400/40 cursor-pointer flex items-center gap-1"
                 >
                   <Check className="w-3.5 h-3.5" />
-                  <span>Confirm All &amp; Reflect to All Planes</span>
+                  <span>Confirm All &amp; Credit Wallets</span>
                 </button>
               </div>
               <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
@@ -1764,7 +1733,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                           className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-[11px] font-black rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-xs border border-emerald-500/40"
                         >
                           <Check className="w-3.5 h-3.5" />
-                          <span>Confirm &amp; Reflect to All Planes</span>
+                          <span>Confirm &amp; Credit Wallet</span>
                         </button>
                         <button
                           onClick={() => handleDepositAction(d.id, 'REJECT')}
@@ -1777,13 +1746,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                   ))}
               </div>
             </div>
+          ) : (
+            <div className="text-center py-8 text-emerald-300/90 text-xs font-bold bg-emerald-950/20 border border-emerald-500/25 rounded-2xl">
+              No pending payments in queue. All confirmed deposits have been removed from pending and credited directly to customer wallets.
+            </div>
           )}
 
-          {deposits.length === 0 ? (
-            <div className="text-center py-10 text-slate-400 text-xs font-bold">
-              No payments yet. As soon as any investor submits a deposit, it will appear here for confirmation.
-            </div>
-          ) : (
+          {deposits.filter((d) => d.status === 'PENDING').length > 0 && (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead>
@@ -1797,71 +1766,58 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-blue-950/60">
-                  {deposits.map((d: any) => {
-                    const isMachineOrder = d.type === 'INVESTMENT';
-                    return (
-                      <tr key={d.id} className="hover:bg-[#0c1630]/60 transition-colors">
-                        <td className="py-3 px-3 font-mono text-[11px] text-slate-400">
-                          <div>{new Date(d.created_at).toLocaleDateString()}</div>
-                          <div className="text-[10px] text-slate-500">{new Date(d.created_at).toLocaleTimeString()}</div>
-                        </td>
-                        <td className="py-3 px-3 font-bold text-white">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span>{d.customer_name || d.user_id}</span>
-                            {d.customer_phone && (
-                              <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/70 px-1.5 py-0.5 rounded">
-                                {d.customer_phone}
-                              </span>
-                            )}
-                            <span
-                              className={`text-[9px] font-mono font-black px-1.5 py-0.5 rounded uppercase ${
-                                isMachineOrder
-                                  ? 'bg-amber-950/90 text-amber-300 border border-amber-500/40'
-                                  : d.status === 'SUCCESS'
-                                    ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/40'
+                  {deposits
+                    .filter((d) => d.status === 'PENDING')
+                    .map((d: any) => {
+                      const isMachineOrder = d.type === 'INVESTMENT';
+                      return (
+                        <tr key={d.id} className="hover:bg-[#0c1630]/60 transition-colors">
+                          <td className="py-3 px-3 font-mono text-[11px] text-slate-400">
+                            <div>{new Date(d.created_at).toLocaleDateString()}</div>
+                            <div className="text-[10px] text-slate-500">{new Date(d.created_at).toLocaleTimeString()}</div>
+                          </td>
+                          <td className="py-3 px-3 font-bold text-white">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span>{d.customer_name || d.user_id}</span>
+                              {d.customer_phone && (
+                                <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/70 px-1.5 py-0.5 rounded">
+                                  {d.customer_phone}
+                                </span>
+                              )}
+                              <span
+                                className={`text-[9px] font-mono font-black px-1.5 py-0.5 rounded uppercase ${
+                                  isMachineOrder
+                                    ? 'bg-amber-950/90 text-amber-300 border border-amber-500/40'
                                     : 'bg-blue-950/90 text-blue-300 border border-blue-500/40'
-                              }`}
-                            >
-                              {isMachineOrder
-                                ? 'Machine Order'
-                                : d.status === 'SUCCESS'
-                                  ? 'Reflected on All Planes'
-                                  : 'Submitted Deposit'}
+                                }`}
+                              >
+                                {isMachineOrder ? 'Machine Order' : 'Pending Deposit'}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-slate-400 font-normal block mt-0.5">{d.payment_method}</span>
+                          </td>
+                          <td className="py-3 px-3 font-mono font-bold text-blue-300">
+                            UGX {Number(d.amount || 0).toLocaleString()}
+                          </td>
+                          <td className="py-3 px-3 font-mono text-[11px] text-slate-200 font-bold">
+                            <div>{d.payment_reference || 'REF-N/A'}</div>
+                            {d.machine_title && (
+                              <span className="text-[10px] text-cyan-400 block">{d.machine_title}</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold font-mono uppercase bg-amber-950/70 text-amber-300 border border-amber-500/40 animate-pulse">
+                              PENDING
                             </span>
-                          </div>
-                          <span className="text-[10px] text-slate-400 font-normal block mt-0.5">{d.payment_method}</span>
-                        </td>
-                        <td className="py-3 px-3 font-mono font-bold text-blue-300">
-                          UGX {Number(d.amount || 0).toLocaleString()}
-                        </td>
-                        <td className="py-3 px-3 font-mono text-[11px] text-slate-200 font-bold">
-                          <div>{d.payment_reference || 'REF-N/A'}</div>
-                          {d.machine_title && (
-                            <span className="text-[10px] text-cyan-400 block">{d.machine_title}</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3">
-                          <span
-                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold font-mono uppercase ${
-                              d.status === 'SUCCESS'
-                                ? 'bg-emerald-950/70 text-emerald-300 border border-emerald-500/40'
-                                : d.status === 'PENDING'
-                                ? 'bg-amber-950/70 text-amber-300 border border-amber-500/40 animate-pulse'
-                                : 'bg-rose-950/70 text-rose-300 border border-rose-500/40'
-                            }`}
-                          >
-                            {d.status === 'SUCCESS' ? 'CONFIRMED' : d.status}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          {d.status === 'PENDING' ? (
+                          </td>
+                          <td className="py-3 px-3 text-right">
                             <div className="flex items-center justify-end gap-2">
                               <button
                                 onClick={() => handleDepositAction(d.id, 'APPROVE')}
                                 className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-[10px] font-black rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-xs border border-emerald-500/30"
                               >
                                 <Check className="w-3.5 h-3.5" />
-                                <span>{isMachineOrder ? 'Confirm & Start Machine' : 'Confirm & Reflect'}</span>
+                                <span>{isMachineOrder ? 'Confirm & Start Machine' : 'Confirm & Credit Wallet'}</span>
                               </button>
 
                               <button
@@ -1872,26 +1828,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                                 <span>Decline</span>
                               </button>
                             </div>
-                          ) : (
-                            <div className="flex items-center justify-end gap-2">
-                              <span className="text-[10px] text-emerald-400 font-mono font-bold">
-                                {d.status === 'SUCCESS' ? 'Permanently Approved & Saved' : 'Declined'}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteDepositRecord(d.id)}
-                                className="px-2 py-1 bg-rose-950/50 hover:bg-rose-900/70 text-rose-300 text-[10px] font-bold rounded-lg border border-rose-500/30 flex items-center gap-1 cursor-pointer"
-                                title="Delete record permanently (Admin only)"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                                <span>Delete</span>
-                              </button>
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                          </td>
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>

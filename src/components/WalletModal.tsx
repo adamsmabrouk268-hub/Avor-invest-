@@ -118,7 +118,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     const syncVault = () => {
       fetchTransactions();
       onRefreshUser();
-      fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}`)
+      const phoneParam = user.phone_number ? `?phone=${encodeURIComponent(user.phone_number)}` : '';
+      fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}${phoneParam}`)
         .then((r) => (r.ok && (r.headers.get('content-type') || '').includes('application/json') ? r.json() : null))
         .then((d) => {
           if (d) {
@@ -126,7 +127,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               setLiveUserBalance(d.balance);
             }
             if (d.deposit_details) {
-              setConfirmedDepositsTotal(Number(d.deposit_details.total_deposited || 0));
+              setConfirmedDepositsTotal(Number(d.available_wallet ?? d.wallet_balance ?? d.deposit_details.total_deposited ?? 0));
               setPendingDepositsTotal(Number(d.deposit_details.pending_deposits || 0));
             }
             if (d.has_bought_machine) {
@@ -140,9 +141,9 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         .catch(() => {});
     };
     syncVault();
-    const interval = setInterval(syncVault, 4000);
+    const interval = setInterval(syncVault, 3000);
     return () => clearInterval(interval);
-  }, [user?.id]);
+  }, [user?.id, user?.phone_number]);
 
   // Fast countdown timer for receiver rotation UI & Step 4 Payment Information timer
   useEffect(() => {
@@ -213,7 +214,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const fetchTransactions = async () => {
     if (!user) return;
     try {
-      const res = await fetch(`/api/transactions/${encodeURIComponent(user.id)}`);
+      const phoneParam = user.phone_number ? `?phone=${encodeURIComponent(user.phone_number)}` : '';
+      const res = await fetch(`/api/transactions/${encodeURIComponent(user.id)}${phoneParam}`);
       const ct = res.headers.get('content-type') || '';
       if (res.ok && ct.includes('application/json')) {
         const data = await res.json();
@@ -981,20 +983,42 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                  ================================================================= */}
               {depositStep === 'SUBMITTED' && (
                 <div className="p-4 rounded-2xl bg-[#070e1f] border border-blue-500/40 space-y-4 text-center animate-fade-in">
-                  <div className="w-14 h-14 rounded-full bg-blue-950/80 border border-sky-400/50 text-sky-400 flex items-center justify-center mx-auto">
-                    <Clock className="w-8 h-8" />
+                  <div
+                    className={`w-14 h-14 rounded-full flex items-center justify-center mx-auto border ${
+                      pendingDepositsTotal === 0 && confirmedDepositsTotal > 0
+                        ? 'bg-emerald-950/80 border-emerald-400/50 text-emerald-400'
+                        : 'bg-blue-950/80 border-sky-400/50 text-sky-400'
+                    }`}
+                  >
+                    {pendingDepositsTotal === 0 && confirmedDepositsTotal > 0 ? (
+                      <CheckCircle2 className="w-8 h-8" />
+                    ) : (
+                      <Clock className="w-8 h-8" />
+                    )}
                   </div>
                   <div className="space-y-1.5">
                     <h4 className="text-base font-black text-white uppercase">
-                      Deposit Submitted — Pending Admin Confirmation
+                      {pendingDepositsTotal === 0 && confirmedDepositsTotal > 0
+                        ? `✅ Deposit Confirmed — Wallet Balance: ${confirmedDepositsTotal.toLocaleString()} UGX`
+                        : 'Deposit Submitted — Pending Admin Confirmation'}
                     </h4>
                     <p className="text-xs text-slate-300 leading-relaxed">
-                      Your deposit of <strong className="text-sky-400">{depositAmt.toLocaleString()} UGX</strong> from{' '}
-                      <strong className="text-white">{depositPhone}</strong> to{' '}
-                      <strong className="text-white">{displayReceiverPhone} ({displayReceiverName})</strong> has been sent to Admin for confirmation.
+                      {pendingDepositsTotal === 0 && confirmedDepositsTotal > 0 ? (
+                        <>
+                          Admin has confirmed your deposit! <strong className="text-emerald-400">{confirmedDepositsTotal.toLocaleString()} UGX</strong> is now available on your Wallet to buy machines.
+                        </>
+                      ) : (
+                        <>
+                          Your deposit of <strong className="text-sky-400">{depositAmt.toLocaleString()} UGX</strong> from{' '}
+                          <strong className="text-white">{depositPhone}</strong> to{' '}
+                          <strong className="text-white">{displayReceiverPhone} ({displayReceiverName})</strong> has been sent to Admin for confirmation.
+                        </>
+                      )}
                     </p>
                     <p className="text-[11px] text-sky-300 font-semibold">
-                      Once Admin confirms your deposit, it will reflect on your Wallet so you can buy a machine!
+                      {pendingDepositsTotal === 0 && confirmedDepositsTotal > 0
+                        ? 'Click below to access your Wallet balance and buy a machine now!'
+                        : 'Once Admin confirms your deposit, it will reflect on your Wallet so you can buy a machine!'}
                     </p>
                   </div>
 
@@ -1010,7 +1034,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                       className="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 hover:brightness-110 text-white font-black text-xs uppercase tracking-wider shadow-lg shadow-blue-900/50 border border-blue-400/40 transition-all cursor-pointer flex items-center justify-center gap-2"
                     >
                       <Cpu className="w-4 h-4 text-white" />
-                      <span>VIEW RUNNING MACHINES & OPEN PLANES</span>
+                      <span>
+                        {pendingDepositsTotal === 0 && confirmedDepositsTotal > 0
+                          ? `ACCESS WALLET (${confirmedDepositsTotal.toLocaleString()} UGX) & BUY MACHINE`
+                          : 'VIEW RUNNING MACHINES & OPEN PLANES'}
+                      </span>
                     </button>
 
                     <button

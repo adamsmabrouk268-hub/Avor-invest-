@@ -177,7 +177,8 @@ export default function App() {
   const fetchUserPortfolio = async () => {
     if (!user) return;
     try {
-      const res = await fetch(`/api/user/portfolio/${encodeURIComponent(user.id)}`);
+      const phoneParam = user.phone_number ? `?phone=${encodeURIComponent(user.phone_number)}` : '';
+      const res = await fetch(`/api/user/portfolio/${encodeURIComponent(user.id)}${phoneParam}`);
       const ct = res.headers.get('content-type') || '';
       if (res.ok && ct.includes('application/json')) {
         const data = await res.json();
@@ -193,22 +194,29 @@ export default function App() {
   const fetchUserData = async () => {
     if (!user) return;
     try {
+      const phoneParam = user.phone_number ? `?phone=${encodeURIComponent(user.phone_number)}` : '';
       const [res, sumRes] = await Promise.all([
-        fetch(`/api/user/${encodeURIComponent(user.id)}`),
-        fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}`),
+        fetch(`/api/user/${encodeURIComponent(user.id)}${phoneParam}`),
+        fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}${phoneParam}`),
       ]);
       const ct = res.headers.get('content-type') || '';
+      let mergedUser: User = { ...user };
       if (res.ok && ct.includes('application/json')) {
         const data = await res.json();
         if (data && data.id) {
-          syncUserToStorage({ ...user, ...data });
+          mergedUser = { ...mergedUser, ...data };
         }
       }
       const sumCt = sumRes.headers.get('content-type') || '';
       if (sumRes.ok && sumCt.includes('application/json')) {
         const sumData = await sumRes.json();
         setInvitedCount(Number(sumData.active_buyer_referrals ?? sumData.invited_people_count ?? 0));
+        if (typeof sumData.balance === 'number') mergedUser.balance = sumData.balance;
+        if (typeof sumData.wallet_balance === 'number') mergedUser.wallet_balance = sumData.wallet_balance;
+        if (typeof sumData.available_wallet === 'number') mergedUser.available_wallet = sumData.available_wallet;
+        if (typeof sumData.has_bought_machine === 'boolean') mergedUser.has_bought_machine = sumData.has_bought_machine;
       }
+      syncUserToStorage(mergedUser);
     } catch {
       // Keep existing user session if backend is momentarily unreachable
     }

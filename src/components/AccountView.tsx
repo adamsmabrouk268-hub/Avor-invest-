@@ -79,7 +79,8 @@ export const AccountView: React.FC<AccountViewProps> = ({
   useEffect(() => {
     if (!user?.id) return;
     const loadProfileData = () => {
-      fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}`)
+      const phoneParam = user.phone_number ? `?phone=${encodeURIComponent(user.phone_number)}` : '';
+      fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}${phoneParam}`)
         .then((r) => (r.ok && (r.headers.get('content-type') || '').includes('application/json') ? r.json() : null))
         .then((data) => {
           if (data) {
@@ -87,11 +88,15 @@ export const AccountView: React.FC<AccountViewProps> = ({
             if (
               onUpdateUser &&
               ((typeof data.balance === 'number' && data.balance !== user.balance) ||
+                (typeof data.wallet_balance === 'number' && data.wallet_balance !== user.wallet_balance) ||
+                (typeof data.available_wallet === 'number' && data.available_wallet !== user.available_wallet) ||
                 (typeof data.has_bought_machine === 'boolean' && data.has_bought_machine !== user.has_bought_machine))
             ) {
               onUpdateUser({
                 ...user,
                 balance: typeof data.balance === 'number' ? data.balance : user.balance,
+                wallet_balance: typeof data.wallet_balance === 'number' ? data.wallet_balance : user.wallet_balance,
+                available_wallet: typeof data.available_wallet === 'number' ? data.available_wallet : user.available_wallet,
                 has_bought_machine:
                   typeof data.has_bought_machine === 'boolean' ? data.has_bought_machine : user.has_bought_machine,
               });
@@ -100,7 +105,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
         })
         .catch(() => {});
 
-      fetch(`/api/transactions/${encodeURIComponent(user.id)}`)
+      fetch(`/api/transactions/${encodeURIComponent(user.id)}${phoneParam}`)
         .then((r) => (r.ok && (r.headers.get('content-type') || '').includes('application/json') ? r.json() : null))
         .then((data) => {
           if (Array.isArray(data)) setTransactions(data);
@@ -109,9 +114,9 @@ export const AccountView: React.FC<AccountViewProps> = ({
     };
 
     loadProfileData();
-    const interval = setInterval(loadProfileData, 4000);
+    const interval = setInterval(loadProfileData, 3000);
     return () => clearInterval(interval);
-  }, [user?.id, user?.balance, user?.has_bought_machine, investments.length]);
+  }, [user?.id, user?.phone_number, user?.balance, user?.wallet_balance, user?.has_bought_machine, investments.length]);
 
   const hasBoughtMachine =
     investments.some((i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') ||
@@ -159,11 +164,14 @@ export const AccountView: React.FC<AccountViewProps> = ({
   const confirmedTxDeposits = transactions
     .filter((t) => t.type === 'DEPOSIT' && (t.status === 'SUCCESS' || t.status === 'CONFIRMED'))
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-  const totalDeposited = Math.max(
-    Number(dashboardSummary?.wallet_balance ?? dashboardSummary?.deposit_details?.total_deposited ?? 0),
-    confirmedTxDeposits
-  );
-  const pendingDeposits = dashboardSummary?.deposit_details?.pending_deposits || 0;
+  const availableWalletValue =
+    dashboardSummary?.available_wallet !== undefined
+      ? Number(dashboardSummary.available_wallet)
+      : dashboardSummary?.wallet_balance !== undefined
+        ? Number(dashboardSummary.wallet_balance)
+        : Number(user?.available_wallet ?? user?.wallet_balance ?? confirmedTxDeposits);
+  const totalDeposited = availableWalletValue;
+  const pendingDeposits = Number(dashboardSummary?.deposit_details?.pending_deposits ?? 0);
   const liveBalanceValue = dashboardSummary?.balance ?? user?.balance ?? 3000;
   const displayWallet = totalDeposited.toLocaleString('en-US', {
     minimumFractionDigits: 2,
@@ -288,19 +296,33 @@ export const AccountView: React.FC<AccountViewProps> = ({
          ========================================================================= */}
       <div className="bg-[#03081a] border border-[#0091ea]/60 rounded-2xl p-4 sm:p-5 shadow-[0_0_25px_rgba(0,145,234,0.14)] relative">
         <div className="grid grid-cols-2 text-center items-center">
-          {/* Left Column: Wallet */}
-          <div>
-            <span className="text-xs sm:text-sm text-slate-400 font-medium tracking-wide block">
+          {/* Left Column: Wallet (Clickable when funded to access Wallet balance & buy machines) */}
+          <div
+            onClick={() => {
+              if (totalDeposited > 0 && onNavigateToMarketplace) {
+                onNavigateToMarketplace();
+              } else {
+                onOpenWalletModal('deposit');
+              }
+            }}
+            className="cursor-pointer group"
+            title={totalDeposited > 0 ? 'Tap to access Wallet balance and buy a machine' : 'Tap to deposit'}
+          >
+            <span className="text-xs sm:text-sm text-slate-400 font-medium tracking-wide block group-hover:text-sky-300 transition-colors">
               Wallet
             </span>
-            <span className="text-2xl sm:text-3xl font-black text-white font-mono mt-1 block">
+            <span className="text-2xl sm:text-3xl font-black text-white font-mono mt-1 block group-hover:text-sky-300 transition-colors">
               {displayWallet}
             </span>
-            {pendingDeposits > 0 && (
+            {pendingDeposits > 0 ? (
               <span className="text-[10px] font-mono font-bold text-amber-300 mt-0.5 block">
                 Pending: {pendingDeposits.toLocaleString()} UGX
               </span>
-            )}
+            ) : totalDeposited > 0 ? (
+              <span className="text-[10px] font-mono font-bold text-emerald-400 mt-0.5 block">
+                Confirmed • Tap to Use →
+              </span>
+            ) : null}
           </div>
 
           {/* Right Column: Balance */}

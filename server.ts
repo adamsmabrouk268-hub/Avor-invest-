@@ -99,7 +99,6 @@ function isDemoRecord(rec: any): boolean {
   if (rec.firebase_doc_id && DELETED_DEMO_IDS.has(rec.firebase_doc_id)) return true;
   if (rec.payment_reference && DELETED_DEMO_IDS.has(rec.payment_reference)) return true;
   if (rec.id && Array.from(DELETED_DEMO_IDS).some((d) => String(rec.id).includes(d))) return true;
-  if (rec.customer_phone === '+256750552548' || rec.user_phone === '+256750552548') return true;
   return false;
 }
 
@@ -115,11 +114,7 @@ function loadAppStateFromDisk() {
     if (fs.existsSync(INVESTMENTS_FILE)) {
       const loadedInv = JSON.parse(fs.readFileSync(INVESTMENTS_FILE, 'utf-8'));
       if (Array.isArray(loadedInv)) {
-        const cleanInv = loadedInv.filter(
-          (inv) =>
-            !isDemoRecord(inv) &&
-            !transactions.every((t) => t.investment_id !== inv.id)
-        );
+        const cleanInv = loadedInv.filter((inv) => !isDemoRecord(inv));
         investments.splice(0, investments.length, ...cleanInv);
       }
     }
@@ -288,7 +283,26 @@ function findOrRestoreUser(userId?: string, body: any = {}): (User & { password_
     }
   }
 
-  // 4. If still not found but client sent a valid user_id, restore user session in memory
+  // 4. Check if any transaction on disk/memory matches this userId or phone so we can link to their phone number
+  if (!phone && id) {
+    const matchingTx = transactions.find(
+      (t) => t.user_id === id || (t as any).customer_phone === id || (t as any).user_phone === id
+    );
+    const txPhone = (matchingTx as any)?.customer_phone || (matchingTx as any)?.user_phone;
+    if (txPhone) {
+      const txTail = String(txPhone).replace(/[^0-9]/g, '').slice(-9);
+      for (const u of users.values()) {
+        if (u.id === 'usr-admin-owner') continue;
+        const uTail = (u.phone_number || u.phoneNumber || '').replace(/[^0-9]/g, '').slice(-9);
+        if (txTail && txTail.length >= 7 && uTail === txTail) {
+          users.set(id, u);
+          return u;
+        }
+      }
+    }
+  }
+
+  // 5. If still not found but client sent a valid user_id, restore user session in memory
   if (id) {
     const restoredUser: User & { password_hash: string } = {
       id,
@@ -335,8 +349,29 @@ function doesTxBelongToUser(t: Transaction, user?: User, explicitUserId?: string
 const REGISTRATION_REWARD_UGX = 3000;
 
 function syncUserConfirmedFinances(user: User & { password_hash?: string }, explicitUserId?: string) {
-  let userDeposits = transactions.filter((t) => doesTxBelongToUser(t, user, explicitUserId) && t.type === 'DEPOSIT');
-  let confirmedDeposits = userDeposits
+  // Automatically clean up any duplicate PENDING deposit if a CONFIRMED/SUCCESS deposit with the same reference or firebase_doc_id exists
+  const confirmedRefs = new Set<string>();
+  const confirmedDocIds = new Set<string>();
+  for (const t of transactions) {
+    if (t.type === 'DEPOSIT' && (t.status === 'SUCCESS' || t.status === 'CONFIRMED')) {
+      if (t.payment_reference) confirmedRefs.add(t.payment_reference);
+      if ((t as any).firebase_doc_id) confirmedDocIds.add((t as any).firebase_doc_id);
+    }
+  }
+  for (let idx = transactions.length - 1; idx >= 0; idx--) {
+    const t = transactions[idx];
+    if (
+      t.type === 'DEPOSIT' &&
+      t.status === 'PENDING' &&
+      ((t.payment_reference && confirmedRefs.has(t.payment_reference)) ||
+        ((t as any).firebase_doc_id && confirmedDocIds.has((t as any).firebase_doc_id)))
+    ) {
+      transactions.splice(idx, 1);
+    }
+  }
+
+  const userDeposits = transactions.filter((t) => doesTxBelongToUser(t, user, explicitUserId) && t.type === 'DEPOSIT');
+  const confirmedDeposits = userDeposits
     .filter((t) => t.status === 'SUCCESS' || t.status === 'CONFIRMED')
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
   const pendingDeposits = userDeposits
@@ -387,7 +422,7 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     })
     .reduce((sum, inv) => sum + Number(inv.amount_invested || 0), 0);
 
-  // Deposited money (once confirmed by Admin) reflects on the Wallet ONLY:
+  // Deposited money (once confirmed by Admin) reflects on the Wallet ONLY (minus any machines bought from Wallet):
   const computedWallet = Math.max(0, confirmedDeposits - deductedInvestments);
   // Money on the Balance is 3,000 UGX got as a reward after registration (+ earned yields/rewards - withdrawals):
   const computedBalance = Math.max(
@@ -406,12 +441,12 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     ) {
       if (
         u.balance !== computedBalance ||
-        u.wallet_balance !== confirmedDeposits ||
+        u.wallet_balance !== computedWallet ||
         u.available_wallet !== computedWallet ||
         u.has_bought_machine !== hasBoughtMachine
       ) {
         u.balance = computedBalance;
-        u.wallet_balance = confirmedDeposits;
+        u.wallet_balance = computedWallet;
         u.available_wallet = computedWallet;
         u.has_bought_machine = hasBoughtMachine;
         stateChanged = true;
@@ -420,12 +455,12 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
   }
   if (
     user.balance !== computedBalance ||
-    user.wallet_balance !== confirmedDeposits ||
+    user.wallet_balance !== computedWallet ||
     user.available_wallet !== computedWallet ||
     user.has_bought_machine !== hasBoughtMachine
   ) {
     user.balance = computedBalance;
-    user.wallet_balance = confirmedDeposits;
+    user.wallet_balance = computedWallet;
     user.available_wallet = computedWallet;
     user.has_bought_machine = hasBoughtMachine;
     stateChanged = true;
@@ -1919,6 +1954,7 @@ async function startServer() {
     }
 
     const rewardNote = activateConfirmedMachineInvestment(newInvestment, 'Activated via Admin-approved wallet balance');
+    const updatedFinances = syncUserConfirmedFinances(user, user.id);
     notifyAllAdmins(
       `✅ Machine Purchased & Activated: ${newInvestment.machine_title}`,
       `Customer ${user.full_name || user.id} (${phone_number || user.phone_number || 'No Phone'}) purchased ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} using their Admin-confirmed wallet balance (Ref: ${refCode}).`,
@@ -1955,6 +1991,8 @@ async function startServer() {
       message: `Successfully bought ${units} unit(s) of ${machine.title} using your wallet balance! Your machine is now ACTIVE (Day 1 of ${machine.duration_days}).${rewardNote}`,
       investment: newInvestment,
       user_balance: user.balance,
+      wallet_balance: updatedFinances.computedWallet,
+      available_wallet: updatedFinances.computedWallet,
       has_bought_machine: true,
       status: 'ACTIVE',
       claimed_tier_rewards: (user as any).claimed_tier_rewards || [],
@@ -2074,36 +2112,27 @@ async function startServer() {
   app.get('/api/user/dashboard-summary/:userId', (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     const userId = req.params.userId;
+    const queryPhone = (req.query.phone || req.query.phone_number || '').toString().trim();
 
-    // Comprehensive user lookup: map index, clean digits, full search, or disk file
-    let user = users.get(userId);
-    if (!user) {
-      const cleanDigits = userId.replace(/[^0-9]/g, '');
-      if (cleanDigits && users.has(cleanDigits)) {
-        user = users.get(cleanDigits);
-      }
-    }
-    if (!user) {
-      user = Array.from(users.values()).find(
-        (u) =>
-          u.id === userId ||
-          u.phone_number === userId ||
-          u.phoneNumber === userId ||
-          u.email?.toLowerCase() === userId.toLowerCase()
-      );
-    }
+    // Comprehensive user lookup: map index, phone query param, clean digits, full search, or disk file
+    let user = findOrRestoreUser(userId, { user_id: userId, phone_number: queryPhone, user_phone: queryPhone });
     if (!user && fs.existsSync(USERS_FILE)) {
       try {
         const raw = fs.readFileSync(USERS_FILE, 'utf-8');
         const diskUsers = JSON.parse(raw);
         if (Array.isArray(diskUsers)) {
-          const found = diskUsers.find(
-            (u: any) =>
+          const cleanTarget = (queryPhone || userId).replace(/[^0-9]/g, '').slice(-9);
+          const found = diskUsers.find((u: any) => {
+            const uTail = (u.phone_number || u.phoneNumber || '').replace(/[^0-9]/g, '').slice(-9);
+            return (
               u.id === userId ||
               u.phone_number === userId ||
               u.phoneNumber === userId ||
+              (queryPhone && (u.phone_number === queryPhone || u.phoneNumber === queryPhone)) ||
+              (cleanTarget && cleanTarget.length >= 7 && uTail === cleanTarget) ||
               u.email?.toLowerCase() === userId.toLowerCase()
-          );
+            );
+          });
           if (found) {
             user = found;
             users.set(found.id, found);
@@ -2350,11 +2379,11 @@ async function startServer() {
     res.json({
       user_id: user.id,
       balance: user.balance,
-      wallet_balance: totalDeposited,
+      wallet_balance: computedWallet,
       available_wallet: computedWallet,
       deposit_details: {
         total_deposited: totalDeposited,
-        wallet_balance: totalDeposited,
+        wallet_balance: computedWallet,
         available_wallet: computedWallet,
         pending_deposits: pendingDeposits,
         deposits_count: userDeposits.length,
@@ -2566,7 +2595,8 @@ async function startServer() {
   // 7. Get User Portfolio & Calculate Live Unclaimed Earnings
   app.get('/api/user/portfolio/:userId', (req, res) => {
     const userId = req.params.userId;
-    const user = findOrRestoreUser(userId, { user_id: userId });
+    const queryPhone = (req.query.phone || req.query.phone_number || '').toString().trim();
+    const user = findOrRestoreUser(userId, { user_id: userId, phone_number: queryPhone, user_phone: queryPhone });
     const userInvestments = investments.filter(
       (i) => i.user_id === userId || (user && i.user_id === user.id) || doesTxBelongToUser({ user_id: i.user_id, customer_phone: (i as any).customer_phone } as any, user, userId)
     );
@@ -3901,7 +3931,6 @@ async function startServer() {
                 name: `${baseDocsPath}/admin_messages/${cleanDocId}`,
                 fields,
               },
-              currentDocument: { exists: false },
               updateTransforms: [
                 {
                   fieldPath: 'timestamp',
@@ -3956,9 +3985,41 @@ async function startServer() {
       return { duplicate: true };
     }
 
+    // Check if this order was already confirmed by Admin (in transactions or notifications)
+    const alreadyConfirmedTx = transactions.find(
+      (t) =>
+        ((firebase_doc_id && (t as any).firebase_doc_id === firebase_doc_id) ||
+          (paymentReference && t.payment_reference === paymentReference)) &&
+        (t.status === 'SUCCESS' || t.status === 'CONFIRMED')
+    );
+    const alreadyConfirmedInNotifs = notifications.some(
+      (n: any) =>
+        ((firebase_doc_id && n.firebase_doc_id === firebase_doc_id) ||
+          (paymentReference && n.payment_reference === paymentReference)) &&
+        (n.order_status === 'CONFIRMED' || n.order_status === 'SUCCESS')
+    );
+
+    const isWalletPurchaseMsg =
+      String(item || '').toLowerCase().includes('using wallet balance') ||
+      String(paymentMethod || '').toLowerCase().includes('wallet');
+
+    const incomingIsConfirmed =
+      alreadyConfirmedTx !== undefined ||
+      alreadyConfirmedInNotifs ||
+      isWalletPurchaseMsg ||
+      payload?.status === 'CONFIRMED' ||
+      payload?.status === 'SUCCESS';
+
+    const existingMatchingTx = transactions.find(
+      (t) =>
+        (firebase_doc_id && (t as any).firebase_doc_id === firebase_doc_id) ||
+        (paymentReference && t.payment_reference === paymentReference)
+    );
+
     if (
-      (firebase_doc_id && notifications.some((n: any) => n.firebase_doc_id === firebase_doc_id)) ||
-      (paymentReference && notifications.some((n: any) => n.payment_reference === paymentReference))
+      existingMatchingTx &&
+      ((firebase_doc_id && notifications.some((n: any) => n.firebase_doc_id === firebase_doc_id)) ||
+        (paymentReference && notifications.some((n: any) => n.payment_reference === paymentReference)))
     ) {
       return { duplicate: true };
     }
@@ -3973,7 +4034,7 @@ async function startServer() {
 
     // Ensure there is also a corresponding DEPOSIT transaction in the Admin Plane for every order in Firebase
     let linkedTxId: string | undefined;
-    if (numAmt > 0) {
+    if (numAmt > 0 && !isWalletPurchaseMsg) {
       const user = findOrRestoreUser(customerPhone || customerName, {
         phone_number: customerPhone,
         user_phone: customerPhone,
@@ -3981,16 +4042,16 @@ async function startServer() {
         user_name: customerName,
       });
 
-      const existingMatchingTx = transactions.find(
-        (t) =>
-          (firebase_doc_id && (t as any).firebase_doc_id === firebase_doc_id) ||
-          (paymentReference && t.payment_reference === paymentReference)
-      );
-
       if (existingMatchingTx) {
         linkedTxId = existingMatchingTx.id;
         if (firebase_doc_id && !(existingMatchingTx as any).firebase_doc_id) {
           (existingMatchingTx as any).firebase_doc_id = firebase_doc_id;
+        }
+        if (incomingIsConfirmed && existingMatchingTx.status === 'PENDING') {
+          existingMatchingTx.status = 'SUCCESS';
+          (existingMatchingTx as any).wallet_credited = true;
+          (existingMatchingTx as any).approved_permanent = true;
+          if (user) syncUserConfirmedFinances(user, user.id);
         }
       } else {
         const depositTx: Transaction = {
@@ -3998,16 +4059,16 @@ async function startServer() {
           user_id: user ? user.id : `usr-fb-${Date.now()}`,
           amount: numAmt,
           type: 'DEPOSIT',
-          status: 'PENDING',
+          status: incomingIsConfirmed ? 'SUCCESS' : 'PENDING',
           payment_method: `${paymentMethod || 'Mobile Money'} • Sender: ${customerPhone || customerName} -> Receiver: ${targetReceiverPhone} (${targetReceiverName})`,
           payment_reference: effectiveRef,
           machine_title: machineTitle || item || undefined,
           created_at: effectiveCreatedAt,
         };
         (depositTx as any).firebase_doc_id = firebase_doc_id;
-        (depositTx as any).wallet_credited = false;
-        (depositTx as any).receiver_credited = false;
-        (depositTx as any).approved_permanent = false;
+        (depositTx as any).wallet_credited = incomingIsConfirmed;
+        (depositTx as any).receiver_credited = incomingIsConfirmed;
+        (depositTx as any).approved_permanent = incomingIsConfirmed;
         (depositTx as any).receiver_phone = targetReceiverPhone;
         (depositTx as any).receiver_name = targetReceiverName;
         (depositTx as any).customer_name = customerName;
@@ -4022,24 +4083,33 @@ async function startServer() {
       }
     }
 
-    notifyAllAdmins(
-      `🔥 Deposit & Machine Order (Pending Admin Confirmation): ${customerName}${machineTitle ? ` • ${machineTitle}` : ''}`,
-      `${item || `Order of UGX ${numAmt.toLocaleString()} from ${customerName}`}`,
-      'PAYMENT',
-      {
-        transaction_id: linkedTxId,
-        firebase_doc_id: firebase_doc_id || `fb-${Date.now()}`,
-        customer_name: customerName,
-        customer_phone: customerPhone,
-        receiver_phone: targetReceiverPhone,
-        receiver_name: targetReceiverName,
-        amount: numAmt,
-        machine_title: machineTitle || '',
-        payment_method: paymentMethod || 'Mobile Money',
-        payment_reference: effectiveRef,
-        order_status: 'PENDING',
-      }
-    );
+    if (
+      !(
+        (firebase_doc_id && notifications.some((n: any) => n.firebase_doc_id === firebase_doc_id)) ||
+        (paymentReference && notifications.some((n: any) => n.payment_reference === paymentReference))
+      )
+    ) {
+      notifyAllAdmins(
+        incomingIsConfirmed
+          ? `✅ Confirmed Order: ${customerName}${machineTitle ? ` • ${machineTitle}` : ''}`
+          : `🔥 Deposit & Machine Order (Pending Admin Confirmation): ${customerName}${machineTitle ? ` • ${machineTitle}` : ''}`,
+        `${item || `Order of UGX ${numAmt.toLocaleString()} from ${customerName}`}`,
+        'PAYMENT',
+        {
+          transaction_id: linkedTxId,
+          firebase_doc_id: firebase_doc_id || `fb-${Date.now()}`,
+          customer_name: customerName,
+          customer_phone: customerPhone,
+          receiver_phone: targetReceiverPhone,
+          receiver_name: targetReceiverName,
+          amount: numAmt,
+          machine_title: machineTitle || '',
+          payment_method: paymentMethod || 'Mobile Money',
+          payment_reference: effectiveRef,
+          order_status: incomingIsConfirmed ? 'CONFIRMED' : 'PENDING',
+        }
+      );
+    }
 
     saveAppStateToDisk();
     return { duplicate: false };
@@ -4216,16 +4286,11 @@ async function startServer() {
             machineTitle: message.machineTitle || message.item || '',
             paymentMethod: message.paymentMethod || 'Mobile Money',
             paymentReference: message.paymentReference || `FB-${messageId.slice(0, 8)}`,
-            status: status || 'CONFIRMED',
+            status: status || 'PENDING',
             createdAt: snapshot.createTime,
           });
-
-          // Safely perform actions on the triggering document
-          await snapshot.ref.update({
-            status: status || 'CONFIRMED',
-          });
         } catch (error) {
-          console.error('Error updating deposit status:', error);
+          console.error('Error processing deposit message:', error);
         }
       }
     );
@@ -4250,7 +4315,7 @@ async function startServer() {
         machineTitle: body.machineTitle,
         paymentMethod: body.paymentMethod,
         paymentReference: body.paymentReference,
-        status: body.status || 'CONFIRMED',
+        status: body.status || 'PENDING',
       });
     }
     return res.status(result.duplicate ? 200 : 201).json({ synced: true, ...result });
@@ -4445,6 +4510,56 @@ async function startServer() {
       (tx as any).confirmed_at = new Date().toISOString();
       (tx as any).approved_permanent = true;
 
+      // Remove any duplicate PENDING deposit transactions with the same reference/firebase_doc_id or mark sibling pending deposits for this user as confirmed
+      for (let idx = transactions.length - 1; idx >= 0; idx--) {
+        const other = transactions[idx];
+        if (other.id === tx.id) continue;
+        if (other.status === 'PENDING' && (other.type === 'DEPOSIT' || other.type === 'INVESTMENT')) {
+          const sameRef =
+            (tx.payment_reference && other.payment_reference === tx.payment_reference) ||
+            ((tx as any).firebase_doc_id && (other as any).firebase_doc_id === (tx as any).firebase_doc_id);
+          if (sameRef && other.type === tx.type) {
+            transactions.splice(idx, 1);
+            continue;
+          }
+          if (doesTxBelongToUser(other, user, tx.user_id) && other.amount === tx.amount) {
+            if (other.type === tx.type) {
+              // Duplicate pending submission of the same amount by the same user -> remove duplicate so pending becomes 0
+              transactions.splice(idx, 1);
+              continue;
+            }
+          }
+        }
+      }
+
+      // Mark all matching notifications as CONFIRMED so they are removed from Pending lists
+      notifications.forEach((n: any) => {
+        if (
+          n.transaction_id === tx.id ||
+          (tx.payment_reference && n.payment_reference === tx.payment_reference) ||
+          ((tx as any).firebase_doc_id && n.firebase_doc_id === (tx as any).firebase_doc_id) ||
+          (user && n.customer_phone && (n.customer_phone === user.phone_number || n.customer_phone === (tx as any).customer_phone) && Number(n.amount) === Number(tx.amount) && n.order_status === 'PENDING')
+        ) {
+          n.order_status = 'CONFIRMED';
+          n.read = true;
+        }
+      });
+
+      // Update Firestore admin_messages document to status: 'CONFIRMED' so it is never re-ingested as PENDING
+      void ensureOrderSavedInFirestore({
+        docId: (tx as any).firebase_doc_id || tx.payment_reference || tx.id,
+        name: user?.full_name || (tx as any).customer_name || 'Avor Investor',
+        item: `Confirmed Deposit of UGX ${Number(tx.amount || 0).toLocaleString()} (${tx.payment_reference || tx.id})`,
+        senderPhone: user?.phone_number || (tx as any).customer_phone || '',
+        receiverPhone: (tx as any).receiver_phone || RECEIVER_PHONE,
+        receiverName: (tx as any).receiver_name || RECEIVER_NAME,
+        amount: Number(tx.amount || 0),
+        machineTitle: tx.machine_title || 'Confirmed Wallet Deposit',
+        paymentMethod: tx.payment_method || 'Mobile Money',
+        paymentReference: tx.payment_reference || tx.id,
+        status: 'CONFIRMED',
+      });
+
       // Case 1: Machine Purchase Payment Confirmation -> Activate Machine & Start Counting Days
       if (tx.type === 'INVESTMENT') {
         const inv = investments.find(
@@ -4458,7 +4573,7 @@ async function startServer() {
         // Also mark any matching pending DEPOSIT transaction for this user/investment as SUCCESS
         const relatedPendingDeposits = transactions.filter(
           (t) =>
-            (t.user_id === tx.user_id || (user && t.user_id === user.id)) &&
+            doesTxBelongToUser(t, user, tx.user_id) &&
             t.type === 'DEPOSIT' &&
             t.status === 'PENDING' &&
             (t.investment_id === inv?.id || t.amount === tx.amount)
@@ -4478,7 +4593,7 @@ async function startServer() {
           relatedPendingDeposits.length > 0 ||
           transactions.some(
             (t) =>
-              (t.user_id === tx.user_id || (user && t.user_id === user.id)) &&
+              doesTxBelongToUser(t, user, tx.user_id) &&
               t.type === 'DEPOSIT' &&
               (t.investment_id === inv?.id || (t.amount === tx.amount && t.status === 'SUCCESS'))
           );
@@ -4567,7 +4682,7 @@ async function startServer() {
             }
           }
         }
-        syncUserConfirmedFinances(user, user.id);
+        const finalFinances = syncUserConfirmedFinances(user, user.id);
         saveRegisteredUserToDisk(user);
         saveAppStateToDisk();
 
@@ -4589,7 +4704,8 @@ async function startServer() {
               : `Deposit of ${tx.amount.toLocaleString()} UGX confirmed and reflected on customer Wallet!`,
           transaction: tx,
           new_balance: user.balance,
-          wallet_balance: user.wallet_balance || 0,
+          wallet_balance: finalFinances.computedWallet,
+          available_wallet: finalFinances.computedWallet,
         });
       }
 
@@ -4771,6 +4887,29 @@ async function startServer() {
       }
     }
 
+    // Mark all pending admin order notifications as CONFIRMED and sync to Firestore
+    notifications.forEach((n: any) => {
+      if (n.order_status === 'PENDING') {
+        n.order_status = 'CONFIRMED';
+        n.read = true;
+      }
+    });
+    for (const tx of pendingTxs) {
+      void ensureOrderSavedInFirestore({
+        docId: (tx as any).firebase_doc_id || tx.payment_reference || tx.id,
+        name: (tx as any).customer_name || 'Avor Investor',
+        item: `Confirmed Deposit of UGX ${Number(tx.amount || 0).toLocaleString()} (${tx.payment_reference || tx.id})`,
+        senderPhone: (tx as any).customer_phone || '',
+        receiverPhone: (tx as any).receiver_phone || RECEIVER_PHONE,
+        receiverName: (tx as any).receiver_name || RECEIVER_NAME,
+        amount: Number(tx.amount || 0),
+        machineTitle: tx.machine_title || 'Confirmed Wallet Deposit',
+        paymentMethod: tx.payment_method || 'Mobile Money',
+        paymentReference: tx.payment_reference || tx.id,
+        status: 'CONFIRMED',
+      });
+    }
+
     saveAppStateToDisk();
 
     return res.json({
@@ -4887,11 +5026,12 @@ async function startServer() {
   // 11. Transactions History (Matches by user ID or phone number so all submitted & confirmed deposits reflect on all planes)
   app.get('/api/transactions/:userId', (req, res) => {
     const userId = req.params.userId;
-    const user = findOrRestoreUser(userId, { user_id: userId });
+    const queryPhone = (req.query.phone || req.query.phone_number || '').toString().trim();
+    const user = findOrRestoreUser(userId, { user_id: userId, phone_number: queryPhone, user_phone: queryPhone });
     if (user) {
       syncUserConfirmedFinances(user, userId);
     }
-    const userTxs = transactions.filter((t) => doesTxBelongToUser(t, user, userId));
+    const userTxs = transactions.filter((t) => doesTxBelongToUser(t, user, queryPhone || userId));
     res.json(userTxs);
   });
 
@@ -4899,34 +5039,25 @@ async function startServer() {
   const handleGetUserProfile = (req: express.Request, res: express.Response) => {
     res.setHeader('Content-Type', 'application/json');
     const targetId = req.params.userId;
-    let user = users.get(targetId);
-    if (!user) {
-      const cleanDigits = targetId.replace(/[^0-9]/g, '');
-      if (cleanDigits && users.has(cleanDigits)) {
-        user = users.get(cleanDigits);
-      }
-    }
-    if (!user) {
-      user = Array.from(users.values()).find(
-        (u) =>
-          u.id === targetId ||
-          u.phone_number === targetId ||
-          u.phoneNumber === targetId ||
-          u.email?.toLowerCase() === targetId.toLowerCase()
-      );
-    }
+    const queryPhone = (req.query.phone || req.query.phone_number || '').toString().trim();
+    let user = findOrRestoreUser(targetId, { user_id: targetId, phone_number: queryPhone, user_phone: queryPhone });
     if (!user && fs.existsSync(USERS_FILE)) {
       try {
         const raw = fs.readFileSync(USERS_FILE, 'utf-8');
         const diskUsers = JSON.parse(raw);
         if (Array.isArray(diskUsers)) {
-          const found = diskUsers.find(
-            (u: any) =>
+          const cleanTarget = (queryPhone || targetId).replace(/[^0-9]/g, '').slice(-9);
+          const found = diskUsers.find((u: any) => {
+            const uTail = (u.phone_number || u.phoneNumber || '').replace(/[^0-9]/g, '').slice(-9);
+            return (
               u.id === targetId ||
               u.phone_number === targetId ||
               u.phoneNumber === targetId ||
+              (queryPhone && (u.phone_number === queryPhone || u.phoneNumber === queryPhone)) ||
+              (cleanTarget && cleanTarget.length >= 7 && uTail === cleanTarget) ||
               u.email?.toLowerCase() === targetId.toLowerCase()
-          );
+            );
+          });
           if (found) {
             user = found;
             users.set(found.id, found);

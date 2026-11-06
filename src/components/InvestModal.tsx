@@ -165,9 +165,10 @@ export const InvestModal: React.FC<InvestModalProps> = ({
     if (!user?.id) return;
     if (showSpinner) setIsCheckingBalance(true);
     try {
+      const phoneParam = user.phone_number ? `?phone=${encodeURIComponent(user.phone_number)}` : '';
       const [userRes, summaryRes] = await Promise.all([
-        fetch(`/api/user/${encodeURIComponent(user.id)}`),
-        fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}`),
+        fetch(`/api/user/${encodeURIComponent(user.id)}${phoneParam}`),
+        fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}${phoneParam}`),
       ]);
       if (userRes.ok && (userRes.headers.get('content-type') || '').includes('application/json')) {
         const uData = await userRes.json();
@@ -185,7 +186,11 @@ export const InvestModal: React.FC<InvestModalProps> = ({
           } else if (typeof sData.wallet_balance === 'number') {
             setLiveBalance(sData.wallet_balance);
           }
-          setPendingDepositAmount(Number(sData?.deposit_details?.pending_deposits || 0));
+          const newPending = Number(sData?.deposit_details?.pending_deposits || 0);
+          setPendingDepositAmount(newPending);
+          if (newPending === 0) {
+            setDepositSuccessMessage(null);
+          }
         }
       }
     } catch {
@@ -322,8 +327,12 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       if (!res.ok) {
         throw new Error(data.error || 'Failed to purchase machine.');
       }
-      if (typeof data.user_balance === 'number') {
-        setLiveBalance(data.user_balance);
+      if (typeof data.available_wallet === 'number') {
+        setLiveBalance(data.available_wallet);
+      } else if (typeof data.wallet_balance === 'number') {
+        setLiveBalance(data.wallet_balance);
+      } else {
+        setLiveBalance((prev) => Math.max(0, prev - totalCost));
       }
       setSuccessData({
         message:
