@@ -79,7 +79,18 @@ export const AccountView: React.FC<AccountViewProps> = ({
   useEffect(() => {
     if (!user?.id) return;
     const loadProfileData = () => {
-      const phoneParam = user.phone_number ? `?phone=${encodeURIComponent(user.phone_number)}` : '';
+      let refsParam = '';
+      try {
+        const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
+        if (Array.isArray(savedRefs) && savedRefs.length > 0) {
+          refsParam = `&refs=${encodeURIComponent(savedRefs.join(','))}`;
+        }
+      } catch {}
+      const phoneParam = user.phone_number
+        ? `?phone=${encodeURIComponent(user.phone_number)}${refsParam}`
+        : refsParam
+          ? `?${refsParam.slice(1)}`
+          : '';
       fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}${phoneParam}`)
         .then((r) => (r.ok && (r.headers.get('content-type') || '').includes('application/json') ? r.json() : null))
         .then((data) => {
@@ -114,8 +125,38 @@ export const AccountView: React.FC<AccountViewProps> = ({
     };
 
     loadProfileData();
-    const interval = setInterval(loadProfileData, 3000);
-    return () => clearInterval(interval);
+    const interval = setInterval(loadProfileData, 2000);
+
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource('/api/realtime/wallet-stream');
+      es.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data);
+          if (parsed && (parsed.type === 'WALLET_CONFIRMED_SYNC' || parsed.type === 'DEPOSIT_CREATED_PENDING')) {
+            loadProfileData();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('avor_realtime_wallet_sync');
+      bc.onmessage = () => {
+        loadProfileData();
+      };
+    } catch {}
+
+    return () => {
+      clearInterval(interval);
+      try {
+        es?.close();
+      } catch {}
+      try {
+        bc?.close();
+      } catch {}
+    };
   }, [user?.id, user?.phone_number, user?.balance, user?.wallet_balance, user?.has_bought_machine, investments.length]);
 
   const hasBoughtMachine =
@@ -629,7 +670,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
                               : 'text-rose-400'
                         }`}
                       >
-                        {tx.status === 'SUCCESS' ? 'CONFIRMED' : tx.status}
+                        {tx.status === 'SUCCESS' || tx.status === 'CONFIRMED' ? 'SUCCESSFUL' : tx.status}
                       </span>
                     </div>
                   </div>

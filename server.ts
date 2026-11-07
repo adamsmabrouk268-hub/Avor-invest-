@@ -395,6 +395,37 @@ function doesTxBelongToUser(t: Transaction, user?: User, explicitUserId?: string
 
 const REGISTRATION_REWARD_UGX = 3000;
 
+function linkKnownDepositRefsToUser(user?: User & { password_hash?: string }, rawRefs?: any) {
+  if (!user || !rawRefs) return;
+  const refList = String(rawRefs)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (refList.length === 0) return;
+  const refSet = new Set(refList);
+  let changed = false;
+  for (const t of transactions) {
+    if (
+      t.type === 'DEPOSIT' &&
+      (refSet.has(t.id) ||
+        (t.payment_reference && refSet.has(t.payment_reference)) ||
+        ((t as any).firebase_doc_id && refSet.has((t as any).firebase_doc_id)))
+    ) {
+      if (t.user_id !== user.id) {
+        t.user_id = user.id;
+        changed = true;
+      }
+      if (user.phone_number && (t as any).user_phone !== user.phone_number) {
+        (t as any).user_phone = user.phone_number;
+        changed = true;
+      }
+    }
+  }
+  if (changed) {
+    saveAppStateToDisk();
+  }
+}
+
 function syncUserConfirmedFinances(user: User & { password_hash?: string }, explicitUserId?: string) {
   // Automatically clean up any duplicate PENDING deposit if a CONFIRMED/SUCCESS deposit with the same reference or firebase_doc_id exists
   const confirmedRefs = new Set<string>();
@@ -807,6 +838,20 @@ function notifyAllAdmins(
   saveAppStateToDisk();
 }
 
+// Real-Time Server-Sent Events (SSE) client registry for instant Wallet & Deposit Status synchronization without refreshing
+const realtimeClients = new Set<express.Response>();
+
+function broadcastRealtimeEvent(payload: Record<string, any>) {
+  const dataString = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const client of realtimeClients) {
+    try {
+      client.write(dataString);
+    } catch {
+      realtimeClients.delete(client);
+    }
+  }
+}
+
 // No demo user seeded — system starts with clean accounts and 0 demo payments
 const demoUserId = 'usr-demo-123';
 
@@ -935,6 +980,35 @@ async function startServer() {
   });
 
   const PORT = 3000;
+
+  // ====================================================================
+  // REAL-TIME WALLET & DEPOSIT STATUS STREAM (Server-Sent Events)
+  // Updates customer Wallet balance and Pending -> Successful status immediately without refreshing
+  // ====================================================================
+  app.get('/api/realtime/wallet-stream', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    res.write(`data: ${JSON.stringify({ type: 'CONNECTED', timestamp: new Date().toISOString() })}\n\n`);
+    realtimeClients.add(res);
+
+    const keepAliveTimer = setInterval(() => {
+      try {
+        res.write(`: keep-alive ${Date.now()}\n\n`);
+      } catch {
+        clearInterval(keepAliveTimer);
+        realtimeClients.delete(res);
+      }
+    }, 15000);
+
+    req.on('close', () => {
+      clearInterval(keepAliveTimer);
+      realtimeClients.delete(res);
+    });
+  });
 
   // ====================================================================
   // 1. ADMIN & PUBLIC ROUTES
@@ -2195,6 +2269,7 @@ async function startServer() {
     res.setHeader('Content-Type', 'application/json');
     const userId = req.params.userId;
     const queryPhone = (req.query.phone || req.query.phone_number || '').toString().trim();
+    const queryRefs = req.query.refs;
 
     // Comprehensive user lookup: map index, phone query param, clean digits, full search, or disk file
     let user = findOrRestoreUser(userId, { user_id: userId, phone_number: queryPhone, user_phone: queryPhone });
@@ -2264,6 +2339,7 @@ async function startServer() {
     }
 
     // 1. Sync & compute Deposit details (confirmed deposits reflect on Wallet ONLY; Balance has 3,000 registration reward + yields)
+    linkKnownDepositRefsToUser(user, queryRefs);
     const {
       userDeposits,
       confirmedDeposits: totalDeposited,
@@ -3414,6 +3490,21 @@ async function startServer() {
 
       saveAppStateToDisk();
 
+      broadcastRealtimeEvent({
+        type: 'DEPOSIT_CREATED_PENDING',
+        transaction: newTx,
+        transaction_id: newTx.id,
+        payment_reference: newTx.payment_reference,
+        status: 'PENDING',
+        status_label: 'Pending',
+        user_id: newTx.user_id,
+        user_phone: (newTx as any).user_phone,
+        customer_phone: (newTx as any).customer_phone,
+        amount: newTx.amount,
+        wallet_balance: user ? user.wallet_balance || 0 : 0,
+        timestamp: new Date().toISOString(),
+      });
+
       return res.status(200).json({
         message: `Deposit of ${finalAmount.toLocaleString()} UGX submitted! Once Admin confirms your deposit, it will reflect on your Wallet.`,
         depositId: newTx.id,
@@ -3540,6 +3631,21 @@ async function startServer() {
       paymentMethod: payment_method || 'Mobile Money',
       paymentReference: refCode,
       status: 'PENDING',
+    });
+
+    broadcastRealtimeEvent({
+      type: 'DEPOSIT_CREATED_PENDING',
+      transaction: newTx,
+      transaction_id: newTx.id,
+      payment_reference: newTx.payment_reference,
+      status: 'PENDING',
+      status_label: 'Pending',
+      user_id: user.id,
+      user_phone: (newTx as any).user_phone,
+      customer_phone: (newTx as any).customer_phone,
+      amount: numAmt,
+      wallet_balance: user.wallet_balance || 0,
+      timestamp: new Date().toISOString(),
     });
 
     res.json({
@@ -4097,28 +4203,38 @@ async function startServer() {
     // Ensure there is also a corresponding DEPOSIT transaction in the Admin Plane for every order in Firebase
     let linkedTxId: string | undefined;
     if (numAmt > 0 && !isWalletPurchaseMsg) {
-      const user = findOrRestoreUser(customerPhone || customerName, {
+      const explicitUserId = (payload as any)?.userId || (payload as any)?.user_id || '';
+      const explicitTxId = (payload as any)?.transactionId || (payload as any)?.transaction_id || '';
+      const existingByExplicitTx = explicitTxId ? transactions.find((t) => t.id === explicitTxId) : undefined;
+      const targetMatchTx = existingMatchingTx || existingByExplicitTx;
+
+      const user = findOrRestoreUser(explicitUserId || customerPhone || customerName, {
+        user_id: explicitUserId || undefined,
         phone_number: customerPhone,
         user_phone: customerPhone,
         full_name: customerName,
         user_name: customerName,
       });
 
-      if (existingMatchingTx) {
-        linkedTxId = existingMatchingTx.id;
-        if (firebase_doc_id && !(existingMatchingTx as any).firebase_doc_id) {
-          (existingMatchingTx as any).firebase_doc_id = firebase_doc_id;
+      if (targetMatchTx) {
+        linkedTxId = targetMatchTx.id;
+        if (firebase_doc_id && !(targetMatchTx as any).firebase_doc_id) {
+          (targetMatchTx as any).firebase_doc_id = firebase_doc_id;
         }
-        if (incomingIsConfirmed && existingMatchingTx.status === 'PENDING') {
-          existingMatchingTx.status = 'SUCCESS';
-          (existingMatchingTx as any).wallet_credited = true;
-          (existingMatchingTx as any).approved_permanent = true;
+        if (explicitUserId && targetMatchTx.user_id !== explicitUserId) {
+          targetMatchTx.user_id = explicitUserId;
+        }
+        if (incomingIsConfirmed && targetMatchTx.status === 'PENDING') {
+          targetMatchTx.status = 'SUCCESS';
+          (targetMatchTx as any).status_label = 'Successful';
+          (targetMatchTx as any).wallet_credited = true;
+          (targetMatchTx as any).approved_permanent = true;
           if (user) syncUserConfirmedFinances(user, user.id);
         }
       } else {
         const depositTx: Transaction = {
-          id: `tx-fb-${firebase_doc_id || Date.now()}-${Math.floor(100 + Math.random() * 899)}`,
-          user_id: user ? user.id : `usr-fb-${Date.now()}`,
+          id: explicitTxId || `tx-fb-${firebase_doc_id || Date.now()}-${Math.floor(100 + Math.random() * 899)}`,
+          user_id: explicitUserId || (user ? user.id : `usr-fb-${Date.now()}`),
           amount: numAmt,
           type: 'DEPOSIT',
           status: incomingIsConfirmed ? 'SUCCESS' : 'PENDING',
@@ -4127,6 +4243,7 @@ async function startServer() {
           machine_title: machineTitle || item || undefined,
           created_at: effectiveCreatedAt,
         };
+        (depositTx as any).status_label = incomingIsConfirmed ? 'Successful' : 'Pending';
         (depositTx as any).firebase_doc_id = firebase_doc_id;
         (depositTx as any).wallet_credited = incomingIsConfirmed;
         (depositTx as any).receiver_credited = incomingIsConfirmed;
@@ -4543,16 +4660,237 @@ async function startServer() {
     saveDepositNumbersToDisk();
   };
 
+  // =========================================================================
+  // REAL-TIME WALLET SYNC FUNCTION WHEN ADMIN PRESSES CONFIRM:
+  // Atomically executes 2 things at the exact same time:
+  //   1. Changes deposit status from Pending -> Successful (SUCCESS)
+  //   2. Adds that amount to that customer's Wallet balance and broadcasts real-time SSE update
+  // =========================================================================
+  const realTimeSyncWalletOnConfirm = (
+    tx: Transaction,
+    notes?: string
+  ): {
+    user: (User & { password_hash?: string }) | undefined;
+    computedWallet: number;
+    computedBalance: number;
+  } => {
+    const nowIso = new Date().toISOString();
+
+    // THING 1: Change Pending -> Successful
+    tx.status = 'SUCCESS';
+    (tx as any).status_label = 'Successful';
+    (tx as any).confirmed_at = nowIso;
+    (tx as any).approved_permanent = true;
+    (tx as any).wallet_credited = true;
+
+    creditReceiverOnConfirm(tx);
+
+    // Find all user records matching tx.user_id, tx.user_phone, or tx.customer_phone so the customer's active session is guaranteed to receive the Wallet funds
+    const matchedUsers = new Map<string, User & { password_hash?: string }>();
+    const primaryUser = findOrRestoreUser(tx.user_id, {
+      user_id: tx.user_id,
+      phone_number: (tx as any).user_phone || (tx as any).customer_phone,
+      user_phone: (tx as any).user_phone || (tx as any).customer_phone,
+      full_name: (tx as any).customer_name,
+      user_name: (tx as any).customer_name,
+    });
+    if (primaryUser && primaryUser.id !== 'usr-admin-owner') {
+      matchedUsers.set(primaryUser.id, primaryUser);
+    }
+
+    for (const u of users.values()) {
+      if (!u || !u.id || u.id === 'usr-admin-owner') continue;
+      if (doesTxBelongToUser(tx, u, u.id)) {
+        matchedUsers.set(u.id, u);
+      }
+    }
+
+    // Remove any duplicate PENDING deposit transactions with the same reference/firebase_doc_id or confirm sibling pending deposits for this customer
+    for (let idx = transactions.length - 1; idx >= 0; idx--) {
+      const other = transactions[idx];
+      if (other.id === tx.id) continue;
+      if (other.status === 'PENDING' && (other.type === 'DEPOSIT' || other.type === 'INVESTMENT')) {
+        const sameRef =
+          (tx.payment_reference && other.payment_reference === tx.payment_reference) ||
+          ((tx as any).firebase_doc_id && (other as any).firebase_doc_id === (tx as any).firebase_doc_id);
+        if (sameRef && other.type === tx.type) {
+          transactions.splice(idx, 1);
+          continue;
+        }
+        if (doesTxBelongToUser(other, primaryUser, tx.user_id)) {
+          if (other.type === tx.type && other.amount === tx.amount) {
+            transactions.splice(idx, 1);
+            continue;
+          } else if (other.type === 'DEPOSIT') {
+            other.status = 'SUCCESS';
+            (other as any).status_label = 'Successful';
+            (other as any).confirmed_at = nowIso;
+            (other as any).approved_permanent = true;
+            (other as any).wallet_credited = true;
+            creditReceiverOnConfirm(other);
+          }
+        }
+      }
+    }
+
+    // Mark all matching Admin order notifications as SUCCESS / CONFIRMED
+    notifications.forEach((n: any) => {
+      if (
+        n.transaction_id === tx.id ||
+        (tx.payment_reference && n.payment_reference === tx.payment_reference) ||
+        ((tx as any).firebase_doc_id && n.firebase_doc_id === (tx as any).firebase_doc_id) ||
+        (primaryUser &&
+          n.customer_phone &&
+          (n.customer_phone === primaryUser.phone_number || n.customer_phone === (tx as any).customer_phone) &&
+          n.order_status === 'PENDING')
+      ) {
+        n.order_status = 'CONFIRMED';
+        n.status_label = 'Successful';
+        n.read = true;
+      }
+    });
+
+    // Update Firestore admin_messages document to status: 'SUCCESS' so it shows Successful everywhere
+    void ensureOrderSavedInFirestore({
+      docId: (tx as any).firebase_doc_id || tx.payment_reference || tx.id,
+      name: primaryUser?.full_name || (tx as any).customer_name || 'Avor Investor',
+      item: `Successful Deposit of UGX ${Number(tx.amount || 0).toLocaleString()} (${tx.payment_reference || tx.id})`,
+      senderPhone: primaryUser?.phone_number || (tx as any).customer_phone || '',
+      receiverPhone: (tx as any).receiver_phone || RECEIVER_PHONE,
+      receiverName: (tx as any).receiver_name || RECEIVER_NAME,
+      amount: Number(tx.amount || 0),
+      machineTitle: tx.machine_title || 'Successful Wallet Deposit',
+      paymentMethod: tx.payment_method || 'Mobile Money',
+      paymentReference: tx.payment_reference || tx.id,
+      status: 'SUCCESS',
+    });
+
+    // THING 2: Add that amount to that customer's Wallet balance across all matching user records & save to disk
+    let latestWallet = Number(tx.amount || 0);
+    let latestBalance = primaryUser?.balance ?? REGISTRATION_REWARD_UGX;
+
+    if (tx.type === 'DEPOSIT') {
+      for (let idx = investments.length - 1; idx >= 0; idx--) {
+        const inv = investments[idx];
+        if (
+          inv.status === 'PENDING' &&
+          doesTxBelongToUser({ user_id: inv.user_id, customer_phone: (inv as any).customer_phone } as any, primaryUser, tx.user_id)
+        ) {
+          investments.splice(idx, 1);
+        }
+      }
+    }
+
+    const syncedUserIds: string[] = [];
+    for (const targetUser of matchedUsers.values()) {
+      const fin = syncUserConfirmedFinances(targetUser, targetUser.id);
+      latestWallet = fin.computedWallet;
+      latestBalance = targetUser.balance;
+      syncedUserIds.push(targetUser.id);
+      saveRegisteredUserToDisk(targetUser as User & { password_hash: string });
+
+      pushNotification(
+        targetUser.id,
+        '✅ Deposit Successful & Added to Wallet!',
+        `Your deposit of ${tx.amount.toLocaleString()} UGX has been confirmed by Admin (Pending -> Successful) and added to your Wallet balance (${fin.computedWallet.toLocaleString()} UGX available). You can now buy a machine using your Wallet! ${notes || ''}`,
+        'PAYMENT'
+      );
+    }
+
+    saveAppStateToDisk();
+
+    // Immediately push real-time SSE update to all connected clients so customer sees Wallet balance without refreshing
+    broadcastRealtimeEvent({
+      type: 'WALLET_CONFIRMED_SYNC',
+      transaction: tx,
+      transaction_id: tx.id,
+      payment_reference: tx.payment_reference,
+      firebase_doc_id: (tx as any).firebase_doc_id,
+      status: 'SUCCESS',
+      status_label: 'Successful',
+      user_id: primaryUser?.id || tx.user_id,
+      synced_user_ids: syncedUserIds,
+      user_phone: (tx as any).user_phone || primaryUser?.phone_number || '',
+      customer_phone: (tx as any).customer_phone || primaryUser?.phone_number || '',
+      amount_added: Number(tx.amount || 0),
+      wallet_balance: latestWallet,
+      available_wallet: latestWallet,
+      balance: latestBalance,
+      timestamp: nowIso,
+    });
+
+    return {
+      user: primaryUser,
+      computedWallet: latestWallet,
+      computedBalance: latestBalance,
+    };
+  };
+
   // Admin Confirm / Reject Pending Deposit or Machine Payment
   app.post('/api/admin/deposits/action', (req, res) => {
-    const { transaction_id, action, notes } = req.body; // action: 'APPROVE' | 'REJECT'
-    const tx = transactions.find(
+    const {
+      transaction_id,
+      action,
+      notes,
+      firebase_doc_id,
+      payment_reference,
+      user_id,
+      customer_phone,
+      customer_name,
+      amount,
+      payment_method,
+      receiver_phone,
+      receiver_name,
+    } = req.body || {}; // action: 'APPROVE' | 'REJECT'
+
+    const searchPhoneTail = String(customer_phone || '').replace(/\D/g, '').slice(-9);
+    let tx = transactions.find(
       (t) =>
         (t.id === transaction_id ||
+          (payment_reference && t.payment_reference === payment_reference) ||
           t.payment_reference === transaction_id ||
+          (firebase_doc_id && (t as any).firebase_doc_id === firebase_doc_id) ||
           (t as any).firebase_doc_id === transaction_id) &&
         (t.type === 'DEPOSIT' || t.type === 'INVESTMENT')
     );
+
+    if (!tx && searchPhoneTail && searchPhoneTail.length >= 7) {
+      tx = transactions.find(
+        (t) =>
+          t.status === 'PENDING' &&
+          (t.type === 'DEPOSIT' || t.type === 'INVESTMENT') &&
+          (!amount || Number(t.amount) === Number(amount)) &&
+          (((t as any).customer_phone || '').replace(/\D/g, '').slice(-9) === searchPhoneTail ||
+            ((t as any).user_phone || '').replace(/\D/g, '').slice(-9) === searchPhoneTail)
+      );
+    }
+
+    // If Admin pressed Confirm on an order notification or Firestore message that wasn't yet in `transactions`, create it on the spot so Confirm never fails
+    if (!tx && action === 'APPROVE' && Number(amount) > 0) {
+      const restoredCustomer = findOrRestoreUser(user_id || customer_phone, {
+        user_id,
+        phone_number: customer_phone,
+        user_phone: customer_phone,
+        full_name: customer_name,
+      });
+      tx = {
+        id: transaction_id || `tx-dep-${Date.now()}`,
+        user_id: restoredCustomer ? restoredCustomer.id : user_id || `usr-${Date.now()}`,
+        amount: Number(amount),
+        type: 'DEPOSIT',
+        status: 'PENDING',
+        payment_method: payment_method || 'Mobile Money',
+        payment_reference: payment_reference || transaction_id || `CONF-${Date.now()}`,
+        created_at: new Date().toISOString(),
+      };
+      (tx as any).firebase_doc_id = firebase_doc_id || transaction_id;
+      (tx as any).customer_name = customer_name || restoredCustomer?.full_name || 'Investor';
+      (tx as any).customer_phone = customer_phone || restoredCustomer?.phone_number || '';
+      (tx as any).user_phone = restoredCustomer?.phone_number || customer_phone || '';
+      (tx as any).receiver_phone = receiver_phone || RECEIVER_PHONE;
+      (tx as any).receiver_name = receiver_name || RECEIVER_NAME;
+      transactions.unshift(tx);
+    }
 
     if (!tx) {
       return res.status(404).json({ error: 'Payment transaction not found.' });
@@ -4566,75 +4904,7 @@ async function startServer() {
       user_name: (tx as any).customer_name,
     });
 
-    if (user && user.id !== 'usr-admin-owner' && tx.user_id !== user.id) {
-      tx.user_id = user.id;
-    }
-
     if (action === 'APPROVE') {
-      tx.status = 'SUCCESS';
-      (tx as any).confirmed_at = new Date().toISOString();
-      (tx as any).approved_permanent = true;
-
-      // Remove any duplicate PENDING deposit transactions with the same reference/firebase_doc_id or mark sibling pending deposits for this user as confirmed
-      for (let idx = transactions.length - 1; idx >= 0; idx--) {
-        const other = transactions[idx];
-        if (other.id === tx.id) continue;
-        if (other.status === 'PENDING' && (other.type === 'DEPOSIT' || other.type === 'INVESTMENT')) {
-          const sameRef =
-            (tx.payment_reference && other.payment_reference === tx.payment_reference) ||
-            ((tx as any).firebase_doc_id && (other as any).firebase_doc_id === (tx as any).firebase_doc_id);
-          if (sameRef && other.type === tx.type) {
-            transactions.splice(idx, 1);
-            continue;
-          }
-          if (doesTxBelongToUser(other, user, tx.user_id)) {
-            if (other.type === tx.type && other.amount === tx.amount) {
-              // Duplicate pending submission of the same amount by the same user -> remove duplicate so pending becomes 0
-              transactions.splice(idx, 1);
-              continue;
-            } else if (other.type === 'DEPOSIT') {
-              // Confirm any other pending deposit for this user so no pending remains
-              other.status = 'SUCCESS';
-              (other as any).confirmed_at = new Date().toISOString();
-              (other as any).approved_permanent = true;
-              (other as any).wallet_credited = true;
-              creditReceiverOnConfirm(other);
-            }
-          }
-        }
-      }
-
-      // Mark all matching notifications as CONFIRMED so they are removed from Pending lists
-      notifications.forEach((n: any) => {
-        if (
-          n.transaction_id === tx.id ||
-          (tx.payment_reference && n.payment_reference === tx.payment_reference) ||
-          ((tx as any).firebase_doc_id && n.firebase_doc_id === (tx as any).firebase_doc_id) ||
-          (user &&
-            n.customer_phone &&
-            (n.customer_phone === user.phone_number || n.customer_phone === (tx as any).customer_phone) &&
-            n.order_status === 'PENDING')
-        ) {
-          n.order_status = 'CONFIRMED';
-          n.read = true;
-        }
-      });
-
-      // Update Firestore admin_messages document to status: 'CONFIRMED' so it is never re-ingested as PENDING
-      void ensureOrderSavedInFirestore({
-        docId: (tx as any).firebase_doc_id || tx.payment_reference || tx.id,
-        name: user?.full_name || (tx as any).customer_name || 'Avor Investor',
-        item: `Confirmed Deposit of UGX ${Number(tx.amount || 0).toLocaleString()} (${tx.payment_reference || tx.id})`,
-        senderPhone: user?.phone_number || (tx as any).customer_phone || '',
-        receiverPhone: (tx as any).receiver_phone || RECEIVER_PHONE,
-        receiverName: (tx as any).receiver_name || RECEIVER_NAME,
-        amount: Number(tx.amount || 0),
-        machineTitle: tx.machine_title || 'Confirmed Wallet Deposit',
-        paymentMethod: tx.payment_method || 'Mobile Money',
-        paymentReference: tx.payment_reference || tx.id,
-        status: 'CONFIRMED',
-      });
-
       // Case 1: Machine Purchase Payment Confirmation -> Activate Machine & Start Counting Days
       if (tx.type === 'INVESTMENT') {
         const inv = investments.find(
@@ -4645,74 +4915,45 @@ async function startServer() {
               i.amount_invested === tx.amount)
         );
 
+        const syncRes = realTimeSyncWalletOnConfirm(tx, notes);
+
         if (inv && inv.status === 'PENDING') {
-          if (user) {
-            const { computedWallet } = syncUserConfirmedFinances(user, user.id);
+          if (syncRes.user) {
+            const { computedWallet } = syncUserConfirmedFinances(syncRes.user, syncRes.user.id);
             if (!inv.wallet_deducted && computedWallet >= inv.amount_invested) {
               inv.wallet_deducted = true;
             }
-            syncUserConfirmedFinances(user, user.id);
-            saveRegisteredUserToDisk(user);
+            syncUserConfirmedFinances(syncRes.user, syncRes.user.id);
+            saveRegisteredUserToDisk(syncRes.user as User & { password_hash: string });
           }
           activateConfirmedMachineInvestment(inv, notes);
           saveAppStateToDisk();
           return res.json({
-            message: `Payment of UGX ${tx.amount.toLocaleString()} confirmed! ${inv.machine_title} is now ACTIVE (Day 1 of ${inv.duration_days}).`,
+            message: `Payment of UGX ${tx.amount.toLocaleString()} confirmed (Pending -> Successful)! ${inv.machine_title} is now ACTIVE (Day 1 of ${inv.duration_days}).`,
             transaction: tx,
             investment: inv,
           });
         }
 
-        if (user) {
-          syncUserConfirmedFinances(user, user.id);
-          saveRegisteredUserToDisk(user);
-        }
-        saveAppStateToDisk();
         return res.json({
-          message: `Machine payment of UGX ${tx.amount.toLocaleString()} confirmed!`,
+          message: `Machine payment of UGX ${tx.amount.toLocaleString()} confirmed (Pending -> Successful)!`,
           transaction: tx,
         });
       }
 
-      // Case 2: Wallet Deposit Confirmation -> Reflects in full on Customer Wallet so customer can buy a Machine
-      creditReceiverOnConfirm(tx);
+      // Case 2: Wallet Deposit Confirmation -> Do 2 things at same time:
+      //   1. Change Pending -> Successful
+      //   2. Add that amount to that customer's Wallet balance (and push real-time SSE update)
+      const { computedWallet, computedBalance } = realTimeSyncWalletOnConfirm(tx, notes);
 
-      if (user) {
-        (tx as any).wallet_credited = true;
-        // Remove any unconfirmed PENDING machine orders for this user so the deposit is NOT auto-deducted before the user buys a machine from their Wallet
-        for (let idx = investments.length - 1; idx >= 0; idx--) {
-          const inv = investments[idx];
-          if (
-            inv.status === 'PENDING' &&
-            doesTxBelongToUser({ user_id: inv.user_id, customer_phone: (inv as any).customer_phone } as any, user, user.id)
-          ) {
-            investments.splice(idx, 1);
-          }
-        }
-        const finalFinances = syncUserConfirmedFinances(user, user.id);
-        saveRegisteredUserToDisk(user);
-        saveAppStateToDisk();
-
-        pushNotification(
-          user.id,
-          '✅ Deposit Confirmed by Admin & Credited to Wallet!',
-          `Your deposit of ${tx.amount.toLocaleString()} UGX sent to ${(tx as any).receiver_phone || homepageConfig.deposit_receiver_number} (${(tx as any).receiver_name || homepageConfig.deposit_receiver_name}) has been confirmed by Admin and reflected on your Wallet (${finalFinances.computedWallet.toLocaleString()} UGX available). You can now use your Wallet to buy a machine! ${notes || ''}`,
-          'PAYMENT'
-        );
-
-        return res.json({
-          message: `Deposit of ${tx.amount.toLocaleString()} UGX confirmed and reflected on customer Wallet (${finalFinances.computedWallet.toLocaleString()} UGX)!`,
-          transaction: tx,
-          new_balance: user.balance,
-          wallet_balance: finalFinances.computedWallet,
-          available_wallet: finalFinances.computedWallet,
-        });
-      }
-
-      saveAppStateToDisk();
       return res.json({
-        message: `Deposit of ${tx.amount.toLocaleString()} UGX confirmed and permanently saved across all deposit planes!`,
+        message: `Confirmed! Status changed from Pending -> Successful and UGX ${tx.amount.toLocaleString()} added to customer Wallet (${computedWallet.toLocaleString()} UGX)!`,
+        status: 'SUCCESS',
+        status_label: 'Successful',
         transaction: tx,
+        new_balance: computedBalance,
+        wallet_balance: computedWallet,
+        available_wallet: computedWallet,
       });
     } else if (action === 'REJECT') {
       // Once a deposit is approved by Admin, it must NEVER be unapproved or disappear unless explicitly deleted by Admin
@@ -4892,73 +5133,23 @@ async function startServer() {
     let confirmedCount = 0;
     let totalConfirmedUgx = 0;
 
-    // First process DEPOSIT transactions so wallet balances are credited
+    // Process all PENDING DEPOSIT transactions via realTimeSyncWalletOnConfirm so each changes Pending -> Successful and credits the customer's Wallet immediately
     for (const tx of pendingTxs.filter((t) => t.type === 'DEPOSIT')) {
-      const user = findOrRestoreUser(tx.user_id, {
-        user_id: tx.user_id,
-        phone_number: (tx as any).user_phone || (tx as any).customer_phone,
-        user_phone: (tx as any).user_phone || (tx as any).customer_phone,
-        full_name: (tx as any).customer_name,
-        user_name: (tx as any).customer_name,
-      });
-      if (user && user.id !== 'usr-admin-owner' && tx.user_id !== user.id) {
-        tx.user_id = user.id;
-      }
-      tx.status = 'SUCCESS';
-      (tx as any).confirmed_at = new Date().toISOString();
-      (tx as any).approved_permanent = true;
-      creditReceiverOnConfirm(tx);
-
-      if (user) {
-        (tx as any).wallet_credited = true;
-        syncUserConfirmedFinances(user, user.id);
-        saveRegisteredUserToDisk(user);
-        pushNotification(
-          user.id,
-          '✅ Deposit Confirmed by Admin & Credited to Wallet!',
-          `Your submitted deposit of ${tx.amount.toLocaleString()} UGX has been confirmed by Admin and reflected on your Wallet!`,
-          'PAYMENT'
-        );
-      }
+      realTimeSyncWalletOnConfirm(tx, 'Confirmed via Admin Confirm All');
       confirmedCount++;
       totalConfirmedUgx += tx.amount;
     }
 
-    // Process any remaining pending INVESTMENT transactions without auto-deducting customer deposit Wallets
+    // Process any remaining pending INVESTMENT transactions
     for (const tx of pendingTxs.filter((t) => t.type === 'INVESTMENT')) {
-      tx.status = 'SUCCESS';
-      (tx as any).confirmed_at = new Date().toISOString();
-      (tx as any).approved_permanent = true;
+      realTimeSyncWalletOnConfirm(tx, 'Confirmed via Admin Confirm All');
       confirmedCount++;
-    }
-
-    // Mark all pending admin order notifications as CONFIRMED and sync to Firestore
-    notifications.forEach((n: any) => {
-      if (n.order_status === 'PENDING') {
-        n.order_status = 'CONFIRMED';
-        n.read = true;
-      }
-    });
-    for (const tx of pendingTxs) {
-      void ensureOrderSavedInFirestore({
-        docId: (tx as any).firebase_doc_id || tx.payment_reference || tx.id,
-        name: (tx as any).customer_name || 'Avor Investor',
-        item: `Confirmed Deposit of UGX ${Number(tx.amount || 0).toLocaleString()} (${tx.payment_reference || tx.id})`,
-        senderPhone: (tx as any).customer_phone || '',
-        receiverPhone: (tx as any).receiver_phone || RECEIVER_PHONE,
-        receiverName: (tx as any).receiver_name || RECEIVER_NAME,
-        amount: Number(tx.amount || 0),
-        machineTitle: tx.machine_title || 'Confirmed Wallet Deposit',
-        paymentMethod: tx.payment_method || 'Mobile Money',
-        paymentReference: tx.payment_reference || tx.id,
-        status: 'CONFIRMED',
-      });
     }
 
     saveAppStateToDisk();
 
     return res.json({
-      message: `Confirmed ${confirmedCount} submitted deposit(s) totaling UGX ${totalConfirmedUgx.toLocaleString()} and credited to customer Wallet(s)!`,
+      message: `Confirmed ${confirmedCount} deposit(s) (Pending -> Successful) totaling UGX ${totalConfirmedUgx.toLocaleString()} and added to customer Wallet(s) in real time!`,
       confirmed_count: confirmedCount,
       total_confirmed_ugx: totalConfirmedUgx,
     });
@@ -5072,8 +5263,10 @@ async function startServer() {
   app.get('/api/transactions/:userId', (req, res) => {
     const userId = req.params.userId;
     const queryPhone = (req.query.phone || req.query.phone_number || '').toString().trim();
+    const queryRefs = req.query.refs;
     const user = findOrRestoreUser(userId, { user_id: userId, phone_number: queryPhone, user_phone: queryPhone });
     if (user) {
+      linkKnownDepositRefsToUser(user, queryRefs);
       syncUserConfirmedFinances(user, userId);
     }
     const userTxs = transactions.filter((t) => doesTxBelongToUser(t, user, queryPhone || userId));
@@ -5085,6 +5278,7 @@ async function startServer() {
     res.setHeader('Content-Type', 'application/json');
     const targetId = req.params.userId;
     const queryPhone = (req.query.phone || req.query.phone_number || '').toString().trim();
+    const queryRefs = req.query.refs;
     let user = findOrRestoreUser(targetId, { user_id: targetId, phone_number: queryPhone, user_phone: queryPhone });
     if (!user && fs.existsSync(USERS_FILE)) {
       try {
@@ -5119,6 +5313,7 @@ async function startServer() {
         has_bought_machine: false,
       });
     }
+    linkKnownDepositRefsToUser(user, queryRefs);
     syncUserConfirmedFinances(user, targetId);
     const { password_hash, ...profile } = user;
     res.json(profile);

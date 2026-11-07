@@ -151,7 +151,39 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       setTimeRemainingSeconds((prev) => (prev > 0 ? prev - 1 : 0));
       setPaymentCountdown((prev) => (prev > 0 ? prev - 1 : 1795));
     }, 1000);
-    return () => clearInterval(timer);
+
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource('/api/realtime/wallet-stream');
+      es.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data);
+          if (parsed && parsed.type === 'WALLET_CONFIRMED_SYNC') {
+            onRefreshUser();
+            fetchTransactions();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('avor_realtime_wallet_sync');
+      bc.onmessage = () => {
+        onRefreshUser();
+        fetchTransactions();
+      };
+    } catch {}
+
+    return () => {
+      clearInterval(timer);
+      try {
+        es?.close();
+      } catch {}
+      try {
+        bc?.close();
+      } catch {}
+    };
   }, []);
 
   const DEFAULT_RECEIVER: DepositReceiverNumber = {
@@ -214,7 +246,18 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const fetchTransactions = async () => {
     if (!user) return;
     try {
-      const phoneParam = user.phone_number ? `?phone=${encodeURIComponent(user.phone_number)}` : '';
+      let refsParam = '';
+      try {
+        const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
+        if (Array.isArray(savedRefs) && savedRefs.length > 0) {
+          refsParam = `&refs=${encodeURIComponent(savedRefs.join(','))}`;
+        }
+      } catch {}
+      const phoneParam = user.phone_number
+        ? `?phone=${encodeURIComponent(user.phone_number)}${refsParam}`
+        : refsParam
+          ? `?${refsParam.slice(1)}`
+          : '';
       const res = await fetch(`/api/transactions/${encodeURIComponent(user.id)}${phoneParam}`);
       const ct = res.headers.get('content-type') || '';
       if (res.ok && ct.includes('application/json')) {
@@ -292,6 +335,21 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       const data = ct.includes('application/json') ? await res.json() : {};
       if (!res.ok) throw new Error(data.error || 'Deposit processing failed.');
 
+      try {
+        const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
+        const nextRefs = Array.from(
+          new Set(
+            [
+              ...savedRefs,
+              data.transaction?.id,
+              data.transaction?.payment_reference,
+              depositRefInput,
+            ].filter(Boolean)
+          )
+        );
+        localStorage.setItem('avor_my_deposit_refs', JSON.stringify(nextRefs));
+      } catch {}
+
       setMessage({
         type: 'success',
         text:
@@ -302,6 +360,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         user.full_name || depositPhone || user.phone_number || 'Avor Investor',
         `Deposited UGX ${depositAmt.toLocaleString()} via ${depositMethod} from ${depositPhone} to ${targetPhone} (${targetName}) (Pending Admin Confirmation)`,
         {
+          userId: user.id,
+          transactionId: data.transaction?.id,
           senderPhone: depositPhone || user.phone_number,
           receiverPhone: targetPhone,
           receiverName: targetName,
@@ -1316,7 +1376,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                               : 'bg-rose-950/80 text-rose-300 border border-rose-500/40'
                         }`}
                       >
-                        {tx.status === 'SUCCESS' ? 'CONFIRMED' : tx.status}
+                        {tx.status === 'SUCCESS' || tx.status === 'CONFIRMED' ? 'SUCCESSFUL' : tx.status}
                       </span>
                     </div>
                   </div>

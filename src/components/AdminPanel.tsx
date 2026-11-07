@@ -335,8 +335,30 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       fetchMachines();
       const interval = setInterval(() => {
         fetchAdminData();
-      }, 5000);
-      return () => clearInterval(interval);
+      }, 3000);
+
+      let es: EventSource | null = null;
+      try {
+        es = new EventSource('/api/realtime/wallet-stream');
+        es.onmessage = (event) => {
+          try {
+            const parsed = JSON.parse(event.data);
+            if (
+              parsed &&
+              (parsed.type === 'DEPOSIT_CREATED_PENDING' || parsed.type === 'WALLET_CONFIRMED_SYNC')
+            ) {
+              fetchAdminData();
+            }
+          } catch {}
+        };
+      } catch {}
+
+      return () => {
+        clearInterval(interval);
+        try {
+          es?.close();
+        } catch {}
+      };
     }
   }, [isAdminAuthenticated]);
 
@@ -361,8 +383,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     };
   }, [isAdminAuthenticated]);
 
-  // Handle Deposit Approval Action
-  const handleDepositAction = async (transactionId: string, action: 'APPROVE' | 'REJECT') => {
+  // Handle Deposit Approval Action (Does 2 things at same time: 1. Change Pending -> Successful, 2. Add amount to customer's Wallet balance)
+  const handleDepositAction = async (
+    transactionId: string,
+    action: 'APPROVE' | 'REJECT',
+    extraMeta?: Record<string, any>
+  ) => {
     setStatusMessage(null);
     try {
       const res = await fetch('/api/admin/deposits/action', {
@@ -371,16 +397,47 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         body: JSON.stringify({
           transaction_id: transactionId,
           action,
-          notes: action === 'APPROVE' ? 'Deposit confirmed by Admin & reflected to all deposit planes' : 'Deposit request declined',
+          ...(extraMeta || {}),
+          notes:
+            action === 'APPROVE'
+              ? 'Confirmed by Admin: Status changed Pending -> Successful & amount added to customer Wallet'
+              : 'Deposit request declined',
         }),
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Deposit action failed.');
 
+      if (action === 'APPROVE') {
+        try {
+          const bc = new BroadcastChannel('avor_realtime_wallet_sync');
+          bc.postMessage({
+            type: 'WALLET_CONFIRMED_SYNC',
+            transaction: data.transaction,
+            transaction_id: data.transaction?.id || transactionId,
+            payment_reference: data.transaction?.payment_reference || extraMeta?.payment_reference,
+            status: 'SUCCESS',
+            status_label: 'Successful',
+            user_id: data.transaction?.user_id || extraMeta?.user_id,
+            user_phone: data.transaction?.user_phone || extraMeta?.customer_phone,
+            customer_phone: data.transaction?.customer_phone || extraMeta?.customer_phone,
+            amount_added: Number(data.transaction?.amount || extraMeta?.amount || 0),
+            wallet_balance: data.wallet_balance,
+            available_wallet: data.available_wallet,
+            balance: data.new_balance,
+            timestamp: new Date().toISOString(),
+          });
+          bc.close();
+        } catch {}
+      }
+
       setStatusMessage({
         type: 'success',
-        text: data.message || (action === 'APPROVE' ? 'Deposit confirmed and reflected across all deposit planes!' : 'Request rejected.'),
+        text:
+          data.message ||
+          (action === 'APPROVE'
+            ? 'Confirmed! Status changed from Pending -> Successful and amount added to customer Wallet!'
+            : 'Request rejected.'),
       });
       await fetchAdminData();
       if (onDataChanged) onDataChanged();
@@ -400,6 +457,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to confirm all deposits.');
+
+      try {
+        const bc = new BroadcastChannel('avor_realtime_wallet_sync');
+        bc.postMessage({
+          type: 'WALLET_CONFIRMED_SYNC',
+          status: 'SUCCESS',
+          status_label: 'Successful',
+          timestamp: new Date().toISOString(),
+        });
+        bc.close();
+      } catch {}
 
       setStatusMessage({
         type: 'success',
@@ -1588,20 +1656,46 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                           className="p-3 rounded-xl bg-[#050c1d] border border-blue-900/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
                         >
                           <div className="space-y-0.5">
-                            <div className="font-bold text-white">
-                              {fbMsg.name}{' '}
+                            <div className="font-bold text-white flex items-center gap-2 flex-wrap">
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-black uppercase bg-amber-950/80 text-amber-300 border border-amber-500/40">
+                                Pending
+                              </span>
+                              <span>{fbMsg.name}</span>
                               {fbMsg.senderPhone && <span className="text-cyan-300 font-mono">({fbMsg.senderPhone})</span>}
                               {fbMsg.amount > 0 && (
-                                <span className="text-sky-400 font-mono ml-2">
+                                <span className="text-sky-400 font-mono">
                                   • UGX {Number(fbMsg.amount).toLocaleString()}
                                 </span>
                               )}
                             </div>
                             <p className="text-slate-300 text-[11px]">{fbMsg.item}</p>
                           </div>
-                          <span className="text-[10px] font-mono text-slate-400 shrink-0">
-                            {new Date(fbMsg.created_at).toLocaleString()}
-                          </span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-[10px] font-mono text-slate-400">
+                              {new Date(fbMsg.created_at).toLocaleString()}
+                            </span>
+                            {Number(fbMsg.amount) > 0 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleDepositAction(fbMsg.paymentReference || fbMsg.id, 'APPROVE', {
+                                    firebase_doc_id: fbMsg.id,
+                                    payment_reference: fbMsg.paymentReference || fbMsg.id,
+                                    customer_name: fbMsg.name,
+                                    customer_phone: fbMsg.senderPhone,
+                                    receiver_phone: fbMsg.receiverPhone,
+                                    receiver_name: fbMsg.receiverName,
+                                    amount: Number(fbMsg.amount),
+                                    payment_method: fbMsg.paymentMethod,
+                                  })
+                                }
+                                className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-[11px] font-black rounded-lg border border-emerald-400/50 flex items-center gap-1 cursor-pointer shadow-xs"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Confirm</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1610,7 +1704,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
                 {pendingMsgs.length === 0 && pendingFb.length === 0 ? (
                   <div className="text-center py-10 text-slate-400 text-xs font-bold">
-                    No pending payments awaiting confirmation. Confirmed payments have been removed from the pending queue and credited to user wallets.
+                    No pending payments awaiting confirmation. All confirmed deposits are marked Successful and credited to customer Wallets.
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -1622,7 +1716,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                         <div className="space-y-1.5 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
-                              NEW ORDER AWAITING CONFIRMATION
+                              PENDING CONFIRMATION
                             </span>
                             <span className="text-sm font-black text-white">{msg.title}</span>
                             <span className="text-[11px] font-mono text-slate-400">
@@ -1661,19 +1755,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                           </div>
                         </div>
 
-                        {msg.transaction_id && (
+                        {(msg.transaction_id || msg.payment_reference) && (
                           <div className="flex items-center gap-2 shrink-0">
                             <button
                               type="button"
-                              onClick={() => handleDepositAction(msg.transaction_id, 'APPROVE')}
+                              onClick={() =>
+                                handleDepositAction(msg.transaction_id || msg.payment_reference, 'APPROVE', {
+                                  firebase_doc_id: msg.firebase_doc_id,
+                                  payment_reference: msg.payment_reference,
+                                  customer_name: msg.customer_name,
+                                  customer_phone: msg.customer_phone,
+                                  receiver_phone: msg.receiver_phone,
+                                  receiver_name: msg.receiver_name,
+                                  amount: Number(msg.amount || 0),
+                                  payment_method: msg.payment_method,
+                                })
+                              }
                               className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-xs font-black rounded-xl border border-emerald-400/50 flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
                             >
                               <Check className="w-4 h-4" />
-                              <span>Confirm Deposit &amp; Reflect</span>
+                              <span>Confirm</span>
                             </button>
                             <button
                               type="button"
-                              onClick={() => handleDepositAction(msg.transaction_id, 'REJECT')}
+                              onClick={() =>
+                                handleDepositAction(msg.transaction_id || msg.payment_reference, 'REJECT')
+                              }
                               className="px-3 py-2 bg-rose-950/70 hover:bg-rose-900/70 text-rose-300 text-xs font-bold rounded-xl border border-rose-500/40 cursor-pointer"
                             >
                               Decline
@@ -1690,14 +1797,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         </div>
       )}
 
-      {/* TAB 1: PENDING DEPOSITS & MACHINE PAYMENTS */}
+      {/* TAB 1: DEPOSITS & MACHINE PAYMENTS (PENDING -> SUCCESSFUL + WALLET CREDIT) */}
       {activeTab === 'DEPOSITS' && (
         <div className="shining-card border border-blue-950/80 rounded-2xl p-6 space-y-4 shadow-xl text-white">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-blue-950/80">
             <div>
-              <h3 className="text-base font-extrabold text-white">Pending Deposits &amp; Machine Payments</h3>
+              <h3 className="text-base font-extrabold text-white">Customer Deposits &amp; Wallet Confirmation System</h3>
               <p className="text-xs text-slate-300">
-                All submitted deposits sent to receiver <strong>{depositReceiverNumber} ({depositReceiverName})</strong> arrive here in real time. Once confirmed, the pending payment is removed from this queue and immediately credited to the user&apos;s Wallet balance.
+                1. Customer deposits &rarr; 2. Shows <strong className="text-amber-300">Pending</strong> in Admin + customer Wallet empty &rarr; 3. Press <strong className="text-emerald-300">Confirm</strong> &rarr; 4. System changes <strong className="text-emerald-300">Pending &rarr; Successful</strong> AND adds that amount to that customer&apos;s <strong>Wallet</strong> balance in real time without refreshing.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto shrink-0">
@@ -1722,19 +1829,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                 className="px-3 py-2 bg-[#09152e] hover:bg-[#0f2147] text-cyan-300 text-xs font-bold rounded-xl border border-cyan-500/40 flex items-center gap-1.5 cursor-pointer"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`} />
-                <span>Refresh Pending Deposits</span>
+                <span>Refresh Deposits</span>
               </button>
             </div>
           </div>
 
-          {/* Incoming Confirmation Messages Banner */}
+          {/* Incoming Pending Deposits Banner */}
           {deposits.filter((d) => d.status === 'PENDING').length > 0 ? (
             <div className="p-4 bg-amber-950/70 border border-amber-500/50 rounded-2xl space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-amber-300 font-black text-xs uppercase tracking-wider">
                   <Megaphone className="w-4 h-4 text-amber-400 animate-bounce" />
                   <span>
-                    Incoming Pending Deposits ({deposits.filter((d) => d.status === 'PENDING').length} Awaiting Admin Confirmation)
+                    Pending Deposits ({deposits.filter((d) => d.status === 'PENDING').length} Awaiting Admin Confirmation)
                   </span>
                 </div>
                 <button
@@ -1757,6 +1864,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                     >
                       <div className="space-y-0.5">
                         <div className="font-black text-white flex flex-wrap items-center gap-1.5">
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-black uppercase bg-amber-950/90 text-amber-300 border border-amber-500/40">
+                            Pending
+                          </span>
                           <span>{d.customer_name || d.user_id}</span>
                           {d.customer_phone && (
                             <span className="font-mono text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-500/30">
@@ -1783,11 +1893,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <button
-                          onClick={() => handleDepositAction(d.id, 'APPROVE')}
+                          onClick={() =>
+                            handleDepositAction(d.id, 'APPROVE', {
+                              firebase_doc_id: d.firebase_doc_id,
+                              payment_reference: d.payment_reference,
+                              user_id: d.user_id,
+                              customer_name: d.customer_name,
+                              customer_phone: d.customer_phone,
+                              receiver_phone: d.receiver_phone,
+                              receiver_name: d.receiver_name,
+                              amount: Number(d.amount || 0),
+                              payment_method: d.payment_method,
+                            })
+                          }
                           className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-[11px] font-black rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-xs border border-emerald-500/40"
                         >
                           <Check className="w-3.5 h-3.5" />
-                          <span>Confirm &amp; Credit Wallet</span>
+                          <span>Confirm</span>
                         </button>
                         <button
                           onClick={() => handleDepositAction(d.id, 'REJECT')}
@@ -1801,12 +1923,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
               </div>
             </div>
           ) : (
-            <div className="text-center py-8 text-emerald-300/90 text-xs font-bold bg-emerald-950/20 border border-emerald-500/25 rounded-2xl">
-              No pending payments in queue. All confirmed deposits have been removed from pending and credited directly to customer wallets.
+            <div className="text-center py-4 text-emerald-300/90 text-xs font-bold bg-emerald-950/20 border border-emerald-500/25 rounded-2xl">
+              All pending deposits have been confirmed (Pending &rarr; Successful) and credited directly to customer Wallets.
             </div>
           )}
 
-          {deposits.filter((d) => d.status === 'PENDING').length > 0 && (
+          {deposits.length > 0 && (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead>
@@ -1820,58 +1942,84 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-blue-950/60">
-                  {deposits
-                    .filter((d) => d.status === 'PENDING')
-                    .map((d: any) => {
-                      const isMachineOrder = d.type === 'INVESTMENT';
-                      return (
-                        <tr key={d.id} className="hover:bg-[#0c1630]/60 transition-colors">
-                          <td className="py-3 px-3 font-mono text-[11px] text-slate-400">
-                            <div>{new Date(d.created_at).toLocaleDateString()}</div>
-                            <div className="text-[10px] text-slate-500">{new Date(d.created_at).toLocaleTimeString()}</div>
-                          </td>
-                          <td className="py-3 px-3 font-bold text-white">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span>{d.customer_name || d.user_id}</span>
-                              {d.customer_phone && (
-                                <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/70 px-1.5 py-0.5 rounded">
-                                  {d.customer_phone}
-                                </span>
-                              )}
-                              <span
-                                className={`text-[9px] font-mono font-black px-1.5 py-0.5 rounded uppercase ${
-                                  isMachineOrder
-                                    ? 'bg-amber-950/90 text-amber-300 border border-amber-500/40'
-                                    : 'bg-blue-950/90 text-blue-300 border border-blue-500/40'
-                                }`}
-                              >
-                                {isMachineOrder ? 'Machine Order' : 'Pending Deposit'}
+                  {deposits.map((d: any) => {
+                    const isMachineOrder = d.type === 'INVESTMENT';
+                    const isPending = d.status === 'PENDING';
+                    const isSuccessful = d.status === 'SUCCESS' || d.status === 'CONFIRMED';
+                    return (
+                      <tr key={d.id} className="hover:bg-[#0c1630]/60 transition-colors">
+                        <td className="py-3 px-3 font-mono text-[11px] text-slate-400">
+                          <div>{new Date(d.created_at).toLocaleDateString()}</div>
+                          <div className="text-[10px] text-slate-500">{new Date(d.created_at).toLocaleTimeString()}</div>
+                        </td>
+                        <td className="py-3 px-3 font-bold text-white">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span>{d.customer_name || d.user_id}</span>
+                            {d.customer_phone && (
+                              <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/70 px-1.5 py-0.5 rounded">
+                                {d.customer_phone}
                               </span>
-                            </div>
-                            <span className="text-[10px] text-slate-400 font-normal block mt-0.5">{d.payment_method}</span>
-                          </td>
-                          <td className="py-3 px-3 font-mono font-bold text-blue-300">
-                            UGX {Number(d.amount || 0).toLocaleString()}
-                          </td>
-                          <td className="py-3 px-3 font-mono text-[11px] text-slate-200 font-bold">
-                            <div>{d.payment_reference || 'REF-N/A'}</div>
-                            {d.machine_title && (
-                              <span className="text-[10px] text-cyan-400 block">{d.machine_title}</span>
                             )}
-                          </td>
-                          <td className="py-3 px-3">
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold font-mono uppercase bg-amber-950/70 text-amber-300 border border-amber-500/40 animate-pulse">
-                              PENDING
+                            <span
+                              className={`text-[9px] font-mono font-black px-1.5 py-0.5 rounded uppercase ${
+                                isMachineOrder
+                                  ? 'bg-amber-950/90 text-amber-300 border border-amber-500/40'
+                                  : isSuccessful
+                                    ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/40'
+                                    : 'bg-blue-950/90 text-blue-300 border border-blue-500/40'
+                              }`}
+                            >
+                              {isMachineOrder ? 'Machine Order' : isSuccessful ? 'Wallet Credited' : 'Pending Deposit'}
                             </span>
-                          </td>
-                          <td className="py-3 px-3 text-right">
+                          </div>
+                          <span className="text-[10px] text-slate-400 font-normal block mt-0.5">{d.payment_method}</span>
+                        </td>
+                        <td className="py-3 px-3 font-mono font-bold text-blue-300">
+                          UGX {Number(d.amount || 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-3 font-mono text-[11px] text-slate-200 font-bold">
+                          <div>{d.payment_reference || 'REF-N/A'}</div>
+                          {d.machine_title && (
+                            <span className="text-[10px] text-cyan-400 block">{d.machine_title}</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3">
+                          {isPending ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold font-mono uppercase bg-amber-950/70 text-amber-300 border border-amber-500/40 animate-pulse">
+                              Pending
+                            </span>
+                          ) : isSuccessful ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold font-mono uppercase bg-emerald-950/80 text-emerald-300 border border-emerald-500/40">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                              Successful
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold font-mono uppercase bg-rose-950/80 text-rose-300 border border-rose-500/40">
+                              {d.status}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          {isPending ? (
                             <div className="flex items-center justify-end gap-2">
                               <button
-                                onClick={() => handleDepositAction(d.id, 'APPROVE')}
+                                onClick={() =>
+                                  handleDepositAction(d.id, 'APPROVE', {
+                                    firebase_doc_id: d.firebase_doc_id,
+                                    payment_reference: d.payment_reference,
+                                    user_id: d.user_id,
+                                    customer_name: d.customer_name,
+                                    customer_phone: d.customer_phone,
+                                    receiver_phone: d.receiver_phone,
+                                    receiver_name: d.receiver_name,
+                                    amount: Number(d.amount || 0),
+                                    payment_method: d.payment_method,
+                                  })
+                                }
                                 className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-[10px] font-black rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-xs border border-emerald-500/30"
                               >
                                 <Check className="w-3.5 h-3.5" />
-                                <span>{isMachineOrder ? 'Confirm & Start Machine' : 'Confirm & Credit Wallet'}</span>
+                                <span>Confirm</span>
                               </button>
 
                               <button
@@ -1882,10 +2030,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                                 <span>Decline</span>
                               </button>
                             </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                          ) : (
+                            <span className="text-[10px] font-mono text-emerald-400 font-bold">
+                              ✅ Added to Wallet
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

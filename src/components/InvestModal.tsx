@@ -165,7 +165,18 @@ export const InvestModal: React.FC<InvestModalProps> = ({
     if (!user?.id) return;
     if (showSpinner) setIsCheckingBalance(true);
     try {
-      const phoneParam = user.phone_number ? `?phone=${encodeURIComponent(user.phone_number)}` : '';
+      let refsParam = '';
+      try {
+        const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
+        if (Array.isArray(savedRefs) && savedRefs.length > 0) {
+          refsParam = `&refs=${encodeURIComponent(savedRefs.join(','))}`;
+        }
+      } catch {}
+      const phoneParam = user.phone_number
+        ? `?phone=${encodeURIComponent(user.phone_number)}${refsParam}`
+        : refsParam
+          ? `?${refsParam.slice(1)}`
+          : '';
       const [userRes, summaryRes] = await Promise.all([
         fetch(`/api/user/${encodeURIComponent(user.id)}${phoneParam}`),
         fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}${phoneParam}`),
@@ -215,17 +226,48 @@ export const InvestModal: React.FC<InvestModalProps> = ({
   useEffect(() => {
     setLiveBalance(user?.available_wallet ?? user?.wallet_balance ?? 0);
     refreshWalletStatus(false);
-    // Auto-poll wallet balance every 4 seconds so when admin approves deposit, it detects it immediately
     const interval = setInterval(() => {
       refreshWalletStatus(false);
-    }, 4000);
-    return () => clearInterval(interval);
+    }, 2500);
+
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource('/api/realtime/wallet-stream');
+      es.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data);
+          if (parsed && parsed.type === 'WALLET_CONFIRMED_SYNC') {
+            refreshWalletStatus(false);
+            if (onDepositSubmitted) onDepositSubmitted();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('avor_realtime_wallet_sync');
+      bc.onmessage = () => {
+        refreshWalletStatus(false);
+        if (onDepositSubmitted) onDepositSubmitted();
+      };
+    } catch {}
+
+    return () => {
+      clearInterval(interval);
+      try {
+        es?.close();
+      } catch {}
+      try {
+        bc?.close();
+      } catch {}
+    };
   }, [user?.id, user?.wallet_balance, user?.available_wallet, totalCost]);
 
   const userHasEnoughBalance = liveBalance >= totalCost;
   const isMobileMoney = selectedChannel === 'MTN Mobile Money' || selectedChannel === 'Airtel Money';
 
-  // Step 2: Handle submitting deposit via Mobile Money (Automatically goes to Admin, reflects on wallet, starts machine & unlocks all planes)
+  // Step 2: Handle submitting deposit via Mobile Money (Shows Pending in Admin + Wallet Empty until Admin presses Confirm)
   const handleDepositToWallet = async () => {
     if (!user) {
       onOpenAuth();
@@ -258,6 +300,13 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       if (!res.ok) {
         throw new Error(data.error || 'Failed to submit wallet deposit.');
       }
+      try {
+        const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
+        const nextRefs = Array.from(
+          new Set([...savedRefs, data.transaction?.id, data.transaction?.payment_reference].filter(Boolean))
+        );
+        localStorage.setItem('avor_my_deposit_refs', JSON.stringify(nextRefs));
+      } catch {}
       if (typeof data.wallet_balance === 'number') {
         setLiveBalance(data.wallet_balance);
       }
@@ -272,6 +321,8 @@ export const InvestModal: React.FC<InvestModalProps> = ({
         user.full_name || phoneNumber.trim() || user.phone_number || 'Avor Investor',
         `Deposited UGX ${totalCost.toLocaleString()} via ${selectedChannel} from ${phoneNumber.trim()} to ${activeReceiver.phone_number || RECEIVER_PHONE} (${activeReceiver.account_name || RECEIVER_NAME}) (Pending Admin Confirmation)`,
         {
+          userId: user.id,
+          transactionId: data.transaction?.id,
           senderPhone: phoneNumber.trim() || user.phone_number,
           receiverPhone: activeReceiver.phone_number || RECEIVER_PHONE,
           receiverName: activeReceiver.account_name || RECEIVER_NAME,

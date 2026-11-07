@@ -96,9 +96,83 @@ export default function App() {
     const interval = setInterval(() => {
       fetchUserData();
       fetchUserPortfolio();
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [user?.id]);
+    }, 2500);
+
+    const doesEventMatchCurrentUser = (evData: any): boolean => {
+      if (!evData || !user) return false;
+      if (evData.user_id === user.id) return true;
+      if (Array.isArray(evData.synced_user_ids) && evData.synced_user_ids.includes(user.id)) return true;
+      const myTail = (user.phone_number || '').replace(/\D/g, '').slice(-9);
+      if (myTail && myTail.length >= 7) {
+        const uTail = String(evData.user_phone || '').replace(/\D/g, '').slice(-9);
+        const cTail = String(evData.customer_phone || '').replace(/\D/g, '').slice(-9);
+        if (uTail === myTail || cTail === myTail) return true;
+      }
+      try {
+        const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
+        if (
+          (evData.transaction_id && savedRefs.includes(evData.transaction_id)) ||
+          (evData.payment_reference && savedRefs.includes(evData.payment_reference))
+        ) {
+          return true;
+        }
+      } catch {}
+      return false;
+    };
+
+    const handleRealtimeConfirm = (evData: any) => {
+      if (!evData || evData.type !== 'WALLET_CONFIRMED_SYNC') return;
+      if (doesEventMatchCurrentUser(evData)) {
+        const nextWallet =
+          typeof evData.wallet_balance === 'number'
+            ? evData.wallet_balance
+            : typeof evData.available_wallet === 'number'
+              ? evData.available_wallet
+              : (user.wallet_balance || 0) + Number(evData.amount_added || 0);
+        syncUserToStorage({
+          ...user,
+          wallet_balance: nextWallet,
+          available_wallet: nextWallet,
+          balance: typeof evData.balance === 'number' ? evData.balance : user.balance,
+        });
+        showNotification(
+          `✅ Deposit Successful! UGX ${Number(evData.amount_added || 0).toLocaleString()} added to your Wallet balance (${Number(nextWallet).toLocaleString()} UGX).`,
+          'success'
+        );
+      }
+      fetchUserData();
+      fetchUserPortfolio();
+    };
+
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource('/api/realtime/wallet-stream');
+      es.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data);
+          handleRealtimeConfirm(parsed);
+        } catch {}
+      };
+    } catch {}
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('avor_realtime_wallet_sync');
+      bc.onmessage = (event) => {
+        handleRealtimeConfirm(event.data);
+      };
+    } catch {}
+
+    return () => {
+      clearInterval(interval);
+      try {
+        es?.close();
+      } catch {}
+      try {
+        bc?.close();
+      } catch {}
+    };
+  }, [user?.id, user?.phone_number]);
 
   const showNotification = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
     setToast({ message, type });
@@ -194,7 +268,18 @@ export default function App() {
   const fetchUserData = async () => {
     if (!user) return;
     try {
-      const phoneParam = user.phone_number ? `?phone=${encodeURIComponent(user.phone_number)}` : '';
+      let refsParam = '';
+      try {
+        const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
+        if (Array.isArray(savedRefs) && savedRefs.length > 0) {
+          refsParam = `&refs=${encodeURIComponent(savedRefs.join(','))}`;
+        }
+      } catch {}
+      const phoneParam = user.phone_number
+        ? `?phone=${encodeURIComponent(user.phone_number)}${refsParam}`
+        : refsParam
+          ? `?${refsParam.slice(1)}`
+          : '';
       const [res, sumRes] = await Promise.all([
         fetch(`/api/user/${encodeURIComponent(user.id)}${phoneParam}`),
         fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}${phoneParam}`),
