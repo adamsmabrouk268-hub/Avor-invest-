@@ -1,1 +1,21 @@
-[]
+[
+  {
+    "id": "rec-default-0741032838",
+    "phone_number": "0741032838",
+    "account_name": "SULAINH NAKASEETA",
+    "carrier": "MTN",
+    "is_active": true,
+    "priority": 1,
+    "daily_limit_ugx": 5000000,
+    "daily_receiving_limit": 5000000,
+    "amount_received_today": 120000,
+    "total_received_ugx": 120000,
+    "total_transactions_count": 3,
+    "rotation_duration_minutes": 5,
+    "rotation_duration_hours": 0.0833,
+    "activated_at": "2026-11-06T08:05:09.248Z",
+    "last_rotated_at": "2026-11-06T08:05:46.417Z",
+    "notes": "Primary Mobile Money Receiver Line",
+    "created_at": "2026-11-06T08:05:09.248Z"
+  }
+]

@@ -236,14 +236,43 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     }
   };
 
-  // Fetch Overview Data
+  // Fetch Overview Data (with automatic Vault Backup & Restore across Publishing / GitHub deploys)
   const fetchAdminData = async () => {
     setIsLoadingData(true);
     try {
       const res = await fetch('/api/admin/overview');
       const ct = res.headers.get('content-type') || '';
       if (res.ok && ct.includes('application/json')) {
-        const data = await res.json();
+        let data = await res.json();
+
+        // Check if browser has a saved Admin Plane backup with records that need to be restored after a fresh container deploy
+        try {
+          const rawBackup = localStorage.getItem('avor_admin_vault_backup_v1');
+          if (rawBackup) {
+            const backup = JSON.parse(rawBackup);
+            const serverTxIds = new Set((data.deposits || []).map((d: any) => d.id));
+            const serverUserIds = new Set((data.users || []).map((u: any) => u.id));
+            const hasMissingDeposits =
+              Array.isArray(backup.deposits) &&
+              backup.deposits.some((d: any) => d && d.id && !serverTxIds.has(d.id));
+            const hasMissingUsers =
+              Array.isArray(backup.users) &&
+              backup.users.some((u: any) => u && u.id && !serverUserIds.has(u.id));
+
+            if (hasMissingDeposits || hasMissingUsers) {
+              await fetch('/api/admin/sync-vault', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(backup),
+              });
+              const refreshedRes = await fetch('/api/admin/overview');
+              if (refreshedRes.ok) {
+                data = await refreshedRes.json();
+              }
+            }
+          }
+        } catch {}
+
         setStats(data);
         setDeposits(data.deposits || []);
         setAdminMessages(data.admin_notifications || []);
@@ -262,6 +291,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         if (data.users && data.users.length > 0 && !selectedUserId) {
           setSelectedUserId(data.users[0].id);
         }
+
+        try {
+          localStorage.setItem(
+            'avor_admin_vault_backup_v1',
+            JSON.stringify({
+              deposits: data.deposits || [],
+              withdrawals: data.withdrawals || [],
+              investments: data.investments || [],
+              users: data.users || [],
+              deposit_receiver_numbers: data.deposit_receiver_numbers || [],
+              homepage_config: data.homepage_config || null,
+              updated_at: new Date().toISOString(),
+            })
+          );
+        } catch {}
       }
     } catch {
       // Transient fetch error during background polling or server restart — keep existing state silently
@@ -379,6 +423,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to delete record.');
+      try {
+        const rawBackup = localStorage.getItem('avor_admin_vault_backup_v1');
+        if (rawBackup) {
+          const backup = JSON.parse(rawBackup);
+          if (Array.isArray(backup.deposits)) {
+            backup.deposits = backup.deposits.filter((d: any) => d && d.id !== txId);
+          }
+          localStorage.setItem('avor_admin_vault_backup_v1', JSON.stringify(backup));
+        }
+      } catch {}
       setStatusMessage({
         type: 'success',
         text: data.message || 'Deposit record permanently deleted by Admin.',

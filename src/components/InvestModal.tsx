@@ -266,21 +266,17 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       }
       const msg =
         data.message ||
-        `Deposit of ${currencyInfo.format(totalCost)} submitted to Admin! Once Admin confirms your deposit, it will reflect on your Wallet and activate ${machine.title}.`;
+        `Deposit of ${currencyInfo.format(totalCost)} submitted to Admin! Once Admin confirms your payment, the money will reflect on your Wallet so you can buy ${machine.title}.`;
       setDepositSuccessMessage(msg);
-      setSuccessData({
-        message: msg,
-        status: 'PENDING',
-      });
       await sendMessageToAdmin(
         user.full_name || phoneNumber.trim() || user.phone_number || 'Avor Investor',
-        `Ordered ${machine.title} (${units} Unit${units > 1 ? 's' : ''}) • Deposited UGX ${totalCost.toLocaleString()} via ${selectedChannel} from ${phoneNumber.trim()} to ${activeReceiver.phone_number || RECEIVER_PHONE} (${activeReceiver.account_name || RECEIVER_NAME}) (Pending Admin Confirmation)`,
+        `Deposited UGX ${totalCost.toLocaleString()} via ${selectedChannel} from ${phoneNumber.trim()} to ${activeReceiver.phone_number || RECEIVER_PHONE} (${activeReceiver.account_name || RECEIVER_NAME}) (Pending Admin Confirmation)`,
         {
           senderPhone: phoneNumber.trim() || user.phone_number,
           receiverPhone: activeReceiver.phone_number || RECEIVER_PHONE,
           receiverName: activeReceiver.account_name || RECEIVER_NAME,
           amount: totalCost,
-          machineTitle: `${machine.title} (${units} Unit${units > 1 ? 's' : ''})`,
+          machineTitle: `Wallet Deposit (${machine.title})`,
           paymentMethod: selectedChannel,
           paymentReference: data.transaction?.payment_reference || `DEP-${Date.now()}`,
           status: 'PENDING',

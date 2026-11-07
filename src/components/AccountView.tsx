@@ -314,15 +314,6 @@ export const AccountView: React.FC<AccountViewProps> = ({
             <span className="text-2xl sm:text-3xl font-black text-white font-mono mt-1 block group-hover:text-sky-300 transition-colors">
               {displayWallet}
             </span>
-            {pendingDeposits > 0 ? (
-              <span className="text-[10px] font-mono font-bold text-amber-300 mt-0.5 block">
-                Pending: {pendingDeposits.toLocaleString()} UGX
-              </span>
-            ) : totalDeposited > 0 ? (
-              <span className="text-[10px] font-mono font-bold text-emerald-400 mt-0.5 block">
-                Confirmed • Tap to Use →
-              </span>
-            ) : null}
           </div>
 
           {/* Right Column: Balance */}

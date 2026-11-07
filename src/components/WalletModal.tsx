@@ -551,11 +551,6 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                   <span>TIME REMAINING: {paymentTimerFormatted}</span>
                 </div>
               )}
-              {pendingDepositsTotal > 0 && activeTab !== 'deposit' && (
-                <p className="text-[10px] text-sky-300 font-mono font-bold mt-0.5">
-                  Pending Admin Confirmation: {currencyInfo.format(pendingDepositsTotal)}
-                </p>
-              )}
             </div>
           </div>
           <button
