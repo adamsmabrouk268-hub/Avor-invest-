@@ -347,6 +347,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
             if (
               parsed &&
               (parsed.type === 'DEPOSIT_CREATED_PENDING' ||
+                parsed.type === 'MACHINE_ORDER_CREATED_PENDING' ||
                 parsed.type === 'WALLET_CONFIRMED_SYNC' ||
                 parsed.type === 'WALLET_DENIED_SYNC')
             ) {
@@ -563,6 +564,89 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     }
   };
 
+  // Handle Confirm / Approve / Deliver or Deny Pending Machine Order in Orders section
+  const handleOrderAction = async (investmentId: string, action: 'APPROVE' | 'REJECT' = 'APPROVE') => {
+    setStatusMessage(null);
+    try {
+      const res = await fetch('/api/admin/orders/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          investment_id: investmentId,
+          action,
+          notes:
+            action === 'APPROVE'
+              ? 'Order Confirmed & Delivered by Admin in Pending Orders section'
+              : 'Order Denied by Admin in Pending Orders section',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to process order action.');
+
+      try {
+        const bc = new BroadcastChannel('avor_realtime_wallet_sync');
+        bc.postMessage({
+          type: action === 'APPROVE' ? 'WALLET_CONFIRMED_SYNC' : 'WALLET_DENIED_SYNC',
+          order_type: action === 'APPROVE' ? 'ORDER_CONFIRMED_SYNC' : 'ORDER_DENIED_SYNC',
+          investment_id: investmentId,
+          investment: data.investment,
+          user_id: data.investment?.user_id,
+          user_phone: data.investment?.customer_phone,
+          customer_phone: data.investment?.customer_phone,
+          status: action === 'APPROVE' ? 'ACTIVE' : 'CANCELLED',
+          timestamp: new Date().toISOString(),
+        });
+        bc.close();
+      } catch {}
+
+      setStatusMessage({
+        type: 'success',
+        text:
+          data.message ||
+          (action === 'APPROVE'
+            ? 'Order Confirmed & Delivered! Customer has received the machine and active cycle has started (Day 1).'
+            : 'Order cancelled and refunded to customer wallet.'),
+      });
+      await fetchAdminData();
+      if (onDataChanged) onDataChanged();
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message });
+    }
+  };
+
+  // Handle Confirm All Pending Orders at once
+  const handleApproveAllOrders = async () => {
+    setStatusMessage(null);
+    try {
+      const res = await fetch('/api/admin/orders/approve-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to confirm all pending orders.');
+
+      try {
+        const bc = new BroadcastChannel('avor_realtime_wallet_sync');
+        bc.postMessage({
+          type: 'WALLET_CONFIRMED_SYNC',
+          order_type: 'ORDER_CONFIRMED_SYNC',
+          status: 'ACTIVE',
+          timestamp: new Date().toISOString(),
+        });
+        bc.close();
+      } catch {}
+
+      setStatusMessage({
+        type: 'success',
+        text: data.message || 'All pending machine orders confirmed and delivered!',
+      });
+      await fetchAdminData();
+      if (onDataChanged) onDataChanged();
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message });
+    }
+  };
+
   // Handle Toggle Investment Status in Ledger
   const handleToggleInvestmentStatus = async (investmentId: string) => {
     setStatusMessage(null);
@@ -574,6 +658,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to update investment status.');
+
+      try {
+        const bc = new BroadcastChannel('avor_realtime_wallet_sync');
+        bc.postMessage({
+          type: 'WALLET_CONFIRMED_SYNC',
+          order_type: 'ORDER_CONFIRMED_SYNC',
+          investment_id: investmentId,
+          investment: data.investment,
+          timestamp: new Date().toISOString(),
+        });
+        bc.close();
+      } catch {}
+
       setStatusMessage({ type: 'success', text: data.message });
       await fetchAdminData();
       if (onDataChanged) onDataChanged();
@@ -1334,16 +1431,41 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
             </div>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="shining-card border border-blue-950/80 p-3.5 rounded-xl shadow-md">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div
+              onClick={() => setActiveTab('DEPOSITS')}
+              className="shining-card border border-blue-950/80 hover:border-amber-500/40 p-3.5 rounded-xl shadow-md cursor-pointer transition-all"
+            >
               <span className="text-[10px] text-slate-400 font-bold uppercase block">Pending Payments</span>
               <span className="text-base font-extrabold text-amber-300 font-mono mt-0.5 block">
                 {stats.pending_deposits_count ?? 0} Requests
               </span>
-              <span className="text-[10px] text-slate-500 block">Awaiting Admin approval</span>
+              <span className="text-[10px] text-slate-500 block">Deposit payments approval</span>
             </div>
 
-            <div className="shining-card border border-blue-950/80 p-3.5 rounded-xl shadow-md">
+            <div
+              onClick={() => setActiveTab('LEDGER')}
+              className={`shining-card p-3.5 rounded-xl shadow-md cursor-pointer transition-all ${
+                investmentsLedger.filter((i) => i.status === 'PENDING').length > 0
+                  ? 'border-2 border-emerald-400 bg-emerald-950/40 shadow-emerald-500/20'
+                  : 'border border-blue-950/80 hover:border-emerald-500/40'
+              }`}
+            >
+              <span className="text-[10px] text-emerald-300 font-bold uppercase block">
+                Pending Orders (Buy Clicks)
+              </span>
+              <span className="text-base font-extrabold text-emerald-400 font-mono mt-0.5 block">
+                {investmentsLedger.filter((i) => i.status === 'PENDING').length} Orders
+              </span>
+              <span className="text-[10px] text-emerald-300/80 block">
+                Click to Confirm Order / Deliver
+              </span>
+            </div>
+
+            <div
+              onClick={() => setActiveTab('WITHDRAWALS')}
+              className="shining-card border border-blue-950/80 p-3.5 rounded-xl shadow-md cursor-pointer"
+            >
               <span className="text-[10px] text-slate-400 font-bold uppercase block">Pending Withdrawals</span>
               <span className="text-base font-extrabold text-rose-400 font-mono mt-0.5 block">
                 {stats.pending_withdrawals_count ?? 0} Requests
@@ -1393,6 +1515,104 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         </div>
       )}
 
+      {/* ALWAYS-VISIBLE PENDING ORDERS QUEUE WHEN CUSTOMER CLICKS BUY */}
+      {investmentsLedger.filter((i) => i.status === 'PENDING').length > 0 && activeTab !== 'LEDGER' && (
+        <div className="bg-gradient-to-r from-emerald-950/90 via-[#071f24] to-teal-950/90 border-2 border-emerald-400/70 rounded-2xl p-5 space-y-3 shadow-xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/50 flex items-center justify-center shrink-0">
+                <Cpu className="w-5 h-5 text-emerald-300 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-400/40">
+                    NEW PENDING MACHINE ORDER ({investmentsLedger.filter((i) => i.status === 'PENDING').length})
+                  </span>
+                  <h3 className="text-sm sm:text-base font-black text-white">
+                    Customer Clicked Buy — Waiting for Admin Order Confirmation
+                  </h3>
+                </div>
+                <p className="text-xs text-emerald-200/90 mt-0.5">
+                  Press <span className="font-black text-white">Confirm Order / Approve / Deliver</span> below (or open{' '}
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('LEDGER')}
+                    className="underline font-black text-emerald-300 hover:text-white cursor-pointer"
+                  >
+                    Pending Orders / Orders / Active Cycles
+                  </button>
+                  ) so the customer immediately receives their machine product and starts Day 1.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {investmentsLedger.filter((i) => i.status === 'PENDING').length > 1 && (
+                <button
+                  type="button"
+                  onClick={handleApproveAllOrders}
+                  className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-md cursor-pointer transition-all"
+                >
+                  Confirm All ({investmentsLedger.filter((i) => i.status === 'PENDING').length}) Orders
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setActiveTab('LEDGER')}
+                className="px-3.5 py-2 bg-[#06152d] hover:bg-[#0c234a] text-emerald-300 border border-emerald-400/40 font-bold text-xs rounded-xl cursor-pointer transition-all"
+              >
+                Open Orders Section →
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-2 pt-2 border-t border-emerald-500/30">
+            {investmentsLedger
+              .filter((i) => i.status === 'PENDING')
+              .map((inv) => (
+                <div
+                  key={inv.id}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#04101f]/90 border border-emerald-500/40 rounded-xl p-3.5"
+                >
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-xs font-black text-emerald-400">{inv.id}</span>
+                      <span className="text-xs font-black text-white">{inv.machine_title}</span>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                        Wait for admin confirmation
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-300">
+                      Customer: <span className="font-bold text-white">{inv.customer_name || inv.user_id}</span>
+                      {inv.customer_phone ? ` (${inv.customer_phone})` : ''} • Amount:{' '}
+                      <span className="font-mono font-bold text-emerald-300">
+                        UGX {Number(inv.amount_invested || 0).toLocaleString()}
+                      </span>{' '}
+                      • Cycle: <span className="font-mono text-sky-300">{inv.duration_days} Days</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleOrderAction(inv.id, 'APPROVE')}
+                      className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-emerald-600/30 cursor-pointer flex items-center gap-1.5 transition-all"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Confirm Order / Approve / Deliver</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOrderAction(inv.id, 'REJECT')}
+                      className="px-3 py-2 bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-500/40 font-bold text-xs rounded-xl cursor-pointer transition-all"
+                    >
+                      Deny Order
+                    </button>
+                  </div>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
       {/* Navigation Tabs */}
       <div className="flex flex-wrap border-b border-blue-950/80 gap-1.5 bg-[#050b18] p-1.5 rounded-xl">
         <button
@@ -1404,7 +1624,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
           }`}
         >
           <ArrowDownLeft className="w-4 h-4" />
-          <span>Pending Deposits ({deposits.filter((d) => d.status === 'PENDING').length})</span>
+          <span>Pending Payments ({deposits.filter((d) => d.status === 'PENDING').length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('LEDGER')}
+          className={`px-4 py-2.5 font-bold text-xs rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'LEDGER'
+              ? 'bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-black shadow-md border border-emerald-400/40'
+              : investmentsLedger.some((i) => i.status === 'PENDING')
+                ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-400/60 animate-pulse'
+                : 'text-slate-400 hover:text-white hover:bg-[#0c1630]'
+          }`}
+        >
+          <Cpu className="w-4 h-4 text-emerald-400" />
+          <span>
+            Pending Orders / Orders / Active Cycles (
+            {investmentsLedger.filter((i) => i.status === 'PENDING').length} Pending ·{' '}
+            {investmentsLedger.filter((i) => i.status === 'ACTIVE').length} Active)
+          </span>
         </button>
 
         <button
@@ -1419,18 +1657,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
           <span>
             Placed Order Messages ({adminMessages.filter((m) => m.order_status === 'PENDING').length || adminMessages.length})
           </span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('LEDGER')}
-          className={`px-4 py-2.5 font-bold text-xs rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
-            activeTab === 'LEDGER'
-              ? 'bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-black shadow-md border border-emerald-400/40'
-              : 'text-slate-400 hover:text-white hover:bg-[#0c1630]'
-          }`}
-        >
-          <Cpu className="w-4 h-4 text-emerald-400" />
-          <span>Investment Management Ledger ({investmentsLedger.length})</span>
         </button>
 
         <button
@@ -1506,107 +1732,230 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         </button>
       </div>
 
-      {/* TAB: INVESTMENT MANAGEMENT LEDGER */}
+      {/* TAB: PENDING ORDERS / ORDERS / ACTIVE CYCLES */}
       {activeTab === 'LEDGER' && (
-        <div className="shining-card border border-blue-950/80 rounded-2xl p-6 space-y-4 shadow-xl text-white">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-blue-950/80">
-            <div>
-              <h3 className="text-base font-extrabold text-white">All Investment Records</h3>
-              <p className="text-xs text-slate-300">
-                Real-time capital cycles ledger • Ending Date automatically evaluated (<span className="font-mono text-emerald-400">Purchase + Cycle</span>)
-              </p>
+        <div className="space-y-6">
+          {/* DEDICATED PENDING ORDERS SECTION (WHEN CUSTOMER CLICKS BUY) */}
+          <div className="shining-card border-2 border-emerald-500/50 rounded-2xl p-6 space-y-4 shadow-xl text-white">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-blue-950/80">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-5 h-5 text-emerald-400" />
+                  <h3 className="text-base font-extrabold text-white">
+                    Pending Orders (Customer Clicked Buy — Waiting for Admin Confirmation)
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-300 mt-1">
+                  When a customer clicks <span className="font-bold text-white">Buy</span> using their confirmed wallet, their new Machine Order appears here saying{' '}
+                  <span className="font-mono text-amber-300">&quot;Wait for admin confirmation&quot;</span>. Press{' '}
+                  <span className="font-bold text-emerald-400">Confirm Order / Approve / Deliver</span> to deliver the machine and start Day 1 of their cycle.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-xs font-mono text-amber-300 bg-amber-950/70 border border-amber-500/40 px-3 py-1.5 rounded-lg font-bold">
+                  {investmentsLedger.filter((i) => i.status === 'PENDING').length} Pending Orders
+                </span>
+                {investmentsLedger.filter((i) => i.status === 'PENDING').length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleApproveAllOrders}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg cursor-pointer transition-all"
+                  >
+                    Confirm All Pending Orders ({investmentsLedger.filter((i) => i.status === 'PENDING').length})
+                  </button>
+                )}
+              </div>
             </div>
-            <span className="text-xs font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-3 py-1 rounded-lg">
-              {investmentsLedger.filter((i) => i.status === 'ACTIVE').length} Active ·{' '}
-              {investmentsLedger.filter((i) => i.status === 'PENDING').length} Pending ·{' '}
-              {investmentsLedger.filter((i) => i.status === 'PAYOUT_COMPLETE').length} Completed
-            </span>
+
+            {investmentsLedger.filter((i) => i.status === 'PENDING').length === 0 ? (
+              <div className="text-center py-8 bg-[#050c1a]/70 border border-blue-950/70 rounded-xl text-slate-400 text-xs space-y-1">
+                <p className="font-bold text-slate-300">No Pending Machine Orders right now (0 Pending Orders).</p>
+                <p className="text-[11px] text-slate-500">
+                  As soon as a customer clicks &quot;Buy Machine Using Wallet&quot;, their order will appear here with the &quot;Confirm Order / Approve / Deliver&quot; button.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {investmentsLedger
+                  .filter((i) => i.status === 'PENDING')
+                  .map((inv) => (
+                    <div
+                      key={inv.id}
+                      className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-[#061326] border-2 border-amber-500/50 hover:border-emerald-400/70 rounded-2xl p-4 transition-all shadow-lg"
+                    >
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                          <span className="px-2.5 py-0.5 rounded-md text-[10px] font-mono font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-400/50 animate-pulse">
+                            WAIT FOR ADMIN CONFIRMATION
+                          </span>
+                          <span className="font-mono text-xs font-bold text-sky-400">{inv.id}</span>
+                          <span className="text-sm font-black text-white">{inv.machine_title}</span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-slate-300 pt-1">
+                          <div>
+                            <span className="text-slate-500">Customer: </span>
+                            <span className="font-bold text-white">{inv.customer_name || inv.user_id}</span>
+                            {inv.customer_phone && (
+                              <span className="font-mono text-sky-300 ml-1">({inv.customer_phone})</span>
+                            )}
+                          </div>
+                          <div>
+                            <span className="text-slate-500">Order Amount: </span>
+                            <span className="font-mono font-black text-emerald-400">
+                              UGX {Number(inv.amount_invested || 0).toLocaleString()}
+                            </span>
+                            <span className="text-[10px] text-emerald-300/80 ml-1">(Paid via Wallet)</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500">Cycle &amp; Daily Yield: </span>
+                            <span className="font-mono font-bold text-white">
+                              {inv.duration_days} Days • UGX {Number(inv.daily_return || 0).toLocaleString()}/day
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleOrderAction(inv.id, 'APPROVE')}
+                          className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-400 hover:brightness-110 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-emerald-500/30 cursor-pointer flex items-center gap-2 transition-all"
+                        >
+                          <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
+                          <span>Confirm Order / Approve / Deliver</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOrderAction(inv.id, 'REJECT')}
+                          className="px-3.5 py-2.5 bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-500/40 font-bold text-xs rounded-xl cursor-pointer transition-all"
+                        >
+                          Deny / Refund Order
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
           </div>
 
-          {investmentsLedger.length === 0 ? (
-            <div className="text-center py-10 text-slate-400 text-xs">
-              No machine investment records found yet.
+          {/* ALL ORDERS & ACTIVE CYCLES LEDGER TABLE */}
+          <div className="shining-card border border-blue-950/80 rounded-2xl p-6 space-y-4 shadow-xl text-white">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-blue-950/80">
+              <div>
+                <h3 className="text-base font-extrabold text-white">All Orders &amp; Active Cycles Ledger</h3>
+                <p className="text-xs text-slate-300">
+                  Real-time machine orders &amp; active capital cycles • Ending Date automatically evaluated (<span className="font-mono text-emerald-400">Purchase + Cycle</span>)
+                </p>
+              </div>
+              <span className="text-xs font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-3 py-1 rounded-lg">
+                {investmentsLedger.filter((i) => i.status === 'PENDING').length} Pending ·{' '}
+                {investmentsLedger.filter((i) => i.status === 'ACTIVE').length} Active ·{' '}
+                {investmentsLedger.filter((i) => i.status === 'PAYOUT_COMPLETE').length} Completed
+              </span>
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs font-mono">
-                <thead className="bg-[#070e1f] uppercase text-slate-300 border-b border-blue-950/80 text-[10px]">
-                  <tr>
-                    <th className="py-3 px-3">Inv ID</th>
-                    <th className="py-3 px-3">Customer</th>
-                    <th className="py-3 px-3">Machine</th>
-                    <th className="py-3 px-3">Amount</th>
-                    <th className="py-3 px-3">Purchased</th>
-                    <th className="py-3 px-3">Ending Date</th>
-                    <th className="py-3 px-3">Days Left</th>
-                    <th className="py-3 px-3">Status</th>
-                    <th className="py-3 px-3 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-blue-950/60 text-slate-300">
-                  {investmentsLedger.map((inv) => {
-                    const isPending = inv.status === 'PENDING';
-                    const isActive = inv.status === 'ACTIVE';
-                    const daysLeft = inv.days_left ?? Math.max(0, inv.duration_days - (inv.days_elapsed || 0));
 
-                    return (
-                      <tr key={inv.id} className="hover:bg-[#0c1630]/60 transition-colors">
-                        <td className="py-2.5 px-3 font-bold text-white">{inv.id}</td>
-                        <td className="py-2.5 px-3 font-sans">
-                          <div className="font-bold text-white">{inv.customer_name || inv.user_id}</div>
-                          {inv.customer_phone && (
-                            <span className="text-[10px] text-slate-400 font-mono block">{inv.customer_phone}</span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 text-emerald-400 font-semibold">{inv.machine_title}</td>
-                        <td className="py-2.5 px-3 font-sans font-bold text-white">
-                          UGX {Number(inv.amount_invested || 0).toLocaleString()}
-                        </td>
-                        <td className="py-2.5 px-3">{inv.purchase_date || (inv.start_date || '').split('T')[0]}</td>
-                        <td className="py-2.5 px-3">{inv.ending_date || (inv.end_date || '').split('T')[0]}</td>
-                        <td
-                          className={`py-2.5 px-3 font-bold ${
-                            isPending
-                              ? 'text-amber-300'
-                              : daysLeft <= 0
-                                ? 'text-slate-500'
-                                : 'text-amber-400'
-                          }`}
-                        >
-                          {isPending ? `${inv.duration_days}d (0d run)` : daysLeft > 0 ? `${daysLeft}d` : 'Ended'}
-                        </td>
-                        <td className="py-2.5 px-3">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-sans font-semibold ${
+            {investmentsLedger.length === 0 ? (
+              <div className="text-center py-10 text-slate-400 text-xs">
+                No machine orders or active cycles found yet.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead className="bg-[#070e1f] uppercase text-slate-300 border-b border-blue-950/80 text-[10px]">
+                    <tr>
+                      <th className="py-3 px-3">Order ID</th>
+                      <th className="py-3 px-3">Customer</th>
+                      <th className="py-3 px-3">Machine Product</th>
+                      <th className="py-3 px-3">Amount</th>
+                      <th className="py-3 px-3">Ordered</th>
+                      <th className="py-3 px-3">Ending Date</th>
+                      <th className="py-3 px-3">Cycle Progress</th>
+                      <th className="py-3 px-3">Status</th>
+                      <th className="py-3 px-3 text-right">Order Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-blue-950/60 text-slate-300">
+                    {investmentsLedger.map((inv) => {
+                      const isPending = inv.status === 'PENDING';
+                      const isActive = inv.status === 'ACTIVE';
+                      const daysLeft = inv.days_left ?? Math.max(0, inv.duration_days - (inv.days_elapsed || 0));
+
+                      return (
+                        <tr key={inv.id} className="hover:bg-[#0c1630]/60 transition-colors">
+                          <td className="py-2.5 px-3 font-bold text-white">{inv.id}</td>
+                          <td className="py-2.5 px-3 font-sans">
+                            <div className="font-bold text-white">{inv.customer_name || inv.user_id}</div>
+                            {inv.customer_phone && (
+                              <span className="text-[10px] text-slate-400 font-mono block">{inv.customer_phone}</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-emerald-400 font-semibold">{inv.machine_title}</td>
+                          <td className="py-2.5 px-3 font-sans font-bold text-white">
+                            UGX {Number(inv.amount_invested || 0).toLocaleString()}
+                          </td>
+                          <td className="py-2.5 px-3">{inv.purchase_date || (inv.start_date || '').split('T')[0]}</td>
+                          <td className="py-2.5 px-3">{inv.ending_date || (inv.end_date || '').split('T')[0]}</td>
+                          <td
+                            className={`py-2.5 px-3 font-bold ${
                               isPending
-                                ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30 animate-pulse'
-                                : isActive
-                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                                  : 'bg-slate-800 text-slate-400'
+                                ? 'text-amber-300'
+                                : daysLeft <= 0
+                                  ? 'text-slate-500'
+                                  : 'text-emerald-400'
                             }`}
                           >
-                            {isPending ? 'Pending' : isActive ? 'Active' : 'Completed'}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-right">
-                          <button
-                            onClick={() => handleToggleInvestmentStatus(inv.id)}
-                            className={`text-[11px] font-sans font-bold px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
-                              isPending
-                                ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
-                                : 'underline text-slate-300 hover:text-emerald-400'
-                            }`}
-                          >
-                            {isPending ? 'Confirm & Start' : 'Toggle Status'}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                            {isPending
+                              ? `Waiting Confirmation (${inv.duration_days}d)`
+                              : daysLeft > 0
+                                ? `Active • ${daysLeft}d left`
+                                : 'Ended'}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-sans font-semibold ${
+                                isPending
+                                  ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30 animate-pulse'
+                                  : isActive
+                                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                    : 'bg-slate-800 text-slate-400'
+                              }`}
+                            >
+                              {isPending ? 'Wait for Admin Confirmation' : isActive ? 'Active & Delivered' : 'Completed'}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-right">
+                            {isPending ? (
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => handleOrderAction(inv.id, 'APPROVE')}
+                                  className="text-[11px] font-sans font-black px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-sm cursor-pointer transition-all"
+                                >
+                                  Confirm Order / Approve / Deliver
+                                </button>
+                                <button
+                                  onClick={() => handleOrderAction(inv.id, 'REJECT')}
+                                  className="text-[11px] font-sans font-bold px-2.5 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-500/30 cursor-pointer transition-all"
+                                >
+                                  Deny
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => handleToggleInvestmentStatus(inv.id)}
+                                className="text-[11px] font-sans font-bold px-2.5 py-1 rounded-lg underline text-slate-300 hover:text-emerald-400 cursor-pointer transition-all"
+                              >
+                                Toggle Status
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

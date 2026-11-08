@@ -526,31 +526,19 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     );
   };
 
-  // Clean up any legacy PENDING wallet_deducted investments that drained Wallet before Admin confirmed
-  for (let idx = investments.length - 1; idx >= 0; idx--) {
-    const inv = investments[idx];
-    if (doesInvBelongToUser(inv) && inv.status === 'PENDING' && inv.wallet_deducted) {
-      if (confirmedDeposits >= Number(inv.amount_invested || 0)) {
-        // Admin has confirmed the deposit! Activate this pending machine order automatically
-        const startDate = new Date();
-        const durationDays = Number(inv.duration_days || 46);
-        const endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
-        inv.status = 'ACTIVE';
-        inv.days_elapsed = Math.max(1, Number(inv.days_elapsed || 0));
-        inv.start_date = startDate.toISOString();
-        inv.end_date = endDate.toISOString();
-        user.has_bought_machine = true;
-      } else {
-        // Deposit is still pending Admin confirmation: do not hold a PENDING investment that drains Wallet to 0
-        investments.splice(idx, 1);
-      }
-    }
-  }
-
   const userConfirmedInvestments = investments.filter(
     (inv) => doesInvBelongToUser(inv) && (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE')
   );
   const hasBoughtMachine = userConfirmedInvestments.length > 0;
+
+  const deductedInvestments = investments
+    .filter(
+      (inv) =>
+        doesInvBelongToUser(inv) &&
+        inv.wallet_deducted &&
+        (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE' || inv.status === 'PENDING')
+    )
+    .reduce((sum, inv) => sum + Number(inv.amount_invested || 0), 0);
 
   const confirmedDeductedInvestments = investments
     .filter(
@@ -561,12 +549,10 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     )
     .reduce((sum, inv) => sum + Number(inv.amount_invested || 0), 0);
 
-  const deductedInvestments = confirmedDeductedInvestments;
-
-  // Deposited money automatically reflects on the user's Wallet immediately after depositing (minus any confirmed machines bought from Wallet):
+  // Deposited money automatically reflects on the user's Wallet immediately after depositing (minus any machines ordered/bought from Wallet):
   const computedWallet = Math.max(0, allWalletDeposits - deductedInvestments);
   // Portion of Wallet backed by Admin-confirmed deposits:
-  const confirmedWallet = Math.max(0, confirmedDeposits - confirmedDeductedInvestments);
+  const confirmedWallet = Math.max(0, confirmedDeposits - deductedInvestments);
   // Money on the Balance is 3,000 UGX got as a reward after registration (+ earned yields/rewards - withdrawals):
   const computedBalance = Math.max(
     0,
@@ -2065,23 +2051,6 @@ async function startServer() {
       });
     }
 
-    // Step 3 -> Step 4: User deposited money (reflected on Wallet), but Admin must confirm the payment before the user can buy a machine and start the machine cycle!
-    if (confirmedWallet < totalCost) {
-      return res.status(400).json({
-        error: `Your deposit of UGX ${Math.max(computedWallet, pendingDeposits).toLocaleString()} is reflected on your Wallet! Please wait for Admin to confirm your payment — as soon as Admin confirms, you can buy ${machine.title} and start your machine cycle.`,
-        awaiting_admin_confirmation: true,
-        wallet_balance: computedWallet,
-        confirmed_wallet: confirmedWallet,
-        pending_deposits: pendingDeposits,
-      });
-    }
-
-    // Update machine funding stats
-    machine.funded_amount += totalCost;
-    if (machine.available_units > 0) {
-      machine.available_units = Math.max(0, machine.available_units - units);
-    }
-
     const dailyYield = machine.daily_yield * units;
     const totalReturn = machine.total_return * units;
 
@@ -2089,11 +2058,11 @@ async function startServer() {
     const endDate = new Date(startDate.getTime() + machine.duration_days * 24 * 60 * 60 * 1000);
     const selectedChannel = payment_method || 'Wallet Balance';
 
-    // Admin has confirmed the deposit (confirmedWallet >= totalCost) -> machine cycle starts immediately (ACTIVE, Day 1)!
-    const requiresAdminConfirmation = false;
+    // When customer clicks Buy, the system creates a new Pending Order ("Wait for admin confirmation")
+    // that goes to Pending Orders / Orders / Active Cycles in the Admin Panel for Admin to Confirm / Approve / Deliver!
+    const requiresAdminConfirmation = true;
 
-    user.has_bought_machine = true;
-    saveRegisteredUserToDisk(user);
+    const refCode = `ORD-${Math.floor(100000 + Math.random() * 900000)}`;
 
     const newInvestment: Investment = {
       id: `inv-${Date.now()}`,
@@ -2106,32 +2075,29 @@ async function startServer() {
       daily_yield: dailyYield,
       total_return: totalReturn,
       duration_days: machine.duration_days,
-      days_elapsed: requiresAdminConfirmation ? 0 : 1,
+      days_elapsed: 0,
       last_claim_at: startDate.toISOString(),
       unclaimed_earnings: 0,
       total_claimed: 0,
-      status: requiresAdminConfirmation ? 'PENDING' : 'ACTIVE',
+      status: 'PENDING',
       start_date: startDate.toISOString(),
       end_date: endDate.toISOString(),
-      confirmed_at: requiresAdminConfirmation ? undefined : startDate.toISOString(),
+      confirmed_at: undefined,
       machine,
       wallet_deducted: true,
       payment_method: selectedChannel,
     };
     (newInvestment as any).customer_name = user.full_name || user.name || 'Investor';
     (newInvestment as any).customer_phone = phone_number || user.phone_number || '';
+    (newInvestment as any).payment_reference = refCode;
 
     investments.unshift(newInvestment);
-
-    const refCode = `MACH-${Math.floor(100000 + Math.random() * 900000)}`;
 
     const targetDepositToLink = transactions.find(
       (t) =>
         doesTxBelongToUser(t, user, user_id) &&
         t.type === 'DEPOSIT' &&
-        (requiresAdminConfirmation
-          ? t.status === 'PENDING'
-          : t.status === 'SUCCESS' || t.status === 'CONFIRMED') &&
+        (t.status === 'PENDING' || t.status === 'SUCCESS' || t.status === 'CONFIRMED') &&
         !t.investment_id
     );
     if (targetDepositToLink) {
@@ -2147,7 +2113,7 @@ async function startServer() {
       investment_id: newInvestment.id,
       amount: totalCost,
       type: 'INVESTMENT',
-      status: requiresAdminConfirmation ? 'PENDING' : 'SUCCESS',
+      status: 'PENDING',
       payment_method: `Wallet (${selectedChannel}) • Machine: ${machine.title} (${units}x) • Phone: ${phone_number || user.phone_number || 'N/A'}`,
       payment_reference: refCode,
       machine_title: newInvestment.machine_title,
@@ -2165,36 +2131,39 @@ async function startServer() {
     if (requiresAdminConfirmation) {
       pushNotification(
         user.id,
-        '⏳ Machine Ordered Using Wallet — Cycle Starts After Admin Confirmation',
-        `Your purchase of ${newInvestment.machine_title} for ${totalCost.toLocaleString()} UGX from your Wallet has been recorded. Your machine cycle (Day 1 of ${machine.duration_days}) will start automatically as soon as Admin confirms your payment!`,
+        '⏳ Order Placed — Waiting for Admin Confirmation',
+        `Your order for ${newInvestment.machine_title} (${totalCost.toLocaleString()} UGX) is waiting for Admin confirmation in Pending Orders. As soon as Admin presses Confirm Order / Approve / Deliver, your machine cycle (Day 1 of ${machine.duration_days}) will start!`,
         'PAYMENT'
       );
 
       notifyAllAdmins(
-        `🔔 Machine Purchase Awaiting Admin Confirmation: ${newInvestment.machine_title}`,
-        `Customer ${user.full_name || user.id} (${phone_number || user.phone_number || 'No Phone'}) bought ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} using their Wallet (Ref: ${refCode}). Please press Confirm in Admin Console to start the machine cycle.`,
+        `📦 New Pending Machine Order: ${newInvestment.machine_title}`,
+        `Customer ${user.full_name || user.id} (${phone_number || user.phone_number || 'No Phone'}) clicked Buy for ${newInvestment.machine_title} (UGX ${totalCost.toLocaleString()}) using their Wallet (Order Ref: ${refCode}). Go to Pending Orders / Orders / Active Cycles in Admin Panel and press Confirm Order / Approve / Deliver!`,
         'PAYMENT',
         {
-          transaction_id: targetDepositToLink ? targetDepositToLink.id : newTx.id,
+          transaction_id: newTx.id,
+          investment_id: newInvestment.id,
           customer_name: user.full_name || user.name || user.id,
           customer_phone: phone_number || user.phone_number || '',
           amount: totalCost,
           payment_method: `Wallet (${selectedChannel})`,
           receiver_phone: RECEIVER_PHONE,
           receiver_name: RECEIVER_NAME,
-          payment_reference: targetDepositToLink?.payment_reference || refCode,
+          payment_reference: refCode,
           machine_title: newInvestment.machine_title,
           order_status: 'PENDING',
         }
       );
 
       broadcastRealtimeEvent({
-        type: 'DEPOSIT_CREATED_PENDING',
-        transaction: targetDepositToLink || newTx,
-        transaction_id: targetDepositToLink ? targetDepositToLink.id : newTx.id,
-        payment_reference: targetDepositToLink?.payment_reference || refCode,
+        type: 'MACHINE_ORDER_CREATED_PENDING',
+        investment: newInvestment,
+        investment_id: newInvestment.id,
+        transaction: newTx,
+        transaction_id: newTx.id,
+        payment_reference: refCode,
         status: 'PENDING',
-        status_label: 'Pending',
+        status_label: 'Wait for admin confirmation',
         user_id: user.id,
         user_phone: user.phone_number || phone_number || '',
         customer_phone: phone_number || user.phone_number || '',
@@ -2205,7 +2174,7 @@ async function startServer() {
       });
 
       return res.status(201).json({
-        message: `Machine order for ${units} unit(s) of ${machine.title} placed using your Wallet! Your machine cycle (Day 1 of ${machine.duration_days}) will start automatically after Admin confirms your payment.`,
+        message: `Order placed for ${units} unit(s) of ${machine.title}! Waiting for Admin confirmation — once Admin clicks Confirm Order / Approve / Deliver in the Orders section, you will get your machine and your ${machine.duration_days}-day cycle will start.`,
         investment: newInvestment,
         user_balance: user.balance,
         wallet_balance: updatedFinances.computedWallet,
@@ -2262,11 +2231,18 @@ async function startServer() {
     });
   });
 
-  // Helper to activate a PENDING machine investment once Admin confirms payment
+  // Helper to activate a PENDING machine investment once Admin confirms the Order
   const activateConfirmedMachineInvestment = (inv: Investment, adminNotes?: string): string => {
     const user = Array.from(users.values()).find((u) => u.id === inv.user_id);
     const machine = machines.find((m) => m.id === inv.machine_id) || inv.machine;
     const now = new Date();
+
+    if (inv.status !== 'ACTIVE' && machine) {
+      machine.funded_amount = Number(machine.funded_amount || 0) + Number(inv.amount_invested || 0);
+      if (machine.available_units > 0) {
+        machine.available_units = Math.max(0, machine.available_units - Number(inv.units || 1));
+      }
+    }
 
     inv.status = 'ACTIVE';
     inv.confirmed_at = now.toISOString();
@@ -3962,31 +3938,9 @@ async function startServer() {
     }
     const userList = Array.from(uniqueUserMap.values()).map(({ password_hash, ...u }) => u);
 
-    // Ensure every PENDING machine investment has a corresponding PENDING payment transaction visible to Admin,
-    // and transition any ACTIVE machine whose cycle has finished to PAYOUT_COMPLETE (Completed Cycle)
+    // Transition any ACTIVE machine whose cycle has finished to PAYOUT_COMPLETE (Completed Cycle)
     for (const inv of investments) {
-      if (inv.status === 'PENDING') {
-        const hasTx = transactions.some(
-          (t) =>
-            (t.investment_id === inv.id ||
-              (t.user_id === inv.user_id && t.type === 'INVESTMENT' && t.amount === inv.amount_invested)) &&
-            t.status === 'PENDING'
-        );
-        if (!hasTx) {
-          transactions.unshift({
-            id: `tx-inv-sync-${inv.id}`,
-            user_id: inv.user_id,
-            type: 'INVESTMENT',
-            amount: inv.amount_invested,
-            status: 'PENDING',
-            payment_method: `${inv.payment_method || 'Wallet Balance'} • ${inv.machine_title}`,
-            payment_reference: `MACHINE-${inv.id.slice(-6).toUpperCase()}`,
-            investment_id: inv.id,
-            machine_title: inv.machine_title,
-            created_at: inv.start_date || new Date().toISOString(),
-          });
-        }
-      } else if (inv.status === 'ACTIVE') {
+      if (inv.status === 'ACTIVE') {
         const startMs = new Date(inv.start_date || Date.now()).getTime();
         const elapsedDays = Math.min(
           inv.duration_days,
@@ -4007,7 +3961,7 @@ async function startServer() {
 
     const withdrawals = transactions.filter((t) => t.type === 'WITHDRAWAL');
     const deposits = transactions
-      .filter((t) => t.type === 'DEPOSIT' || t.type === 'INVESTMENT')
+      .filter((t) => t.type === 'DEPOSIT')
       .map((d) => {
         const cust = uniqueUserMap.get(d.user_id);
         return {
@@ -4694,6 +4648,157 @@ async function startServer() {
     });
   });
 
+  // Helper to confirm & deliver a Pending Machine Order (or reject/cancel a fake order) in the Admin Orders section
+  const processAdminOrderAction = (inv: Investment, action: 'APPROVE' | 'REJECT', notes?: string) => {
+    const user = findOrRestoreUser(inv.user_id, {
+      user_id: inv.user_id,
+      phone_number: (inv as any).customer_phone,
+      user_phone: (inv as any).customer_phone,
+      full_name: (inv as any).customer_name,
+    });
+    const nowIso = new Date().toISOString();
+
+    if (action === 'APPROVE') {
+      const rewardNote = activateConfirmedMachineInvestment(
+        inv,
+        notes || 'Confirmed & delivered by Admin in Pending Orders / Orders / Active Cycles'
+      );
+
+      // Ensure any linked deposit or investment transaction is also marked SUCCESS / CONFIRMED
+      for (const ltx of transactions) {
+        if (
+          (ltx.investment_id === inv.id ||
+            (doesTxBelongToUser(ltx, user, inv.user_id) && ltx.status === 'PENDING')) &&
+          ltx.status === 'PENDING'
+        ) {
+          ltx.status = 'SUCCESS';
+          (ltx as any).status_label = 'Successful';
+          (ltx as any).confirmed_at = nowIso;
+          (ltx as any).wallet_credited = true;
+          (ltx as any).approved_permanent = true;
+        }
+      }
+
+      // Mark any matching admin notification as CONFIRMED
+      for (const n of notifications) {
+        if (
+          (n as any).investment_id === inv.id ||
+          ((inv as any).payment_reference && (n as any).payment_reference === (inv as any).payment_reference)
+        ) {
+          (n as any).order_status = 'CONFIRMED';
+          n.read = true;
+        }
+      }
+
+      const fin = user ? syncUserConfirmedFinances(user, user.id) : { computedWallet: 0, computedBalance: 3000 };
+      if (user) {
+        pushNotification(
+          user.id,
+          `✅ Order Confirmed & Delivered: ${inv.machine_title}!`,
+          `Admin has confirmed your order for ${inv.machine_title}! Your machine is now ACTIVE (Day 1 of ${inv.duration_days} Days) and earning UGX ${Number(inv.daily_yield || 0).toLocaleString()} daily.${rewardNote}`,
+          'PAYMENT'
+        );
+      }
+      saveAppStateToDisk();
+
+      broadcastRealtimeEvent({
+        type: 'WALLET_CONFIRMED_SYNC',
+        order_type: 'ORDER_CONFIRMED_SYNC',
+        investment: inv,
+        investment_id: inv.id,
+        status: 'ACTIVE',
+        status_label: 'Active',
+        user_id: user?.id || inv.user_id,
+        user_phone: user?.phone_number || (inv as any).customer_phone || '',
+        customer_phone: (inv as any).customer_phone || user?.phone_number || '',
+        wallet_balance: fin.computedWallet,
+        available_wallet: fin.computedWallet,
+        balance: user?.balance ?? fin.computedBalance,
+        activated_investments: [inv],
+        timestamp: nowIso,
+      });
+
+      return {
+        message: `Order ${inv.id} (${inv.machine_title}) confirmed & delivered! Customer's machine cycle is now ACTIVE (Day 1 started).`,
+        investment: inv,
+        wallet_balance: fin.computedWallet,
+      };
+    } else {
+      // REJECT / Cancel Pending Order
+      const idx = investments.findIndex((i) => i.id === inv.id);
+      if (idx !== -1) {
+        investments.splice(idx, 1);
+      }
+      for (let tIdx = transactions.length - 1; tIdx >= 0; tIdx--) {
+        const ltx = transactions[tIdx];
+        if (ltx.investment_id === inv.id && ltx.type === 'INVESTMENT') {
+          transactions.splice(tIdx, 1);
+        }
+      }
+      for (const n of notifications) {
+        if ((n as any).investment_id === inv.id) {
+          (n as any).order_status = 'REJECTED';
+          n.read = true;
+        }
+      }
+      const fin = user ? syncUserConfirmedFinances(user, user.id) : { computedWallet: 0, computedBalance: 3000 };
+      if (user) {
+        pushNotification(
+          user.id,
+          `❌ Machine Order Declined: ${inv.machine_title}`,
+          `Your pending order for ${inv.machine_title} was declined by Admin.`,
+          'PAYMENT'
+        );
+      }
+      saveAppStateToDisk();
+
+      broadcastRealtimeEvent({
+        type: 'WALLET_DENIED_SYNC',
+        investment_id: inv.id,
+        status: 'FAILED',
+        user_id: user?.id || inv.user_id,
+        user_phone: user?.phone_number || (inv as any).customer_phone || '',
+        customer_phone: (inv as any).customer_phone || user?.phone_number || '',
+        wallet_balance: fin.computedWallet,
+        available_wallet: fin.computedWallet,
+        balance: user?.balance ?? fin.computedBalance,
+        timestamp: nowIso,
+      });
+
+      return {
+        message: `Order ${inv.id} (${inv.machine_title}) declined and removed from Pending Orders.`,
+        investment: inv,
+        wallet_balance: fin.computedWallet,
+      };
+    }
+  };
+
+  // Dedicated Admin Pending Orders Action Endpoint (Confirm Order / Approve / Deliver or Deny)
+  app.post('/api/admin/orders/action', (req, res) => {
+    const { investment_id, action = 'APPROVE', notes } = req.body || {};
+    const inv = investments.find((i) => i.id === investment_id);
+    if (!inv) {
+      return res.status(404).json({ error: 'Order record not found.' });
+    }
+    const result = processAdminOrderAction(inv, action === 'REJECT' ? 'REJECT' : 'APPROVE', notes);
+    return res.json(result);
+  });
+
+  // Confirm All Pending Machine Orders at Once
+  app.post('/api/admin/orders/approve-all', (req, res) => {
+    const pendingInvs = investments.filter((i) => i.status === 'PENDING');
+    if (pendingInvs.length === 0) {
+      return res.json({ message: 'All machine orders are already confirmed!', confirmed_count: 0 });
+    }
+    for (const inv of pendingInvs) {
+      processAdminOrderAction(inv, 'APPROVE', 'Confirmed via Confirm All Pending Orders');
+    }
+    return res.json({
+      message: `Confirmed & delivered ${pendingInvs.length} pending machine order(s)! All customer machine cycles are now ACTIVE (Day 1).`,
+      confirmed_count: pendingInvs.length,
+    });
+  });
+
   // Admin Toggle Investment Status (Pending -> Active -> Completed)
   app.post('/api/admin/investments/toggle-status', (req, res) => {
     const { investment_id } = req.body;
@@ -4703,21 +4808,8 @@ async function startServer() {
     }
 
     if (inv.status === 'PENDING') {
-      activateConfirmedMachineInvestment(inv, 'Activated from Admin Investment Management Ledger.');
-      const linkedTxs = transactions.filter(
-        (t) =>
-          (t.investment_id === inv.id ||
-            (t.user_id === inv.user_id && t.status === 'PENDING' && t.amount === inv.amount_invested)) &&
-          t.status === 'PENDING'
-      );
-      for (const ltx of linkedTxs) {
-        ltx.status = 'SUCCESS';
-      }
-      saveAppStateToDisk();
-      return res.json({
-        message: `Investment ${inv.id} (${inv.machine_title}) confirmed and set to ACTIVE (Day 1 started)!`,
-        investment: inv,
-      });
+      const result = processAdminOrderAction(inv, 'APPROVE', 'Confirmed & delivered from Admin Orders / Active Cycles section.');
+      return res.json(result);
     } else if (inv.status === 'ACTIVE') {
       inv.status = 'PAYOUT_COMPLETE';
       inv.days_elapsed = inv.duration_days;
@@ -4911,32 +5003,10 @@ async function startServer() {
       status: 'SUCCESS',
     });
 
-    // THING 2: Confirm Wallet funds AND if the customer has any PENDING machine order waiting for Admin confirmation, start its machine cycle (ACTIVE, Day 1) immediately!
+    // THING 2: Confirm Wallet funds so the customer can click Buy to place their Machine Order!
     let latestWallet = Number(tx.amount || 0);
     let latestBalance = primaryUser?.balance ?? REGISTRATION_REWARD_UGX;
     const activatedInvestments: Investment[] = [];
-
-    for (const inv of investments) {
-      if (
-        inv.status === 'PENDING' &&
-        (inv.id === tx.investment_id ||
-          doesTxBelongToUser({ user_id: inv.user_id, customer_phone: (inv as any).customer_phone } as any, primaryUser, tx.user_id))
-      ) {
-        inv.wallet_deducted = true;
-        activateConfirmedMachineInvestment(inv, notes || 'Machine cycle started upon Admin payment confirmation');
-        activatedInvestments.push(inv);
-
-        // Also mark any linked INVESTMENT transaction as SUCCESS
-        for (const ltx of transactions) {
-          if (ltx.investment_id === inv.id && ltx.status === 'PENDING') {
-            ltx.status = 'SUCCESS';
-            (ltx as any).status_label = 'Successful';
-            (ltx as any).confirmed_at = nowIso;
-            (ltx as any).approved_permanent = true;
-          }
-        }
-      }
-    }
 
     const syncedUserIds: string[] = [];
     for (const targetUser of matchedUsers.values()) {

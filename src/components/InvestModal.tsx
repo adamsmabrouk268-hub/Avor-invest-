@@ -87,6 +87,13 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       )
       .reduce((sum, inv) => sum + getInvUnits(inv), 0) || 0;
 
+  const pendingMachineOrder = userInvestments?.find(
+    (inv) =>
+      (inv.machine_id === machine.id ||
+        (inv.machine_title && machine.title && inv.machine_title.toLowerCase().includes(machine.title.toLowerCase()))) &&
+      inv.status === 'PENDING'
+  );
+
   // In AV1 series, each machine has a limit of purchase of 1
   const hasActiveAV1 = isAV1 && activeMachineUnits >= 1;
 
@@ -427,12 +434,12 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       setSuccessData({
         message:
           data.message ||
-          `Machine order for ${machine.title} placed using your wallet! Confirmation message has reached Admin.`,
+          `Order created for ${machine.title}! Wait for admin confirmation in Pending Orders.`,
         status: data.status || 'PENDING',
       });
       await sendMessageToAdmin(
         user.full_name || user.phone_number || 'Avor Investor',
-        `Bought ${machine.title} (${units} Unit${units > 1 ? 's' : ''}) for UGX ${totalCost.toLocaleString()} using Wallet Balance (${user.phone_number || phoneNumber})`,
+        `New Pending Machine Order: Bought ${machine.title} (${units} Unit${units > 1 ? 's' : ''}) for UGX ${totalCost.toLocaleString()} using Wallet Balance (${user.phone_number || phoneNumber}) — Wait for admin confirmation in Pending Orders`,
         {
           senderPhone: user.phone_number || phoneNumber,
           receiverPhone: activeReceiver.phone_number || RECEIVER_PHONE,
@@ -441,7 +448,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
           machineTitle: `${machine.title} (${units} Unit${units > 1 ? 's' : ''})`,
           paymentMethod: 'Wallet Balance',
           paymentReference: data.investment?.id || `INV-${Date.now()}`,
-          status: 'CONFIRMED',
+          status: 'PENDING',
         }
       );
       onSuccess();
@@ -554,40 +561,58 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                 </div>
               )}
 
-              {/* Deposit Reflected on Wallet / Admin Confirmation Status Banner */}
-              {(depositSuccessMessage || pendingDepositAmount > 0 || isPaymentConfirmedByAdmin) && (
-                <div
-                  className={`p-3.5 rounded-xl text-xs space-y-2 animate-fade-in border ${
-                    isPaymentConfirmedByAdmin
-                      ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-200'
-                      : 'bg-cyan-950/80 border-cyan-500/60 text-cyan-200'
-                  }`}
-                >
+              {/* Pending Machine Order / Deposit Reflected / Admin Confirmation Status Banner */}
+              {pendingMachineOrder ? (
+                <div className="p-3.5 rounded-xl text-xs space-y-2 animate-fade-in border bg-amber-950/80 border-amber-500/60 text-amber-200">
                   <div className="flex items-start gap-2">
-                    <CheckCircle2
-                      className={`w-4 h-4 shrink-0 mt-0.5 ${
-                        isPaymentConfirmedByAdmin ? 'text-emerald-400' : 'text-cyan-400'
-                      }`}
-                    />
+                    <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
                     <div className="flex-1">
-                      <span
-                        className={`font-black block ${
-                          isPaymentConfirmedByAdmin ? 'text-emerald-300' : 'text-cyan-300'
-                        }`}
-                      >
-                        {isPaymentConfirmedByAdmin
-                          ? `Payment Confirmed by Admin • Wallet Ready (${currencyInfo.format(displayWalletBalance)})`
-                          : `Deposit Reflected on Wallet (${currencyInfo.format(displayWalletBalance)}) • Machine Cycle Starts After Admin Confirmation`}
+                      <span className="font-black block text-amber-300">
+                        Wait for Admin Confirmation • Order Sent to Admin Pending Orders
                       </span>
                       <p className="text-[11px] opacity-90 mt-0.5 leading-relaxed">
-                        {isPaymentConfirmedByAdmin
-                          ? `Admin has confirmed your payment! Click "Buy Machine Using Wallet" below to buy ${machine.title} and immediately start your machine cycle.`
-                          : depositSuccessMessage ||
-                            `Your deposit of ${currencyInfo.format(pendingDepositAmount || displayWalletBalance)} is reflected on your Wallet. Once Admin confirms your payment, click Buy Machine below to start your machine cycle.`}
+                        Your order for <span className="font-bold text-white">{pendingMachineOrder.machine_title}</span> (
+                        {currencyInfo.format(Number(pendingMachineOrder.amount_invested || totalCost))}) has been placed using your Wallet. As soon as Admin presses{' '}
+                        <span className="font-bold text-emerald-300">Confirm Order / Approve / Deliver</span> in the Admin Orders section, your machine cycle will start immediately!
                       </p>
                     </div>
                   </div>
                 </div>
+              ) : (
+                (depositSuccessMessage || pendingDepositAmount > 0 || isPaymentConfirmedByAdmin) && (
+                  <div
+                    className={`p-3.5 rounded-xl text-xs space-y-2 animate-fade-in border ${
+                      isPaymentConfirmedByAdmin
+                        ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-200'
+                        : 'bg-cyan-950/80 border-cyan-500/60 text-cyan-200'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <CheckCircle2
+                        className={`w-4 h-4 shrink-0 mt-0.5 ${
+                          isPaymentConfirmedByAdmin ? 'text-emerald-400' : 'text-cyan-400'
+                        }`}
+                      />
+                      <div className="flex-1">
+                        <span
+                          className={`font-black block ${
+                            isPaymentConfirmedByAdmin ? 'text-emerald-300' : 'text-cyan-300'
+                          }`}
+                        >
+                          {isPaymentConfirmedByAdmin
+                            ? `Payment Confirmed by Admin • Wallet Ready (${currencyInfo.format(displayWalletBalance)})`
+                            : `Deposit Reflected on Wallet (${currencyInfo.format(displayWalletBalance)}) • Machine Cycle Starts After Admin Confirmation`}
+                        </span>
+                        <p className="text-[11px] opacity-90 mt-0.5 leading-relaxed">
+                          {isPaymentConfirmedByAdmin
+                            ? `Admin has confirmed your payment! Click "Buy Machine Using Wallet" below to place your machine order.`
+                            : depositSuccessMessage ||
+                              `Your deposit of ${currencyInfo.format(pendingDepositAmount || displayWalletBalance)} is reflected on your Wallet. Once Admin confirms your payment, click Buy Machine below to order your machine.`}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )
               )}
 
               {/* Per-Machine Purchase Limit Indicator & Selector */}
