@@ -236,7 +236,15 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       es.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
-          if (parsed && parsed.type === 'WALLET_CONFIRMED_SYNC') {
+          if (
+            parsed &&
+            (parsed.type === 'WALLET_CONFIRMED_SYNC' ||
+              parsed.type === 'WALLET_DENIED_SYNC' ||
+              parsed.type === 'DEPOSIT_CREATED_PENDING')
+          ) {
+            if (parsed.type === 'WALLET_DENIED_SYNC') {
+              setDepositSuccessMessage(null);
+            }
             refreshWalletStatus(false);
             if (onDepositSubmitted) onDepositSubmitted();
           }
@@ -309,13 +317,16 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       } catch {}
       if (typeof data.wallet_balance === 'number') {
         setLiveBalance(data.wallet_balance);
+      } else {
+        setLiveBalance((prev) => prev + totalCost);
       }
+      setSelectedChannel('Wallet Balance');
       if (onDepositSubmitted) {
         onDepositSubmitted();
       }
       const msg =
         data.message ||
-        `Deposit of ${currencyInfo.format(totalCost)} submitted to Admin! Once Admin confirms your payment, the money will reflect on your Wallet so you can buy ${machine.title}.`;
+        `Deposit of ${currencyInfo.format(totalCost)} has automatically reflected on your Wallet! After Admin confirms your payment, buy ${machine.title} to start the machine cycle.`;
       setDepositSuccessMessage(msg);
       await sendMessageToAdmin(
         user.full_name || phoneNumber.trim() || user.phone_number || 'Avor Investor',
@@ -511,36 +522,36 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                 </div>
               )}
 
-              {/* Deposit Submitted to Admin / Wallet Status Notification Banner */}
+              {/* Deposit Reflected on Wallet / Admin Confirmation Status Banner */}
               {(depositSuccessMessage || pendingDepositAmount > 0) && (
                 <div
                   className={`p-3.5 rounded-xl text-xs space-y-2 animate-fade-in border ${
-                    userHasEnoughBalance
+                    pendingDepositAmount === 0 && userHasEnoughBalance
                       ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-200'
-                      : 'bg-amber-950/80 border-amber-500/60 text-amber-200'
+                      : 'bg-cyan-950/80 border-cyan-500/60 text-cyan-200'
                   }`}
                 >
                   <div className="flex items-start gap-2">
                     <CheckCircle2
                       className={`w-4 h-4 shrink-0 mt-0.5 ${
-                        userHasEnoughBalance ? 'text-emerald-400' : 'text-amber-400'
+                        pendingDepositAmount === 0 && userHasEnoughBalance ? 'text-emerald-400' : 'text-cyan-400'
                       }`}
                     />
                     <div className="flex-1">
                       <span
                         className={`font-black block ${
-                          userHasEnoughBalance ? 'text-emerald-300' : 'text-amber-300'
+                          pendingDepositAmount === 0 && userHasEnoughBalance ? 'text-emerald-300' : 'text-cyan-300'
                         }`}
                       >
-                        {userHasEnoughBalance
-                          ? `Deposit Confirmed & Reflected on Wallet (${currencyInfo.format(liveBalance)})`
-                          : `Deposit Submitted to Admin for Confirmation (${currencyInfo.format(pendingDepositAmount || totalCost)})`}
+                        {pendingDepositAmount === 0 && userHasEnoughBalance
+                          ? `Payment Confirmed by Admin • Wallet Ready (${currencyInfo.format(liveBalance)})`
+                          : `Deposit Reflected on Wallet (${currencyInfo.format(liveBalance)}) • Machine Cycle Starts After Admin Confirmation`}
                       </span>
                       <p className="text-[11px] opacity-90 mt-0.5 leading-relaxed">
-                        {userHasEnoughBalance
-                          ? `Admin has confirmed your deposit and it is now reflected across all deposit planes! Click Buy Unit below to complete your machine purchase.`
+                        {pendingDepositAmount === 0 && userHasEnoughBalance
+                          ? `Admin has confirmed your payment! Click Buy Machine Using Wallet below to purchase ${machine.title} and immediately start your machine cycle.`
                           : depositSuccessMessage ||
-                            `Your deposit of ${currencyInfo.format(pendingDepositAmount)} has reached Admin and is awaiting confirmation. Once Admin confirms, it will automatically reflect here and on all deposit planes.`}
+                            `Your deposit of ${currencyInfo.format(pendingDepositAmount)} is reflected on your Wallet. Once Admin confirms your payment, your machine cycle will start.`}
                       </p>
                     </div>
                   </div>

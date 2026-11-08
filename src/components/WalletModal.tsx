@@ -158,7 +158,12 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       es.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
-          if (parsed && parsed.type === 'WALLET_CONFIRMED_SYNC') {
+          if (
+            parsed &&
+            (parsed.type === 'WALLET_CONFIRMED_SYNC' ||
+              parsed.type === 'WALLET_DENIED_SYNC' ||
+              parsed.type === 'DEPOSIT_CREATED_PENDING')
+          ) {
             onRefreshUser();
             fetchTransactions();
           }
@@ -354,7 +359,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         type: 'success',
         text:
           data.message ||
-          `Deposit of ${depositAmt.toLocaleString()} UGX submitted to Admin! Once Admin confirms your deposit, it will reflect on your Wallet so you can buy your machine.`,
+          `Deposit of ${depositAmt.toLocaleString()} UGX has automatically reflected on your Wallet! Once Admin confirms your payment, you can buy your machine and start the machine cycle.`,
       });
       await sendMessageToAdmin(
         user.full_name || depositPhone || user.phone_number || 'Avor Investor',

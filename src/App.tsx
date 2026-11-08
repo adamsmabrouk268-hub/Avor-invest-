@@ -121,7 +121,54 @@ export default function App() {
     };
 
     const handleRealtimeConfirm = (evData: any) => {
-      if (!evData || evData.type !== 'WALLET_CONFIRMED_SYNC') return;
+      if (!evData) return;
+      if (evData.type === 'DEPOSIT_CREATED_PENDING') {
+        if (doesEventMatchCurrentUser(evData)) {
+          if (typeof evData.wallet_balance === 'number') {
+            syncUserToStorage({
+              ...user,
+              wallet_balance: evData.wallet_balance,
+              available_wallet: evData.wallet_balance,
+            });
+          }
+        }
+        fetchUserData();
+        return;
+      }
+      if (evData.type === 'WALLET_DENIED_SYNC') {
+        if (doesEventMatchCurrentUser(evData)) {
+          try {
+            const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
+            const filteredRefs = savedRefs.filter(
+              (r) =>
+                r !== evData.transaction_id &&
+                r !== evData.payment_reference &&
+                r !== evData.firebase_doc_id
+            );
+            localStorage.setItem('avor_my_deposit_refs', JSON.stringify(filteredRefs));
+          } catch {}
+          const nextWallet =
+            typeof evData.wallet_balance === 'number'
+              ? evData.wallet_balance
+              : typeof evData.available_wallet === 'number'
+                ? evData.available_wallet
+                : Math.max(0, (user.wallet_balance || 0) - Number(evData.amount_removed || 0));
+          syncUserToStorage({
+            ...user,
+            wallet_balance: nextWallet,
+            available_wallet: nextWallet,
+            balance: typeof evData.balance === 'number' ? evData.balance : user.balance,
+          });
+          showNotification(
+            `❌ Payment Denied by Admin (Fake Order): UGX ${Number(evData.amount_removed || 0).toLocaleString()} has been removed from your Wallet (${Number(nextWallet).toLocaleString()} UGX remaining).`,
+            'error'
+          );
+        }
+        fetchUserData();
+        fetchUserPortfolio();
+        return;
+      }
+      if (evData.type !== 'WALLET_CONFIRMED_SYNC') return;
       if (doesEventMatchCurrentUser(evData)) {
         const nextWallet =
           typeof evData.wallet_balance === 'number'
@@ -136,7 +183,9 @@ export default function App() {
           balance: typeof evData.balance === 'number' ? evData.balance : user.balance,
         });
         showNotification(
-          `✅ Deposit Successful! UGX ${Number(evData.amount_added || 0).toLocaleString()} added to your Wallet balance (${Number(nextWallet).toLocaleString()} UGX).`,
+          evData.activated_machine
+            ? `✅ Payment Confirmed! Your machine cycle (${evData.activated_machine.machine_title || 'Machine'}) has now started!`
+            : `✅ Payment Confirmed by Admin! Your Wallet balance (${Number(nextWallet).toLocaleString()} UGX) is confirmed — buy your machine now to start its cycle.`,
           'success'
         );
       }

@@ -133,7 +133,12 @@ export const AccountView: React.FC<AccountViewProps> = ({
       es.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
-          if (parsed && (parsed.type === 'WALLET_CONFIRMED_SYNC' || parsed.type === 'DEPOSIT_CREATED_PENDING')) {
+          if (
+            parsed &&
+            (parsed.type === 'WALLET_CONFIRMED_SYNC' ||
+              parsed.type === 'WALLET_DENIED_SYNC' ||
+              parsed.type === 'DEPOSIT_CREATED_PENDING')
+          ) {
             loadProfileData();
           }
         } catch {}
@@ -201,9 +206,9 @@ export const AccountView: React.FC<AccountViewProps> = ({
     handleCopyFullDetails();
   };
 
-  // Card 1: Wallet (Admin-confirmed deposited money ONLY) & Balance (3,000 UGX registration reward + earned income)
+  // Card 1: Wallet (Automatically reflects deposited money; machine cycle starts after Admin confirmation) & Balance (3,000 UGX registration reward + earned income)
   const confirmedTxDeposits = transactions
-    .filter((t) => t.type === 'DEPOSIT' && (t.status === 'SUCCESS' || t.status === 'CONFIRMED'))
+    .filter((t) => t.type === 'DEPOSIT' && (t.status === 'SUCCESS' || t.status === 'CONFIRMED' || t.status === 'PENDING'))
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
   const availableWalletValue =
     dashboardSummary?.available_wallet !== undefined

@@ -3,7 +3,7 @@ import { MachineCategory, Transaction, User, Machine, HomepageConfig } from '../
 import { DepositNumbersManager } from './DepositNumbersManager';
 import { checkAndSyncOwnerDevice } from './TopThreeDotMenu';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth, subscribeToFirestoreAdminMessages, signInAdminWithGoogle } from '../firebase';
+import { auth, subscribeToFirestoreAdminMessages, signInAdminWithGoogle, deleteFirestoreAdminMessage } from '../firebase';
 import { notifyAdminOnDeposit } from '../notifyAdminOnDeposit';
 import {
   PlusCircle,
@@ -345,7 +345,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
             const parsed = JSON.parse(event.data);
             if (
               parsed &&
-              (parsed.type === 'DEPOSIT_CREATED_PENDING' || parsed.type === 'WALLET_CONFIRMED_SYNC')
+              (parsed.type === 'DEPOSIT_CREATED_PENDING' ||
+                parsed.type === 'WALLET_CONFIRMED_SYNC' ||
+                parsed.type === 'WALLET_DENIED_SYNC')
             ) {
               fetchAdminData();
             }
@@ -383,7 +385,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     };
   }, [isAdminAuthenticated]);
 
-  // Handle Deposit Approval Action (Does 2 things at same time: 1. Change Pending -> Successful, 2. Add amount to customer's Wallet balance)
+  // Handle Deposit Confirm / Deny Action:
+  // - APPROVE: Changes Pending -> Successful & confirms customer's Wallet balance (and starts machine cycle)
+  // - REJECT (Deny): Marks as Denied (Fake Order) & immediately removes the fake order money from customer's Wallet balance
   const handleDepositAction = async (
     transactionId: string,
     action: 'APPROVE' | 'REJECT',
@@ -400,8 +404,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
           ...(extraMeta || {}),
           notes:
             action === 'APPROVE'
-              ? 'Confirmed by Admin: Status changed Pending -> Successful & amount added to customer Wallet'
-              : 'Deposit request declined',
+              ? 'Confirmed by Admin: Status changed Pending -> Successful & amount confirmed on customer Wallet'
+              : 'Denied by Admin as a fake/unverified order — money removed from customer Wallet',
         }),
       });
 
@@ -429,6 +433,52 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
           });
           bc.close();
         } catch {}
+      } else if (action === 'REJECT') {
+        const fbDocId =
+          data.transaction?.firebase_doc_id ||
+          extraMeta?.firebase_doc_id ||
+          data.transaction?.payment_reference ||
+          extraMeta?.payment_reference;
+        if (fbDocId) {
+          deleteFirestoreAdminMessage(fbDocId).catch(() => {});
+        }
+        try {
+          const rawBackup = localStorage.getItem('avor_admin_vault_backup_v1');
+          if (rawBackup) {
+            const backup = JSON.parse(rawBackup);
+            if (Array.isArray(backup.deposits)) {
+              backup.deposits = backup.deposits.map((d: any) =>
+                d &&
+                (d.id === transactionId ||
+                  d.id === data.transaction?.id ||
+                  (extraMeta?.payment_reference && d.payment_reference === extraMeta.payment_reference))
+                  ? { ...d, status: 'FAILED', status_label: 'Denied (Fake Order)', wallet_credited: false }
+                  : d
+              );
+              localStorage.setItem('avor_admin_vault_backup_v1', JSON.stringify(backup));
+            }
+          }
+        } catch {}
+        try {
+          const bc = new BroadcastChannel('avor_realtime_wallet_sync');
+          bc.postMessage({
+            type: 'WALLET_DENIED_SYNC',
+            transaction: data.transaction,
+            transaction_id: data.transaction?.id || transactionId,
+            payment_reference: data.transaction?.payment_reference || extraMeta?.payment_reference,
+            status: 'FAILED',
+            status_label: 'Denied (Fake Order)',
+            user_id: data.transaction?.user_id || extraMeta?.user_id,
+            user_phone: data.transaction?.user_phone || extraMeta?.customer_phone,
+            customer_phone: data.transaction?.customer_phone || extraMeta?.customer_phone,
+            amount_removed: Number(data.transaction?.amount || extraMeta?.amount || 0),
+            wallet_balance: data.wallet_balance,
+            available_wallet: data.available_wallet,
+            balance: data.new_balance,
+            timestamp: new Date().toISOString(),
+          });
+          bc.close();
+        } catch {}
       }
 
       setStatusMessage({
@@ -436,8 +486,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         text:
           data.message ||
           (action === 'APPROVE'
-            ? 'Confirmed! Status changed from Pending -> Successful and amount added to customer Wallet!'
-            : 'Request rejected.'),
+            ? 'Confirmed! Status changed from Pending -> Successful and amount confirmed on customer Wallet!'
+            : 'Payment denied (Fake Order)! Money has been removed from the customer Wallet.'),
       });
       await fetchAdminData();
       if (onDataChanged) onDataChanged();
@@ -1675,25 +1725,46 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                               {new Date(fbMsg.created_at).toLocaleString()}
                             </span>
                             {Number(fbMsg.amount) > 0 && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleDepositAction(fbMsg.paymentReference || fbMsg.id, 'APPROVE', {
-                                    firebase_doc_id: fbMsg.id,
-                                    payment_reference: fbMsg.paymentReference || fbMsg.id,
-                                    customer_name: fbMsg.name,
-                                    customer_phone: fbMsg.senderPhone,
-                                    receiver_phone: fbMsg.receiverPhone,
-                                    receiver_name: fbMsg.receiverName,
-                                    amount: Number(fbMsg.amount),
-                                    payment_method: fbMsg.paymentMethod,
-                                  })
-                                }
-                                className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-[11px] font-black rounded-lg border border-emerald-400/50 flex items-center gap-1 cursor-pointer shadow-xs"
-                              >
-                                <Check className="w-3.5 h-3.5" />
-                                <span>Confirm</span>
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleDepositAction(fbMsg.paymentReference || fbMsg.id, 'APPROVE', {
+                                      firebase_doc_id: fbMsg.id,
+                                      payment_reference: fbMsg.paymentReference || fbMsg.id,
+                                      customer_name: fbMsg.name,
+                                      customer_phone: fbMsg.senderPhone,
+                                      receiver_phone: fbMsg.receiverPhone,
+                                      receiver_name: fbMsg.receiverName,
+                                      amount: Number(fbMsg.amount),
+                                      payment_method: fbMsg.paymentMethod,
+                                    })
+                                  }
+                                  className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-[11px] font-black rounded-lg border border-emerald-400/50 flex items-center gap-1 cursor-pointer shadow-xs"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>Confirm</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleDepositAction(fbMsg.paymentReference || fbMsg.id, 'REJECT', {
+                                      firebase_doc_id: fbMsg.id,
+                                      payment_reference: fbMsg.paymentReference || fbMsg.id,
+                                      customer_name: fbMsg.name,
+                                      customer_phone: fbMsg.senderPhone,
+                                      receiver_phone: fbMsg.receiverPhone,
+                                      receiver_name: fbMsg.receiverName,
+                                      amount: Number(fbMsg.amount),
+                                      payment_method: fbMsg.paymentMethod,
+                                    })
+                                  }
+                                  className="px-2.5 py-1.5 bg-rose-950/70 hover:bg-rose-900/70 text-rose-300 text-[11px] font-bold rounded-lg border border-rose-500/40 flex items-center gap-1 cursor-pointer"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                  <span>Deny</span>
+                                </button>
+                              </>
                             )}
                           </div>
                         </div>
@@ -1779,11 +1850,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                             <button
                               type="button"
                               onClick={() =>
-                                handleDepositAction(msg.transaction_id || msg.payment_reference, 'REJECT')
+                                handleDepositAction(msg.transaction_id || msg.payment_reference, 'REJECT', {
+                                  firebase_doc_id: msg.firebase_doc_id,
+                                  payment_reference: msg.payment_reference,
+                                  customer_name: msg.customer_name,
+                                  customer_phone: msg.customer_phone,
+                                  receiver_phone: msg.receiver_phone,
+                                  receiver_name: msg.receiver_name,
+                                  amount: Number(msg.amount || 0),
+                                  payment_method: msg.payment_method,
+                                })
                               }
-                              className="px-3 py-2 bg-rose-950/70 hover:bg-rose-900/70 text-rose-300 text-xs font-bold rounded-xl border border-rose-500/40 cursor-pointer"
+                              className="px-3 py-2 bg-rose-950/70 hover:bg-rose-900/70 text-rose-300 text-xs font-bold rounded-xl border border-rose-500/40 flex items-center gap-1 cursor-pointer"
                             >
-                              Decline
+                              <X className="w-3.5 h-3.5" />
+                              <span>Deny</span>
                             </button>
                           </div>
                         )}
@@ -1912,10 +1993,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                           <span>Confirm</span>
                         </button>
                         <button
-                          onClick={() => handleDepositAction(d.id, 'REJECT')}
-                          className="px-2.5 py-1.5 bg-rose-950/70 hover:bg-rose-900/70 text-rose-300 text-[11px] font-bold rounded-lg border border-rose-500/30 cursor-pointer"
+                          onClick={() =>
+                            handleDepositAction(d.id, 'REJECT', {
+                              firebase_doc_id: d.firebase_doc_id,
+                              payment_reference: d.payment_reference,
+                              user_id: d.user_id,
+                              customer_name: d.customer_name,
+                              customer_phone: d.customer_phone,
+                              receiver_phone: d.receiver_phone,
+                              receiver_name: d.receiver_name,
+                              amount: Number(d.amount || 0),
+                              payment_method: d.payment_method,
+                            })
+                          }
+                          className="px-2.5 py-1.5 bg-rose-950/70 hover:bg-rose-900/70 text-rose-300 text-[11px] font-bold rounded-lg border border-rose-500/30 flex items-center gap-1 cursor-pointer"
                         >
-                          Decline
+                          <X className="w-3.5 h-3.5" />
+                          <span>Deny</span>
                         </button>
                       </div>
                     </div>
@@ -2023,16 +2117,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                               </button>
 
                               <button
-                                onClick={() => handleDepositAction(d.id, 'REJECT')}
+                                onClick={() =>
+                                  handleDepositAction(d.id, 'REJECT', {
+                                    firebase_doc_id: d.firebase_doc_id,
+                                    payment_reference: d.payment_reference,
+                                    user_id: d.user_id,
+                                    customer_name: d.customer_name,
+                                    customer_phone: d.customer_phone,
+                                    receiver_phone: d.receiver_phone,
+                                    receiver_name: d.receiver_name,
+                                    amount: Number(d.amount || 0),
+                                    payment_method: d.payment_method,
+                                  })
+                                }
                                 className="px-3 py-1.5 bg-rose-950/60 hover:bg-rose-900/60 text-rose-300 text-[10px] font-bold rounded-lg border border-rose-500/30 transition-all flex items-center gap-1 cursor-pointer"
                               >
                                 <X className="w-3.5 h-3.5" />
-                                <span>Decline</span>
+                                <span>Deny</span>
                               </button>
                             </div>
-                          ) : (
+                          ) : isSuccessful ? (
                             <span className="text-[10px] font-mono text-emerald-400 font-bold">
-                              ✅ Added to Wallet
+                              ✅ Confirmed on Wallet
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-mono text-rose-400 font-bold">
+                              ❌ Denied (Removed from Wallet)
                             </span>
                           )}
                         </td>

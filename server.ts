@@ -427,13 +427,13 @@ function linkKnownDepositRefsToUser(user?: User & { password_hash?: string }, ra
 }
 
 function syncUserConfirmedFinances(user: User & { password_hash?: string }, explicitUserId?: string) {
-  // Automatically clean up any duplicate PENDING deposit if a CONFIRMED/SUCCESS deposit with the same reference or firebase_doc_id exists
-  const confirmedRefs = new Set<string>();
-  const confirmedDocIds = new Set<string>();
+  // Automatically clean up any duplicate PENDING deposit if a CONFIRMED/SUCCESS or DENIED/FAILED deposit with the same reference or firebase_doc_id exists
+  const resolvedRefs = new Set<string>();
+  const resolvedDocIds = new Set<string>();
   for (const t of transactions) {
-    if (t.type === 'DEPOSIT' && (t.status === 'SUCCESS' || t.status === 'CONFIRMED')) {
-      if (t.payment_reference) confirmedRefs.add(t.payment_reference);
-      if ((t as any).firebase_doc_id) confirmedDocIds.add((t as any).firebase_doc_id);
+    if (t.type === 'DEPOSIT' && (t.status === 'SUCCESS' || t.status === 'CONFIRMED' || t.status === 'FAILED')) {
+      if (t.payment_reference) resolvedRefs.add(t.payment_reference);
+      if ((t as any).firebase_doc_id) resolvedDocIds.add((t as any).firebase_doc_id);
     }
   }
   for (let idx = transactions.length - 1; idx >= 0; idx--) {
@@ -441,8 +441,8 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     if (
       t.type === 'DEPOSIT' &&
       t.status === 'PENDING' &&
-      ((t.payment_reference && confirmedRefs.has(t.payment_reference)) ||
-        ((t as any).firebase_doc_id && confirmedDocIds.has((t as any).firebase_doc_id)))
+      ((t.payment_reference && resolvedRefs.has(t.payment_reference)) ||
+        ((t as any).firebase_doc_id && resolvedDocIds.has((t as any).firebase_doc_id)))
     ) {
       transactions.splice(idx, 1);
     }
@@ -455,6 +455,8 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
   const pendingDeposits = userDeposits
     .filter((t) => t.status === 'PENDING')
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  // All non-rejected deposits (both PENDING and CONFIRMED/SUCCESS) immediately reflect on the user's Wallet
+  const allWalletDeposits = confirmedDeposits + pendingDeposits;
 
   const userYieldsAndBonuses = transactions
     .filter(
@@ -495,13 +497,31 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
       return (
         sameUser &&
         inv.wallet_deducted &&
+        (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE' || inv.status === 'PENDING')
+      );
+    })
+    .reduce((sum, inv) => sum + Number(inv.amount_invested || 0), 0);
+
+  const confirmedDeductedInvestments = investments
+    .filter((inv) => {
+      const sameUser =
+        inv.user_id === user.id ||
+        (explicitUserId && inv.user_id === explicitUserId) ||
+        (userPhoneTail &&
+          userPhoneTail.length >= 7 &&
+          ((inv as any).customer_phone || '').replace(/\D/g, '').slice(-9) === userPhoneTail);
+      return (
+        sameUser &&
+        inv.wallet_deducted &&
         (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE')
       );
     })
     .reduce((sum, inv) => sum + Number(inv.amount_invested || 0), 0);
 
-  // Deposited money (once confirmed by Admin) reflects on the Wallet ONLY (minus any machines bought from Wallet):
-  const computedWallet = Math.max(0, confirmedDeposits - deductedInvestments);
+  // Deposited money automatically reflects on the user's Wallet immediately after depositing (minus any machines bought from Wallet):
+  const computedWallet = Math.max(0, allWalletDeposits - deductedInvestments);
+  // Portion of Wallet backed by Admin-confirmed deposits:
+  const confirmedWallet = Math.max(0, confirmedDeposits - confirmedDeductedInvestments);
   // Money on the Balance is 3,000 UGX got as a reward after registration (+ earned yields/rewards - withdrawals):
   const computedBalance = Math.max(
     0,
@@ -553,6 +573,7 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     userWithdrawals,
     computedBalance,
     computedWallet,
+    confirmedWallet,
     hasBoughtMachine,
   };
 }
@@ -1940,8 +1961,8 @@ async function startServer() {
 
     const totalCost = machine.total_cost * units;
 
-    // Sync confirmed finances before checking wallet balance or lock status
-    const { computedWallet } = syncUserConfirmedFinances(user, user_id);
+    // Sync finances before checking wallet balance or lock status
+    const { computedWallet, confirmedWallet } = syncUserConfirmedFinances(user, user_id);
     const userConfirmedInvs = investments.filter(
       (i) => i.user_id === user.id && (i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE')
     );
@@ -1978,35 +1999,20 @@ async function startServer() {
       }
     }
 
-    // Every buyer must use Admin-confirmed deposited money on their Wallet (NOT the 3,000 UGX registration reward on Balance)
+    // Check that the user has deposited enough money on their Wallet (NOT the 3,000 UGX registration reward on Balance)
     if (computedWallet < totalCost) {
-      const pendingDeposits = transactions.filter(
-        (t) => doesTxBelongToUser(t, user, user_id) && t.type === 'DEPOSIT' && t.status === 'PENDING'
-      );
-      const pendingTotal = pendingDeposits.reduce((sum, t) => sum + t.amount, 0);
-
       pushNotification(
         user.id,
-        '⚠️ Confirmed Wallet Balance Not Enough',
-        `Your confirmed Wallet balance is not enough to buy ${machine.title}. Required: ${totalCost.toLocaleString()} UGX • Confirmed Wallet: ${computedWallet.toLocaleString()} UGX.${
-          pendingTotal > 0 ? ` You have ${pendingTotal.toLocaleString()} UGX pending Admin confirmation.` : ' Please deposit money and wait for Admin confirmation.'
-        }`,
+        '⚠️ Wallet Balance Not Enough',
+        `Your Wallet balance is not enough to buy ${machine.title}. Required: ${totalCost.toLocaleString()} UGX • Available Wallet: ${computedWallet.toLocaleString()} UGX. Please deposit money onto your Wallet first.`,
         'PAYMENT'
       );
 
       return res.status(400).json({
-        error:
-          pendingTotal > 0
-            ? `Your deposit of ${pendingTotal.toLocaleString()} UGX is awaiting Admin confirmation. Once Admin confirms your deposit, it will reflect on your Wallet so you can buy ${machine.title}.`
-            : `Confirmed Wallet balance is not enough to buy ${machine.title} (${totalCost.toLocaleString()} UGX required • Available Wallet: ${computedWallet.toLocaleString()} UGX). Please deposit money via MTN Mobile Money or Airtel Money and wait for Admin confirmation.`,
-        requires_deposit: pendingTotal === 0,
-        requires_deposit_approval: pendingTotal > 0,
+        error: `Wallet balance is not enough to buy ${machine.title} (${totalCost.toLocaleString()} UGX required • Available Wallet: ${computedWallet.toLocaleString()} UGX). Please deposit money via MTN Mobile Money or Airtel Money onto your Wallet first.`,
+        requires_deposit: true,
       });
     }
-
-    // Mark user as having bought a machine (wallet deduction is tracked via wallet_deducted: true on the investment)
-    user.has_bought_machine = true;
-    saveRegisteredUserToDisk(user);
 
     // Update machine funding stats
     machine.funded_amount += totalCost;
@@ -2021,8 +2027,15 @@ async function startServer() {
     const endDate = new Date(startDate.getTime() + machine.duration_days * 24 * 60 * 60 * 1000);
     const selectedChannel = payment_method || 'Wallet Balance';
 
-    // Since user.balance is only funded from Admin-confirmed deposits, this purchase from Wallet Balance is already backed by Admin-confirmed funds
-    const requiresAdminConfirmation = false;
+    // Machine cycle ONLY starts AFTER Admin has confirmed the deposit payment:
+    // - If Admin already confirmed the deposit (confirmedWallet >= totalCost), requiresAdminConfirmation is false -> machine cycle starts immediately (ACTIVE, Day 1).
+    // - If the user deposited (reflected on Wallet) and clicked Buy Machine before Admin confirmed (confirmedWallet < totalCost), requiresAdminConfirmation is true -> machine is PENDING (Day 0) and its cycle starts automatically as soon as Admin confirms!
+    const requiresAdminConfirmation = confirmedWallet < totalCost;
+
+    if (!requiresAdminConfirmation) {
+      user.has_bought_machine = true;
+      saveRegisteredUserToDisk(user);
+    }
 
     const newInvestment: Investment = {
       id: `inv-${Date.now()}`,
@@ -2047,22 +2060,26 @@ async function startServer() {
       wallet_deducted: true,
       payment_method: selectedChannel,
     };
+    (newInvestment as any).customer_name = user.full_name || user.name || 'Investor';
+    (newInvestment as any).customer_phone = phone_number || user.phone_number || '';
 
     investments.unshift(newInvestment);
 
     const refCode = `MACH-${Math.floor(100000 + Math.random() * 900000)}`;
 
-    const recentConfirmedDep = transactions.find(
+    const targetDepositToLink = transactions.find(
       (t) =>
         doesTxBelongToUser(t, user, user_id) &&
         t.type === 'DEPOSIT' &&
-        (t.status === 'SUCCESS' || t.status === 'CONFIRMED') &&
+        (requiresAdminConfirmation
+          ? t.status === 'PENDING'
+          : t.status === 'SUCCESS' || t.status === 'CONFIRMED') &&
         !t.investment_id
     );
-    if (recentConfirmedDep) {
-      recentConfirmedDep.investment_id = newInvestment.id;
-      if (!recentConfirmedDep.machine_title) {
-        recentConfirmedDep.machine_title = newInvestment.machine_title;
+    if (targetDepositToLink) {
+      targetDepositToLink.investment_id = newInvestment.id;
+      if (!targetDepositToLink.machine_title) {
+        targetDepositToLink.machine_title = newInvestment.machine_title;
       }
     }
 
@@ -2080,37 +2097,69 @@ async function startServer() {
     };
     (newTx as any).customer_name = user.full_name || user.name || 'Investor';
     (newTx as any).customer_phone = phone_number || user.phone_number || '';
+    (newTx as any).user_phone = user.phone_number || phone_number || '';
     (newTx as any).wallet_credited = true;
     transactions.unshift(newTx);
 
+    const updatedFinances = syncUserConfirmedFinances(user, user.id);
     saveAppStateToDisk();
 
     if (requiresAdminConfirmation) {
       pushNotification(
         user.id,
-        '⏳ Machine Order Submitted for Admin Confirmation',
-        `Your purchase of ${newInvestment.machine_title} for ${totalCost.toLocaleString()} UGX from your wallet has been recorded and a confirmation message has been sent to Admin. Once Admin confirms your payment, your machine will start running (Day 1 of ${machine.duration_days}).`,
+        '⏳ Machine Ordered Using Wallet — Cycle Starts After Admin Confirmation',
+        `Your purchase of ${newInvestment.machine_title} for ${totalCost.toLocaleString()} UGX from your Wallet has been recorded. Your machine cycle (Day 1 of ${machine.duration_days}) will start automatically as soon as Admin confirms your payment!`,
         'PAYMENT'
       );
 
       notifyAllAdmins(
-        `🔔 Machine Purchase Confirmation: ${newInvestment.machine_title}`,
-        `Customer ${user.full_name || user.id} (${phone_number || user.phone_number || 'No Phone'}) bought ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} using their wallet (Ref: ${refCode}). Please confirm payment in Admin Console to start the machine.`,
-        'PAYMENT'
+        `🔔 Machine Purchase Awaiting Admin Confirmation: ${newInvestment.machine_title}`,
+        `Customer ${user.full_name || user.id} (${phone_number || user.phone_number || 'No Phone'}) bought ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} using their Wallet (Ref: ${refCode}). Please press Confirm in Admin Console to start the machine cycle.`,
+        'PAYMENT',
+        {
+          transaction_id: targetDepositToLink ? targetDepositToLink.id : newTx.id,
+          customer_name: user.full_name || user.name || user.id,
+          customer_phone: phone_number || user.phone_number || '',
+          amount: totalCost,
+          payment_method: `Wallet (${selectedChannel})`,
+          receiver_phone: RECEIVER_PHONE,
+          receiver_name: RECEIVER_NAME,
+          payment_reference: targetDepositToLink?.payment_reference || refCode,
+          machine_title: newInvestment.machine_title,
+          order_status: 'PENDING',
+        }
       );
 
+      broadcastRealtimeEvent({
+        type: 'DEPOSIT_CREATED_PENDING',
+        transaction: targetDepositToLink || newTx,
+        transaction_id: targetDepositToLink ? targetDepositToLink.id : newTx.id,
+        payment_reference: targetDepositToLink?.payment_reference || refCode,
+        status: 'PENDING',
+        status_label: 'Pending',
+        user_id: user.id,
+        user_phone: user.phone_number || phone_number || '',
+        customer_phone: phone_number || user.phone_number || '',
+        amount: totalCost,
+        wallet_balance: updatedFinances.computedWallet,
+        available_wallet: updatedFinances.computedWallet,
+        timestamp: new Date().toISOString(),
+      });
+
       return res.status(201).json({
-        message: `Machine order for ${units} unit(s) of ${machine.title} placed using your wallet! Confirmation message has been sent to Admin. Your machine will start counting days as soon as Admin confirms your payment.`,
+        message: `Machine order for ${units} unit(s) of ${machine.title} placed using your Wallet! Your machine cycle (Day 1 of ${machine.duration_days}) will start automatically after Admin confirms your payment.`,
         investment: newInvestment,
         user_balance: user.balance,
-        has_bought_machine: true,
+        wallet_balance: updatedFinances.computedWallet,
+        available_wallet: updatedFinances.computedWallet,
+        has_bought_machine: updatedFinances.hasBoughtMachine,
         status: 'PENDING',
         claimed_tier_rewards: (user as any).claimed_tier_rewards || [],
       });
     }
 
     const rewardNote = activateConfirmedMachineInvestment(newInvestment, 'Activated via Admin-approved wallet balance');
-    const updatedFinances = syncUserConfirmedFinances(user, user.id);
+    const finalFinances = syncUserConfirmedFinances(user, user.id);
     notifyAllAdmins(
       `✅ Machine Purchased & Activated: ${newInvestment.machine_title}`,
       `Customer ${user.full_name || user.id} (${phone_number || user.phone_number || 'No Phone'}) purchased ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} using their Admin-confirmed wallet balance (Ref: ${refCode}).`,
@@ -2147,8 +2196,8 @@ async function startServer() {
       message: `Successfully bought ${units} unit(s) of ${machine.title} using your wallet balance! Your machine is now ACTIVE (Day 1 of ${machine.duration_days}).${rewardNote}`,
       investment: newInvestment,
       user_balance: user.balance,
-      wallet_balance: updatedFinances.computedWallet,
-      available_wallet: updatedFinances.computedWallet,
+      wallet_balance: finalFinances.computedWallet,
+      available_wallet: finalFinances.computedWallet,
       has_bought_machine: true,
       status: 'ACTIVE',
       claimed_tier_rewards: (user as any).claimed_tier_rewards || [],
@@ -2338,7 +2387,7 @@ async function startServer() {
       });
     }
 
-    // 1. Sync & compute Deposit details (confirmed deposits reflect on Wallet ONLY; Balance has 3,000 registration reward + yields)
+    // 1. Sync & compute Deposit details (deposited money reflects on Wallet immediately; machine cycle starts after Admin confirmation)
     linkKnownDepositRefsToUser(user, queryRefs);
     const {
       userDeposits,
@@ -2346,6 +2395,7 @@ async function startServer() {
       pendingDeposits,
       userWithdrawals,
       computedWallet,
+      confirmedWallet,
     } = syncUserConfirmedFinances(user, userId);
 
     // 2. Withdraw details
@@ -2539,10 +2589,12 @@ async function startServer() {
       balance: user.balance,
       wallet_balance: computedWallet,
       available_wallet: computedWallet,
+      confirmed_wallet: confirmedWallet,
       deposit_details: {
         total_deposited: totalDeposited,
         wallet_balance: computedWallet,
         available_wallet: computedWallet,
+        confirmed_wallet: confirmedWallet,
         pending_deposits: pendingDeposits,
         deposits_count: userDeposits.length,
         confirmed_deposits_count: userDeposits.filter((t) => t.status === 'SUCCESS' || t.status === 'CONFIRMED').length,
@@ -3506,12 +3558,13 @@ async function startServer() {
       });
 
       return res.status(200).json({
-        message: `Deposit of ${finalAmount.toLocaleString()} UGX submitted! Once Admin confirms your deposit, it will reflect on your Wallet.`,
+        message: `Deposit of ${finalAmount.toLocaleString()} UGX has automatically reflected on your Wallet! Once Admin confirms your payment, you can buy your machine and start your machine cycle.`,
         depositId: newTx.id,
         transactionId: transactionIdFromApi,
         status: 'PENDING',
         new_balance: user ? user.balance : REGISTRATION_REWARD_UGX,
-        wallet_balance: user ? user.wallet_balance || 0 : 0,
+        wallet_balance: user ? user.wallet_balance || finalAmount : finalAmount,
+        available_wallet: user ? user.available_wallet || finalAmount : finalAmount,
         has_bought_machine: user ? Boolean(user.has_bought_machine) : false,
         receivingAccount: {
           id: receivingAccount.id,
@@ -3649,9 +3702,10 @@ async function startServer() {
     });
 
     res.json({
-      message: `Deposit of ${numAmt.toLocaleString()} UGX submitted to Admin! Once Admin confirms your deposit, it will reflect on your Wallet.`,
+      message: `Deposit of ${numAmt.toLocaleString()} UGX has automatically reflected on your Wallet! Once Admin confirms your payment, you can buy your machine and start your machine cycle.`,
       new_balance: user.balance,
-      wallet_balance: user.wallet_balance || 0,
+      wallet_balance: user.wallet_balance || numAmt,
+      available_wallet: user.available_wallet || numAmt,
       has_bought_machine: Boolean(user.has_bought_machine),
       status: 'PENDING',
       transaction: newTx,
@@ -4114,6 +4168,23 @@ async function startServer() {
     }
   };
 
+  // Helper to delete a denied/fake order document from Firebase Firestore (`admin_messages`)
+  const deleteOrderFromFirestore = async (docId?: string) => {
+    try {
+      if (!docId) return;
+      const projectId = firebaseAppletConfig.projectId;
+      const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+      const apiKey = firebaseAppletConfig.apiKey;
+      if (!projectId || !apiKey) return;
+      const cleanDocId = docId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+      if (!cleanDocId) return;
+      const deleteUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/admin_messages/${encodeURIComponent(cleanDocId)}?key=${encodeURIComponent(apiKey)}`;
+      await fetch(deleteUrl, { method: 'DELETE' });
+    } catch {
+      // Non-blocking background cleanup
+    }
+  };
+
   // Helper to ingest a Firebase admin_messages document into server transactions & Admin notifications
   const ingestFirebaseAdminMessage = (payload: {
     firebase_doc_id?: string;
@@ -4143,8 +4214,23 @@ async function startServer() {
       createdAt,
     } = payload || {};
 
-    // Ignore deleted historical demo/test documents
+    // Ignore deleted historical demo/test documents or denied fake orders
+    const alreadyDeniedTx = transactions.find(
+      (t) =>
+        ((firebase_doc_id && (t as any).firebase_doc_id === firebase_doc_id) ||
+          (paymentReference && t.payment_reference === paymentReference)) &&
+        t.status === 'FAILED'
+    );
+    const alreadyDeniedInNotifs = notifications.some(
+      (n: any) =>
+        ((firebase_doc_id && n.firebase_doc_id === firebase_doc_id) ||
+          (paymentReference && n.payment_reference === paymentReference)) &&
+        n.order_status === 'REJECTED'
+    );
+
     if (
+      alreadyDeniedTx ||
+      alreadyDeniedInNotifs ||
       (firebase_doc_id && DELETED_DEMO_IDS.has(firebase_doc_id)) ||
       (paymentReference && DELETED_DEMO_IDS.has(paymentReference)) ||
       name === 'Verification User' ||
@@ -4765,18 +4851,29 @@ async function startServer() {
       status: 'SUCCESS',
     });
 
-    // THING 2: Add that amount to that customer's Wallet balance across all matching user records & save to disk
+    // THING 2: Confirm Wallet funds AND if the customer has any PENDING machine order waiting for Admin confirmation, start its machine cycle (ACTIVE, Day 1) immediately!
     let latestWallet = Number(tx.amount || 0);
     let latestBalance = primaryUser?.balance ?? REGISTRATION_REWARD_UGX;
+    const activatedInvestments: Investment[] = [];
 
-    if (tx.type === 'DEPOSIT') {
-      for (let idx = investments.length - 1; idx >= 0; idx--) {
-        const inv = investments[idx];
-        if (
-          inv.status === 'PENDING' &&
-          doesTxBelongToUser({ user_id: inv.user_id, customer_phone: (inv as any).customer_phone } as any, primaryUser, tx.user_id)
-        ) {
-          investments.splice(idx, 1);
+    for (const inv of investments) {
+      if (
+        inv.status === 'PENDING' &&
+        (inv.id === tx.investment_id ||
+          doesTxBelongToUser({ user_id: inv.user_id, customer_phone: (inv as any).customer_phone } as any, primaryUser, tx.user_id))
+      ) {
+        inv.wallet_deducted = true;
+        activateConfirmedMachineInvestment(inv, notes || 'Machine cycle started upon Admin payment confirmation');
+        activatedInvestments.push(inv);
+
+        // Also mark any linked INVESTMENT transaction as SUCCESS
+        for (const ltx of transactions) {
+          if (ltx.investment_id === inv.id && ltx.status === 'PENDING') {
+            ltx.status = 'SUCCESS';
+            (ltx as any).status_label = 'Successful';
+            (ltx as any).confirmed_at = nowIso;
+            (ltx as any).approved_permanent = true;
+          }
         }
       }
     }
@@ -4791,15 +4888,19 @@ async function startServer() {
 
       pushNotification(
         targetUser.id,
-        '✅ Deposit Successful & Added to Wallet!',
-        `Your deposit of ${tx.amount.toLocaleString()} UGX has been confirmed by Admin (Pending -> Successful) and added to your Wallet balance (${fin.computedWallet.toLocaleString()} UGX available). You can now buy a machine using your Wallet! ${notes || ''}`,
+        activatedInvestments.length > 0
+          ? `✅ Payment Confirmed — ${activatedInvestments[0].machine_title} Cycle Started!`
+          : '✅ Payment Confirmed by Admin — Ready to Buy Machine!',
+        activatedInvestments.length > 0
+          ? `Admin has confirmed your payment of ${tx.amount.toLocaleString()} UGX! Your machine (${activatedInvestments[0].machine_title}) is now ACTIVE and counting Day 1 of ${activatedInvestments[0].duration_days} Days. ${notes || ''}`
+          : `Your deposit of ${tx.amount.toLocaleString()} UGX has been confirmed by Admin (Pending -> Successful). Your Wallet balance (${fin.computedWallet.toLocaleString()} UGX) is confirmed and ready to buy a machine and start your machine cycle! ${notes || ''}`,
         'PAYMENT'
       );
     }
 
     saveAppStateToDisk();
 
-    // Immediately push real-time SSE update to all connected clients so customer sees Wallet balance without refreshing
+    // Immediately push real-time SSE update to all connected clients so customer sees confirmed status & active machine cycle without refreshing
     broadcastRealtimeEvent({
       type: 'WALLET_CONFIRMED_SYNC',
       transaction: tx,
@@ -4813,6 +4914,172 @@ async function startServer() {
       user_phone: (tx as any).user_phone || primaryUser?.phone_number || '',
       customer_phone: (tx as any).customer_phone || primaryUser?.phone_number || '',
       amount_added: Number(tx.amount || 0),
+      wallet_balance: latestWallet,
+      available_wallet: latestWallet,
+      balance: latestBalance,
+      activated_investments: activatedInvestments,
+      timestamp: nowIso,
+    });
+
+    return {
+      user: primaryUser,
+      computedWallet: latestWallet,
+      computedBalance: latestBalance,
+    };
+  };
+
+  // =========================================================================
+  // REAL-TIME WALLET SYNC FUNCTION (Admin Deny / Fake Order Handler):
+  // When Admin presses Deny on a fake order in the Admin Panel, this function:
+  //   1. Marks the deposit/order status as FAILED ("Denied - Fake Order")
+  //   2. Removes the unverified/fake money from the customer's Wallet balance immediately
+  //   3. Cancels any PENDING machine order that was queued using fake unconfirmed funds
+  //   4. Broadcasts a real-time SSE update (WALLET_DENIED_SYNC) so the money disappears from the user's Wallet immediately
+  // =========================================================================
+  const realTimeSyncWalletOnDeny = (
+    tx: Transaction,
+    notes?: string
+  ): {
+    user: (User & { password_hash?: string }) | undefined;
+    computedWallet: number;
+    computedBalance: number;
+  } => {
+    const nowIso = new Date().toISOString();
+
+    tx.status = 'FAILED';
+    (tx as any).status_label = 'Denied (Fake Order)';
+    (tx as any).denied_at = nowIso;
+    (tx as any).wallet_credited = false;
+    (tx as any).approved_permanent = false;
+
+    // Record IDs in DELETED_DEMO_IDS so Firestore or local vault backups never re-import this fake order as PENDING
+    if (tx.id) DELETED_DEMO_IDS.add(String(tx.id));
+    if (tx.payment_reference) DELETED_DEMO_IDS.add(String(tx.payment_reference));
+    if ((tx as any).firebase_doc_id) DELETED_DEMO_IDS.add(String((tx as any).firebase_doc_id));
+    saveDeletedIdsToDisk();
+
+    void deleteOrderFromFirestore((tx as any).firebase_doc_id || tx.payment_reference || tx.id);
+
+    const matchedUsers = new Map<string, User & { password_hash?: string }>();
+    const primaryUser = findOrRestoreUser(tx.user_id, {
+      user_id: tx.user_id,
+      phone_number: (tx as any).user_phone || (tx as any).customer_phone,
+      user_phone: (tx as any).user_phone || (tx as any).customer_phone,
+      full_name: (tx as any).customer_name,
+      user_name: (tx as any).customer_name,
+    });
+    if (primaryUser && primaryUser.id !== 'usr-admin-owner') {
+      matchedUsers.set(primaryUser.id, primaryUser);
+    }
+
+    for (const u of users.values()) {
+      if (!u || !u.id || u.id === 'usr-admin-owner') continue;
+      if (doesTxBelongToUser(tx, u, u.id)) {
+        matchedUsers.set(u.id, u);
+      }
+    }
+
+    // Mark any duplicate or sibling PENDING deposit/investment transactions for this fake order as FAILED
+    for (let idx = transactions.length - 1; idx >= 0; idx--) {
+      const other = transactions[idx];
+      if (other.id === tx.id) continue;
+      if (other.status === 'PENDING' && (other.type === 'DEPOSIT' || other.type === 'INVESTMENT')) {
+        const sameRef =
+          (tx.payment_reference && other.payment_reference === tx.payment_reference) ||
+          ((tx as any).firebase_doc_id && (other as any).firebase_doc_id === (tx as any).firebase_doc_id);
+        if (sameRef) {
+          if (other.id) DELETED_DEMO_IDS.add(String(other.id));
+          if (other.payment_reference) DELETED_DEMO_IDS.add(String(other.payment_reference));
+          transactions.splice(idx, 1);
+          continue;
+        }
+        if (doesTxBelongToUser(other, primaryUser, tx.user_id) && other.amount === tx.amount) {
+          other.status = 'FAILED';
+          (other as any).status_label = 'Denied (Fake Order)';
+          (other as any).wallet_credited = false;
+          if (other.id) DELETED_DEMO_IDS.add(String(other.id));
+          if (other.payment_reference) DELETED_DEMO_IDS.add(String(other.payment_reference));
+          if ((other as any).firebase_doc_id) {
+            DELETED_DEMO_IDS.add(String((other as any).firebase_doc_id));
+            void deleteOrderFromFirestore(String((other as any).firebase_doc_id));
+          }
+        }
+      }
+    }
+    saveDeletedIdsToDisk();
+
+    // Mark all matching Admin order notifications as REJECTED ("Denied - Fake Order")
+    notifications.forEach((n: any) => {
+      if (
+        n.transaction_id === tx.id ||
+        (tx.payment_reference && n.payment_reference === tx.payment_reference) ||
+        ((tx as any).firebase_doc_id && n.firebase_doc_id === (tx as any).firebase_doc_id) ||
+        (primaryUser &&
+          n.customer_phone &&
+          (n.customer_phone === primaryUser.phone_number || n.customer_phone === (tx as any).customer_phone) &&
+          n.order_status === 'PENDING' &&
+          (!n.amount || Number(n.amount) === Number(tx.amount)))
+      ) {
+        n.order_status = 'REJECTED';
+        n.status_label = 'Denied (Fake Order)';
+        n.read = true;
+      }
+    });
+
+    // Cancel/remove any PENDING machine order that was placed using unconfirmed/fake wallet funds
+    for (let idx = investments.length - 1; idx >= 0; idx--) {
+      const inv = investments[idx];
+      if (
+        inv.status === 'PENDING' &&
+        (inv.id === tx.investment_id ||
+          doesTxBelongToUser({ user_id: inv.user_id, customer_phone: (inv as any).customer_phone } as any, primaryUser, tx.user_id))
+      ) {
+        // Also mark any linked INVESTMENT transaction as FAILED
+        for (const ltx of transactions) {
+          if (ltx.investment_id === inv.id && ltx.status === 'PENDING') {
+            ltx.status = 'FAILED';
+            (ltx as any).status_label = 'Denied (Fake Order)';
+          }
+        }
+        investments.splice(idx, 1);
+      }
+    }
+
+    let latestWallet = 0;
+    let latestBalance = primaryUser?.balance ?? REGISTRATION_REWARD_UGX;
+    const syncedUserIds: string[] = [];
+
+    for (const targetUser of matchedUsers.values()) {
+      const fin = syncUserConfirmedFinances(targetUser, targetUser.id);
+      latestWallet = fin.computedWallet;
+      latestBalance = targetUser.balance;
+      syncedUserIds.push(targetUser.id);
+      saveRegisteredUserToDisk(targetUser as User & { password_hash: string });
+
+      pushNotification(
+        targetUser.id,
+        '❌ Payment Denied (Fake Order) — Removed from Wallet',
+        `Your payment of ${tx.amount.toLocaleString()} UGX was denied by Admin as a fake/unverified order. The money has been removed from your Wallet balance (${fin.computedWallet.toLocaleString()} UGX remaining). ${notes || ''}`,
+        'PAYMENT'
+      );
+    }
+
+    saveAppStateToDisk();
+
+    // Broadcast real-time SSE update so the money immediately disappears from the customer's Wallet without refreshing
+    broadcastRealtimeEvent({
+      type: 'WALLET_DENIED_SYNC',
+      transaction: tx,
+      transaction_id: tx.id,
+      payment_reference: tx.payment_reference,
+      firebase_doc_id: (tx as any).firebase_doc_id,
+      status: 'FAILED',
+      status_label: 'Denied (Fake Order)',
+      user_id: primaryUser?.id || tx.user_id,
+      synced_user_ids: syncedUserIds,
+      user_phone: (tx as any).user_phone || primaryUser?.phone_number || '',
+      customer_phone: (tx as any).customer_phone || primaryUser?.phone_number || '',
+      amount_removed: Number(tx.amount || 0),
       wallet_balance: latestWallet,
       available_wallet: latestWallet,
       balance: latestBalance,
@@ -4865,8 +5132,8 @@ async function startServer() {
       );
     }
 
-    // If Admin pressed Confirm on an order notification or Firestore message that wasn't yet in `transactions`, create it on the spot so Confirm never fails
-    if (!tx && action === 'APPROVE' && Number(amount) > 0) {
+    // If Admin pressed Confirm or Deny on an order notification or Firestore message that wasn't yet in `transactions`, create it on the spot so the action never fails
+    if (!tx && (action === 'APPROVE' || action === 'REJECT') && Number(amount) > 0) {
       const restoredCustomer = findOrRestoreUser(user_id || customer_phone, {
         user_id,
         phone_number: customer_phone,
@@ -4963,48 +5230,20 @@ async function startServer() {
         });
       }
 
-      tx.status = 'FAILED';
+      const { computedWallet, computedBalance } = realTimeSyncWalletOnDeny(
+        tx,
+        notes || 'Denied by Admin due to fake/unverified order'
+      );
 
-      if (tx.type === 'INVESTMENT') {
-        const inv = investments.find(
-          (i) =>
-            i.id === tx.investment_id ||
-            (i.user_id === tx.user_id && i.status === 'PENDING' && i.amount_invested === tx.amount)
-        );
-        if (inv) {
-          if (user && inv.wallet_deducted) {
-            inv.wallet_deducted = false;
-            syncUserConfirmedFinances(user, user.id);
-            saveRegisteredUserToDisk(user);
-          }
-          if (user) {
-            pushNotification(
-              user.id,
-              '❌ Machine Payment Not Confirmed',
-              `Your payment for ${inv.machine_title} (${tx.amount.toLocaleString()} UGX) was declined by Admin.${
-                inv.wallet_deducted ? ' Your wallet balance has been refunded.' : ''
-              } ${notes || ''}`,
-              'PAYMENT'
-            );
-          }
-        }
-        saveAppStateToDisk();
-        return res.json({ message: `Machine order marked as declined.`, transaction: tx });
-      }
-
-      if (user) {
-        (tx as any).wallet_credited = false;
-        syncUserConfirmedFinances(user, user.id);
-        saveRegisteredUserToDisk(user);
-        pushNotification(
-          user.id,
-          '❌ Deposit Request Declined',
-          `Your deposit request of ${tx.amount.toLocaleString()} UGX was declined by Admin. ${notes || ''}`,
-          'PAYMENT'
-        );
-      }
-      saveAppStateToDisk();
-      return res.json({ message: `Deposit request marked as failed.`, transaction: tx });
+      return res.json({
+        message: `Payment of UGX ${tx.amount.toLocaleString()} denied (Fake Order)! The money has been removed from the customer's Wallet (${computedWallet.toLocaleString()} UGX remaining).`,
+        status: 'FAILED',
+        status_label: 'Denied (Fake Order)',
+        transaction: tx,
+        new_balance: computedBalance,
+        wallet_balance: computedWallet,
+        available_wallet: computedWallet,
+      });
     }
 
     res.status(400).json({ error: 'Invalid action provided.' });
@@ -5075,8 +5314,10 @@ async function startServer() {
           (tx.payment_reference && t.payment_reference === tx.payment_reference && t.type === tx.type)
       );
       if (!existing) {
-        transactions.push(tx);
-        restoredCount++;
+        if (tx.status !== 'PENDING' || !DELETED_DEMO_IDS.has(String(tx.payment_reference || ''))) {
+          transactions.push(tx);
+          restoredCount++;
+        }
       } else if (
         (tx.status === 'SUCCESS' || tx.status === 'CONFIRMED') &&
         existing.status === 'PENDING'
@@ -5084,6 +5325,11 @@ async function startServer() {
         existing.status = 'SUCCESS';
         (existing as any).wallet_credited = true;
         (existing as any).approved_permanent = true;
+        restoredCount++;
+      } else if (tx.status === 'FAILED' && existing.status === 'PENDING') {
+        existing.status = 'FAILED';
+        (existing as any).status_label = 'Denied (Fake Order)';
+        (existing as any).wallet_credited = false;
         restoredCount++;
       }
     }
