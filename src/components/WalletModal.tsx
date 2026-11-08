@@ -118,7 +118,18 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     const syncVault = () => {
       fetchTransactions();
       onRefreshUser();
-      const phoneParam = user.phone_number ? `?phone=${encodeURIComponent(user.phone_number)}` : '';
+      let refsParam = '';
+      try {
+        const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
+        if (Array.isArray(savedRefs) && savedRefs.length > 0) {
+          refsParam = `&refs=${encodeURIComponent(savedRefs.join(','))}`;
+        }
+      } catch {}
+      const phoneParam = user.phone_number
+        ? `?phone=${encodeURIComponent(user.phone_number)}${refsParam}`
+        : refsParam
+          ? `?${refsParam.slice(1)}`
+          : '';
       fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}${phoneParam}`)
         .then((r) => (r.ok && (r.headers.get('content-type') || '').includes('application/json') ? r.json() : null))
         .then((d) => {
@@ -349,6 +360,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               data.transaction?.id,
               data.transaction?.payment_reference,
               depositRefInput,
+              depositPhone?.trim(),
             ].filter(Boolean)
           )
         );

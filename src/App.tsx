@@ -349,6 +349,14 @@ export default function App() {
         if (typeof sumData.wallet_balance === 'number') mergedUser.wallet_balance = sumData.wallet_balance;
         if (typeof sumData.available_wallet === 'number') mergedUser.available_wallet = sumData.available_wallet;
         if (typeof sumData.has_bought_machine === 'boolean') mergedUser.has_bought_machine = sumData.has_bought_machine;
+        if (
+          Number(sumData.wallet_balance || 0) === 0 &&
+          Number(sumData.deposit_details?.deposits_count || 0) === 0
+        ) {
+          try {
+            localStorage.removeItem('avor_my_deposit_refs');
+          } catch {}
+        }
       }
       syncUserToStorage(mergedUser);
     } catch {

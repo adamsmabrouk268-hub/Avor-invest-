@@ -24,6 +24,8 @@ export interface DepositMessage {
   machineTitle?: string;
   paymentMethod?: string;
   paymentReference?: string;
+  userId?: string;
+  transactionId?: string;
 }
 
 export interface TriggerQueryDocumentSnapshot {
@@ -148,6 +150,8 @@ export const processNewDeposit = onDocumentCreated(
             machineTitle: message.machineTitle || message.item || '',
             paymentMethod: message.paymentMethod || 'Mobile Money',
             paymentReference: message.paymentReference || `FB-${messageId.slice(0, 8)}`,
+            userId: message.userId || '',
+            transactionId: message.transactionId || '',
             status: status || 'PENDING',
           }),
         });

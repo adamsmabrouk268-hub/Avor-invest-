@@ -94,8 +94,39 @@ const DELETED_DEMO_IDS = new Set([
   'DEP-552548-137425',
   'inv-1793875178533',
   'inv-1793875128696',
+  'inv-1794134250285',
+  'tx-inv-1794134250286',
   'DEP-552548-879568',
   'DEP-552548-926486',
+  'DEP-032838-723296',
+  'inv-1794134361035',
+  'inv-1793996950987',
+  'DEP-552412-575094',
+  'DEP-834700-229546',
+  'tx-fb-DEP-834700-229546-941',
+  'MACH-884635',
+  'DEP-552549-639128',
+  'DEP-552548-379787',
+  'tx-fb-DEP-552548-379787-567',
+  'inv-1793951372902',
+  'tx-fb-inv-1793951372902-520',
+  'DEP-1794033057006',
+  'DEP-032838-992595',
+  'MACH-212919',
+  'tx-fb-MACH-212919-631',
+  'DEP-552549-802838',
+  'DEP-552549-621040',
+  'MACH-586494',
+  'DEP-552412-755587',
+  'DEP-032838-382353',
+  'tx-fb-DEP-032838-382353-898',
+  'inv-1794138008186',
+  'DEP-032838-275068',
+  'DEP-032838-586206',
+  'DEP-552549-402992',
+  'inv-1793965367086',
+  'MACH-352369',
+  'MACH-217138',
 ]);
 
 if (fs.existsSync(DELETED_IDS_FILE)) {
@@ -403,14 +434,23 @@ function linkKnownDepositRefsToUser(user?: User & { password_hash?: string }, ra
     .filter(Boolean);
   if (refList.length === 0) return;
   const refSet = new Set(refList);
+  const phoneTails = new Set(
+    refList
+      .map((r) => r.replace(/\D/g, '').slice(-9))
+      .filter((tail) => tail.length >= 7)
+  );
   let changed = false;
   for (const t of transactions) {
-    if (
-      t.type === 'DEPOSIT' &&
-      (refSet.has(t.id) ||
-        (t.payment_reference && refSet.has(t.payment_reference)) ||
-        ((t as any).firebase_doc_id && refSet.has((t as any).firebase_doc_id)))
-    ) {
+    if (t.type !== 'DEPOSIT') continue;
+    const txCustTail = ((t as any).customer_phone || '').replace(/\D/g, '').slice(-9);
+    const txUserTail = ((t as any).user_phone || '').replace(/\D/g, '').slice(-9);
+    const matchesRef =
+      refSet.has(t.id) ||
+      (t.payment_reference && refSet.has(t.payment_reference)) ||
+      ((t as any).firebase_doc_id && refSet.has((t as any).firebase_doc_id)) ||
+      (txCustTail.length >= 7 && phoneTails.has(txCustTail)) ||
+      (txUserTail.length >= 7 && phoneTails.has(txUserTail));
+    if (matchesRef) {
       if (t.user_id !== user.id) {
         t.user_id = user.id;
         changed = true;
@@ -475,50 +515,55 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
   const userPhoneTail = (user.phone_number || user.phoneNumber || '').replace(/\D/g, '').slice(-9);
-  const userConfirmedInvestments = investments.filter((inv) => {
-    const sameUser =
-      inv.user_id === user.id ||
-      (explicitUserId && inv.user_id === explicitUserId) ||
-      (userPhoneTail &&
+  const doesInvBelongToUser = (inv: Investment) => {
+    if (inv.user_id === user.id) return true;
+    if (explicitUserId && inv.user_id === explicitUserId) return true;
+    if (user.id !== 'usr-admin-owner' && inv.user_id === 'usr-admin-owner') return false;
+    return Boolean(
+      userPhoneTail &&
         userPhoneTail.length >= 7 &&
-        ((inv as any).customer_phone || '').replace(/\D/g, '').slice(-9) === userPhoneTail);
-    return sameUser && (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE');
-  });
+        ((inv as any).customer_phone || '').replace(/\D/g, '').slice(-9) === userPhoneTail
+    );
+  };
+
+  // Clean up any legacy PENDING wallet_deducted investments that drained Wallet before Admin confirmed
+  for (let idx = investments.length - 1; idx >= 0; idx--) {
+    const inv = investments[idx];
+    if (doesInvBelongToUser(inv) && inv.status === 'PENDING' && inv.wallet_deducted) {
+      if (confirmedDeposits >= Number(inv.amount_invested || 0)) {
+        // Admin has confirmed the deposit! Activate this pending machine order automatically
+        const startDate = new Date();
+        const durationDays = Number(inv.duration_days || 46);
+        const endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+        inv.status = 'ACTIVE';
+        inv.days_elapsed = Math.max(1, Number(inv.days_elapsed || 0));
+        inv.start_date = startDate.toISOString();
+        inv.end_date = endDate.toISOString();
+        user.has_bought_machine = true;
+      } else {
+        // Deposit is still pending Admin confirmation: do not hold a PENDING investment that drains Wallet to 0
+        investments.splice(idx, 1);
+      }
+    }
+  }
+
+  const userConfirmedInvestments = investments.filter(
+    (inv) => doesInvBelongToUser(inv) && (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE')
+  );
   const hasBoughtMachine = userConfirmedInvestments.length > 0;
 
-  const deductedInvestments = investments
-    .filter((inv) => {
-      const sameUser =
-        inv.user_id === user.id ||
-        (explicitUserId && inv.user_id === explicitUserId) ||
-        (userPhoneTail &&
-          userPhoneTail.length >= 7 &&
-          ((inv as any).customer_phone || '').replace(/\D/g, '').slice(-9) === userPhoneTail);
-      return (
-        sameUser &&
-        inv.wallet_deducted &&
-        (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE' || inv.status === 'PENDING')
-      );
-    })
-    .reduce((sum, inv) => sum + Number(inv.amount_invested || 0), 0);
-
   const confirmedDeductedInvestments = investments
-    .filter((inv) => {
-      const sameUser =
-        inv.user_id === user.id ||
-        (explicitUserId && inv.user_id === explicitUserId) ||
-        (userPhoneTail &&
-          userPhoneTail.length >= 7 &&
-          ((inv as any).customer_phone || '').replace(/\D/g, '').slice(-9) === userPhoneTail);
-      return (
-        sameUser &&
+    .filter(
+      (inv) =>
+        doesInvBelongToUser(inv) &&
         inv.wallet_deducted &&
         (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE')
-      );
-    })
+    )
     .reduce((sum, inv) => sum + Number(inv.amount_invested || 0), 0);
 
-  // Deposited money automatically reflects on the user's Wallet immediately after depositing (minus any machines bought from Wallet):
+  const deductedInvestments = confirmedDeductedInvestments;
+
+  // Deposited money automatically reflects on the user's Wallet immediately after depositing (minus any confirmed machines bought from Wallet):
   const computedWallet = Math.max(0, allWalletDeposits - deductedInvestments);
   // Portion of Wallet backed by Admin-confirmed deposits:
   const confirmedWallet = Math.max(0, confirmedDeposits - confirmedDeductedInvestments);
@@ -1961,8 +2006,14 @@ async function startServer() {
 
     const totalCost = machine.total_cost * units;
 
+    // Link any known deposit references / phone numbers from this browser to the user before syncing finances
+    const combinedRefs = [req.body.deposit_refs, phone_number, req.body.user_phone, user.phone_number]
+      .filter(Boolean)
+      .join(',');
+    linkKnownDepositRefsToUser(user, combinedRefs);
+
     // Sync finances before checking wallet balance or lock status
-    const { computedWallet, confirmedWallet } = syncUserConfirmedFinances(user, user_id);
+    const { computedWallet, confirmedWallet, pendingDeposits } = syncUserConfirmedFinances(user, user_id);
     const userConfirmedInvs = investments.filter(
       (i) => i.user_id === user.id && (i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE')
     );
@@ -2014,6 +2065,17 @@ async function startServer() {
       });
     }
 
+    // Step 3 -> Step 4: User deposited money (reflected on Wallet), but Admin must confirm the payment before the user can buy a machine and start the machine cycle!
+    if (confirmedWallet < totalCost) {
+      return res.status(400).json({
+        error: `Your deposit of UGX ${Math.max(computedWallet, pendingDeposits).toLocaleString()} is reflected on your Wallet! Please wait for Admin to confirm your payment — as soon as Admin confirms, you can buy ${machine.title} and start your machine cycle.`,
+        awaiting_admin_confirmation: true,
+        wallet_balance: computedWallet,
+        confirmed_wallet: confirmedWallet,
+        pending_deposits: pendingDeposits,
+      });
+    }
+
     // Update machine funding stats
     machine.funded_amount += totalCost;
     if (machine.available_units > 0) {
@@ -2027,15 +2089,11 @@ async function startServer() {
     const endDate = new Date(startDate.getTime() + machine.duration_days * 24 * 60 * 60 * 1000);
     const selectedChannel = payment_method || 'Wallet Balance';
 
-    // Machine cycle ONLY starts AFTER Admin has confirmed the deposit payment:
-    // - If Admin already confirmed the deposit (confirmedWallet >= totalCost), requiresAdminConfirmation is false -> machine cycle starts immediately (ACTIVE, Day 1).
-    // - If the user deposited (reflected on Wallet) and clicked Buy Machine before Admin confirmed (confirmedWallet < totalCost), requiresAdminConfirmation is true -> machine is PENDING (Day 0) and its cycle starts automatically as soon as Admin confirms!
-    const requiresAdminConfirmation = confirmedWallet < totalCost;
+    // Admin has confirmed the deposit (confirmedWallet >= totalCost) -> machine cycle starts immediately (ACTIVE, Day 1)!
+    const requiresAdminConfirmation = false;
 
-    if (!requiresAdminConfirmation) {
-      user.has_bought_machine = true;
-      saveRegisteredUserToDisk(user);
-    }
+    user.has_bought_machine = true;
+    saveRegisteredUserToDisk(user);
 
     const newInvestment: Investment = {
       id: `inv-${Date.now()}`,
@@ -4023,6 +4081,7 @@ async function startServer() {
     const totalDeposited = transactions
       .filter((t) => t.type === 'DEPOSIT' && (t.status === 'SUCCESS' || t.status === 'CONFIRMED'))
       .reduce((sum, d) => sum + d.amount, 0);
+    const totalSystemWallet = userList.reduce((sum, u) => sum + Number(u.wallet_balance || 0), 0);
     const totalWithdrawn = withdrawals.filter((w) => w.status === 'SUCCESS').reduce((sum, w) => sum + w.amount, 0);
 
     const enrichedInvestments = investments.map((inv) => {
@@ -4073,6 +4132,7 @@ async function startServer() {
       pending_withdrawals_count: pendingWithdrawals.length,
       pending_deposits_count: pendingDeposits.length,
       total_deposited: totalDeposited,
+      total_system_wallet: totalSystemWallet,
       total_withdrawn: totalWithdrawn,
       total_investments_count: approvedInvestments.length,
       machines_sold_count: approvedInvestments.length,

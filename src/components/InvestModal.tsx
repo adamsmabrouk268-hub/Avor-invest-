@@ -104,6 +104,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
 
   const totalCost = (machine.total_cost || machine.price || 15000) * units;
   const [liveBalance, setLiveBalance] = useState<number>(user?.available_wallet ?? user?.wallet_balance ?? 0);
+  const [confirmedWallet, setConfirmedWallet] = useState<number>(user?.available_wallet ?? user?.wallet_balance ?? 0);
   const [pendingDepositAmount, setPendingDepositAmount] = useState<number>(0);
 
   // Payment channel selection: 'Wallet Balance' | 'MTN Mobile Money' | 'Airtel Money' | 'Card Billing'
@@ -192,12 +193,20 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       if (summaryRes.ok && (summaryRes.headers.get('content-type') || '').includes('application/json')) {
         const sData = await summaryRes.json();
         if (sData) {
-          if (typeof sData.available_wallet === 'number') {
-            setLiveBalance(sData.available_wallet);
-          } else if (typeof sData.wallet_balance === 'number') {
-            setLiveBalance(sData.wallet_balance);
-          }
           const newPending = Number(sData?.deposit_details?.pending_deposits || 0);
+          const newConfirmed = Number(
+            sData?.confirmed_wallet ??
+              sData?.deposit_details?.confirmed_wallet ??
+              sData?.deposit_details?.total_deposited ??
+              0
+          );
+          const rawWallet = Number(
+            sData?.available_wallet ?? sData?.wallet_balance ?? newConfirmed + newPending
+          );
+          // Ensure reflected wallet balance includes pending deposits if not yet deducted
+          const effectiveWallet = Math.max(rawWallet, newPending > 0 && rawWallet === 0 ? newPending : rawWallet);
+          setLiveBalance(effectiveWallet);
+          setConfirmedWallet(newConfirmed);
           setPendingDepositAmount(newPending);
           if (newPending === 0) {
             setDepositSuccessMessage(null);
@@ -272,7 +281,9 @@ export const InvestModal: React.FC<InvestModalProps> = ({
     };
   }, [user?.id, user?.wallet_balance, user?.available_wallet, totalCost]);
 
-  const userHasEnoughBalance = liveBalance >= totalCost;
+  const displayWalletBalance = Math.max(liveBalance, pendingDepositAmount);
+  const isPaymentConfirmedByAdmin = confirmedWallet >= totalCost || (displayWalletBalance >= totalCost && pendingDepositAmount === 0);
+  const userHasEnoughBalance = displayWalletBalance >= totalCost;
   const isMobileMoney = selectedChannel === 'MTN Mobile Money' || selectedChannel === 'Airtel Money';
 
   // Step 2: Handle submitting deposit via Mobile Money (Shows Pending in Admin + Wallet Empty until Admin presses Confirm)
@@ -311,15 +322,23 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       try {
         const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
         const nextRefs = Array.from(
-          new Set([...savedRefs, data.transaction?.id, data.transaction?.payment_reference].filter(Boolean))
+          new Set(
+            [
+              ...savedRefs,
+              data.transaction?.id,
+              data.transaction?.payment_reference,
+              phoneNumber.trim(),
+            ].filter(Boolean)
+          )
         );
         localStorage.setItem('avor_my_deposit_refs', JSON.stringify(nextRefs));
       } catch {}
-      if (typeof data.wallet_balance === 'number') {
+      if (typeof data.wallet_balance === 'number' && data.wallet_balance > 0) {
         setLiveBalance(data.wallet_balance);
       } else {
-        setLiveBalance((prev) => prev + totalCost);
+        setLiveBalance((prev) => Math.max(prev, totalCost));
       }
+      setPendingDepositAmount((prev) => Math.max(prev, totalCost));
       setSelectedChannel('Wallet Balance');
       if (onDepositSubmitted) {
         onDepositSubmitted();
@@ -351,7 +370,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
     }
   };
 
-  // Step 3: Handle buying machine using Wallet Balance
+  // Step 3: Handle buying machine using Wallet Balance (after Admin confirms payment)
   const handleBuyWithWallet = async () => {
     if (!user) {
       onOpenAuth();
@@ -359,7 +378,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
     }
     if (!userHasEnoughBalance) {
       setErrorMessage(
-        `Wallet balance is not enough (${currencyInfo.format(liveBalance)} available • ${currencyInfo.format(totalCost)} required). Please deposit money on your wallet using MTN Mobile Money or Airtel Money first.`
+        `Wallet balance is not enough (${currencyInfo.format(displayWalletBalance)} available • ${currencyInfo.format(totalCost)} required). Please deposit money on your wallet using MTN Mobile Money or Airtel Money first.`
       );
       setSelectedChannel('Airtel Money');
       return;
@@ -368,6 +387,13 @@ export const InvestModal: React.FC<InvestModalProps> = ({
     setErrorMessage(null);
     setIsSubmitting(true);
     try {
+      let depositRefs = '';
+      try {
+        const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
+        if (Array.isArray(savedRefs) && savedRefs.length > 0) {
+          depositRefs = savedRefs.join(',');
+        }
+      } catch {}
       const res = await fetch('/api/invest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -379,10 +405,14 @@ export const InvestModal: React.FC<InvestModalProps> = ({
           units,
           payment_method: 'Wallet Balance',
           phone_number: user.phone_number || phoneNumber,
+          deposit_refs: depositRefs,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
+        if (data.awaiting_admin_confirmation) {
+          await refreshWalletStatus(false);
+        }
         throw new Error(data.error || 'Failed to purchase machine.');
       }
       if (typeof data.available_wallet === 'number') {
@@ -392,6 +422,8 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       } else {
         setLiveBalance((prev) => Math.max(0, prev - totalCost));
       }
+      setConfirmedWallet((prev) => Math.max(0, prev - totalCost));
+      setPendingDepositAmount(0);
       setSuccessData({
         message:
           data.message ||
@@ -523,10 +555,10 @@ export const InvestModal: React.FC<InvestModalProps> = ({
               )}
 
               {/* Deposit Reflected on Wallet / Admin Confirmation Status Banner */}
-              {(depositSuccessMessage || pendingDepositAmount > 0) && (
+              {(depositSuccessMessage || pendingDepositAmount > 0 || isPaymentConfirmedByAdmin) && (
                 <div
                   className={`p-3.5 rounded-xl text-xs space-y-2 animate-fade-in border ${
-                    pendingDepositAmount === 0 && userHasEnoughBalance
+                    isPaymentConfirmedByAdmin
                       ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-200'
                       : 'bg-cyan-950/80 border-cyan-500/60 text-cyan-200'
                   }`}
@@ -534,24 +566,24 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                   <div className="flex items-start gap-2">
                     <CheckCircle2
                       className={`w-4 h-4 shrink-0 mt-0.5 ${
-                        pendingDepositAmount === 0 && userHasEnoughBalance ? 'text-emerald-400' : 'text-cyan-400'
+                        isPaymentConfirmedByAdmin ? 'text-emerald-400' : 'text-cyan-400'
                       }`}
                     />
                     <div className="flex-1">
                       <span
                         className={`font-black block ${
-                          pendingDepositAmount === 0 && userHasEnoughBalance ? 'text-emerald-300' : 'text-cyan-300'
+                          isPaymentConfirmedByAdmin ? 'text-emerald-300' : 'text-cyan-300'
                         }`}
                       >
-                        {pendingDepositAmount === 0 && userHasEnoughBalance
-                          ? `Payment Confirmed by Admin • Wallet Ready (${currencyInfo.format(liveBalance)})`
-                          : `Deposit Reflected on Wallet (${currencyInfo.format(liveBalance)}) • Machine Cycle Starts After Admin Confirmation`}
+                        {isPaymentConfirmedByAdmin
+                          ? `Payment Confirmed by Admin • Wallet Ready (${currencyInfo.format(displayWalletBalance)})`
+                          : `Deposit Reflected on Wallet (${currencyInfo.format(displayWalletBalance)}) • Machine Cycle Starts After Admin Confirmation`}
                       </span>
                       <p className="text-[11px] opacity-90 mt-0.5 leading-relaxed">
-                        {pendingDepositAmount === 0 && userHasEnoughBalance
-                          ? `Admin has confirmed your payment! Click Buy Machine Using Wallet below to purchase ${machine.title} and immediately start your machine cycle.`
+                        {isPaymentConfirmedByAdmin
+                          ? `Admin has confirmed your payment! Click "Buy Machine Using Wallet" below to buy ${machine.title} and immediately start your machine cycle.`
                           : depositSuccessMessage ||
-                            `Your deposit of ${currencyInfo.format(pendingDepositAmount)} is reflected on your Wallet. Once Admin confirms your payment, your machine cycle will start.`}
+                            `Your deposit of ${currencyInfo.format(pendingDepositAmount || displayWalletBalance)} is reflected on your Wallet. Once Admin confirms your payment, click Buy Machine below to start your machine cycle.`}
                       </p>
                     </div>
                   </div>
@@ -629,7 +661,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                       <span className="text-xs font-bold text-white truncate">Wallet Balance</span>
                     </div>
                     <span className="text-[11px] text-sky-300 font-mono font-bold mt-1 block">
-                      {currencyInfo.format(liveBalance)} Available
+                      {currencyInfo.format(displayWalletBalance)} Available
                     </span>
                   </button>
 
@@ -815,7 +847,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                   <div className="flex items-center justify-between border-t border-blue-950/80 pt-2">
                     <span className="text-slate-400 font-bold uppercase">Your Wallet Balance:</span>
                     <span className={`font-mono font-black text-sm ${userHasEnoughBalance ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {currencyInfo.format(liveBalance)}
+                      {currencyInfo.format(displayWalletBalance)}
                     </span>
                   </div>
                 </div>
@@ -829,7 +861,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
                     <span>Deposit on Wallet First to Buy Machine</span>
                   </div>
                   <p className="text-[11px] text-amber-100/90 leading-relaxed">
-                    Available on Wallet: <strong>{currencyInfo.format(liveBalance)}</strong> • Required: <strong>{currencyInfo.format(totalCost)}</strong>.
+                    Available on Wallet: <strong>{currencyInfo.format(displayWalletBalance)}</strong> • Required: <strong>{currencyInfo.format(totalCost)}</strong>.
                     Click below to deposit money onto your wallet first, then return here to buy <strong>{machine.title}</strong> using the money on your wallet.
                   </p>
                 </div>

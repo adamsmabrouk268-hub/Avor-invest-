@@ -247,7 +247,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
         // Check if browser has a saved Admin Plane backup with records that need to be restored after a fresh container deploy
         try {
-          const rawBackup = localStorage.getItem('avor_admin_vault_backup_v1');
+          localStorage.removeItem('avor_admin_vault_backup_v1');
+          const rawBackup = localStorage.getItem('avor_admin_vault_backup_v2');
           if (rawBackup) {
             const backup = JSON.parse(rawBackup);
             const serverTxIds = new Set((data.deposits || []).map((d: any) => d.id));
@@ -294,7 +295,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
         try {
           localStorage.setItem(
-            'avor_admin_vault_backup_v1',
+            'avor_admin_vault_backup_v2',
             JSON.stringify({
               deposits: data.deposits || [],
               withdrawals: data.withdrawals || [],
@@ -443,7 +444,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
           deleteFirestoreAdminMessage(fbDocId).catch(() => {});
         }
         try {
-          const rawBackup = localStorage.getItem('avor_admin_vault_backup_v1');
+          const rawBackup = localStorage.getItem('avor_admin_vault_backup_v2');
           if (rawBackup) {
             const backup = JSON.parse(rawBackup);
             if (Array.isArray(backup.deposits)) {
@@ -455,7 +456,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                   ? { ...d, status: 'FAILED', status_label: 'Denied (Fake Order)', wallet_credited: false }
                   : d
               );
-              localStorage.setItem('avor_admin_vault_backup_v1', JSON.stringify(backup));
+              localStorage.setItem('avor_admin_vault_backup_v2', JSON.stringify(backup));
             }
           }
         } catch {}
@@ -542,13 +543,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to delete record.');
       try {
-        const rawBackup = localStorage.getItem('avor_admin_vault_backup_v1');
+        const rawBackup = localStorage.getItem('avor_admin_vault_backup_v2');
         if (rawBackup) {
           const backup = JSON.parse(rawBackup);
           if (Array.isArray(backup.deposits)) {
             backup.deposits = backup.deposits.filter((d: any) => d && d.id !== txId);
           }
-          localStorage.setItem('avor_admin_vault_backup_v1', JSON.stringify(backup));
+          localStorage.setItem('avor_admin_vault_backup_v2', JSON.stringify(backup));
         }
       } catch {}
       setStatusMessage({
@@ -1351,9 +1352,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
             </div>
 
             <div className="shining-card border border-blue-950/80 p-3.5 rounded-xl shadow-md">
-              <span className="text-[10px] text-slate-400 font-bold uppercase block">Total System Deposits</span>
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Total System Wallet</span>
               <span className="text-base font-extrabold text-sky-400 font-mono mt-0.5 block">
-                UGX {(stats.total_deposited ?? 0).toLocaleString()}
+                UGX {(stats.total_system_wallet ?? stats.total_deposited ?? 0).toLocaleString()}
               </span>
               <span className="text-[10px] text-slate-500 block">Approved by Admin</span>
             </div>
@@ -1729,9 +1730,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    handleDepositAction(fbMsg.paymentReference || fbMsg.id, 'APPROVE', {
+                                    handleDepositAction(fbMsg.transactionId || fbMsg.paymentReference || fbMsg.id, 'APPROVE', {
                                       firebase_doc_id: fbMsg.id,
                                       payment_reference: fbMsg.paymentReference || fbMsg.id,
+                                      user_id: fbMsg.userId || undefined,
                                       customer_name: fbMsg.name,
                                       customer_phone: fbMsg.senderPhone,
                                       receiver_phone: fbMsg.receiverPhone,
@@ -1748,9 +1750,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    handleDepositAction(fbMsg.paymentReference || fbMsg.id, 'REJECT', {
+                                    handleDepositAction(fbMsg.transactionId || fbMsg.paymentReference || fbMsg.id, 'REJECT', {
                                       firebase_doc_id: fbMsg.id,
                                       payment_reference: fbMsg.paymentReference || fbMsg.id,
+                                      user_id: fbMsg.userId || undefined,
                                       customer_name: fbMsg.name,
                                       customer_phone: fbMsg.senderPhone,
                                       receiver_phone: fbMsg.receiverPhone,
