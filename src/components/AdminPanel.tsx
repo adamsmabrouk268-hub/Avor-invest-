@@ -3,7 +3,16 @@ import { MachineCategory, Transaction, User, Machine, HomepageConfig } from '../
 import { DepositNumbersManager } from './DepositNumbersManager';
 import { checkAndSyncOwnerDevice } from './TopThreeDotMenu';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth, subscribeToFirestoreAdminMessages, signInAdminWithGoogle, deleteFirestoreAdminMessage } from '../firebase';
+import {
+  auth,
+  subscribeToFirestoreAdminMessages,
+  subscribeToFirestoreOrders,
+  confirmOrderInFirestore,
+  denyOrderInFirestore,
+  FirestoreOrderRecord,
+  signInAdminWithGoogle,
+  deleteFirestoreAdminMessage,
+} from '../firebase';
 import { notifyAdminOnDeposit } from '../notifyAdminOnDeposit';
 import {
   PlusCircle,
@@ -131,6 +140,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
   const [deposits, setDeposits] = useState<Transaction[]>([]);
   const [adminMessages, setAdminMessages] = useState<any[]>([]);
   const [firestoreMessages, setFirestoreMessages] = useState<any[]>([]);
+  const [firestoreOrders, setFirestoreOrders] = useState<FirestoreOrderRecord[]>([]);
+  const [serverInvestments, setServerInvestments] = useState<any[]>([]);
   const [firebaseAdminEmail, setFirebaseAdminEmail] = useState<string | null>(null);
   const [withdrawals, setWithdrawals] = useState<Transaction[]>([]);
   const [investmentsLedger, setInvestmentsLedger] = useState<any[]>([]);
@@ -278,7 +289,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         setDeposits(data.deposits || []);
         setAdminMessages(data.admin_notifications || []);
         setWithdrawals(data.withdrawals || []);
-        setInvestmentsLedger(data.investments || []);
+        setServerInvestments(data.investments || []);
         setUserList(data.users || []);
         if (data.homepage_config) {
           setHomepageConfigState(data.homepage_config);
@@ -371,6 +382,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     const unsubFirestore = subscribeToFirestoreAdminMessages((items) => {
       setFirestoreMessages(items);
     });
+    const unsubOrders = subscribeToFirestoreOrders((orders) => {
+      setFirestoreOrders(orders);
+    });
     const unsubTrigger = notifyAdminOnDeposit.startListener();
 
     const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
@@ -383,9 +397,57 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     return () => {
       unsubAuth();
       unsubFirestore();
+      unsubOrders();
       unsubTrigger();
     };
   }, [isAdminAuthenticated]);
+
+  // Real-time merge of Firebase Firestore `orders` collection with backend investments
+  useEffect(() => {
+    const mergedMap = new Map<string, any>();
+
+    // 1. Load all orders from real-time Firebase Firestore `orders` collection first
+    for (const fbOrd of firestoreOrders) {
+      mergedMap.set(fbOrd.id, {
+        ...fbOrd,
+        customername: fbOrd.customername || fbOrd.customer_name || 'Avor Investor',
+        name: fbOrd.name || fbOrd.machine_title || 'Machine Order',
+        customer_name: fbOrd.customer_name || fbOrd.customername || 'Avor Investor',
+        machine_title: fbOrd.machine_title || fbOrd.name || 'Machine Order',
+      });
+    }
+
+    // 2. Merge with backend server investments
+    for (const srvInv of serverInvestments) {
+      const existingFb = mergedMap.get(srvInv.id);
+      if (existingFb) {
+        // Firestore `orders` status is authoritative for real-time order state
+        mergedMap.set(srvInv.id, {
+          ...srvInv,
+          ...existingFb,
+          status: existingFb.status || srvInv.status,
+          raw_firestore_status:
+            existingFb.raw_firestore_status ||
+            (srvInv.status === 'ACTIVE' ? 'ACTIVE & DELIVERED' : srvInv.status === 'PENDING' ? 'pending' : srvInv.status),
+        });
+      } else {
+        mergedMap.set(srvInv.id, {
+          ...srvInv,
+          customername: srvInv.customer_name || srvInv.user_id || 'Avor Investor',
+          name: srvInv.machine_title || 'Machine Order',
+          raw_firestore_status:
+            srvInv.status === 'ACTIVE' ? 'ACTIVE & DELIVERED' : srvInv.status === 'PENDING' ? 'pending' : srvInv.status,
+        });
+      }
+    }
+
+    const mergedList = Array.from(mergedMap.values()).sort(
+      (a, b) =>
+        new Date(b.start_date || b.created_at || 0).getTime() -
+        new Date(a.start_date || a.created_at || 0).getTime()
+    );
+    setInvestmentsLedger(mergedList);
+  }, [firestoreOrders, serverInvestments]);
 
   // Handle Deposit Confirm / Deny Action:
   // - APPROVE: Changes Pending -> Successful & confirms customer's Wallet balance (and starts machine cycle)
@@ -565,19 +627,45 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
   };
 
   // Handle Confirm / Approve / Deliver or Deny Pending Machine Order in Orders section
-  const handleOrderAction = async (investmentId: string, action: 'APPROVE' | 'REJECT' = 'APPROVE') => {
+  // - On APPROVE: updates Firestore 'orders' document status to "confirmed" and then to "ACTIVE & DELIVERED"
+  // - On REJECT: updates Firestore 'orders' document status to "denied"
+  const handleOrderAction = async (
+    investmentId: string,
+    action: 'APPROVE' | 'REJECT' = 'APPROVE',
+    orderObj?: any
+  ) => {
     setStatusMessage(null);
+    const targetOrder = orderObj || investmentsLedger.find((i) => i.id === investmentId);
+
     try {
+      // 1. Update the real Firebase Firestore `orders` collection document first
+      if (action === 'APPROVE') {
+        await confirmOrderInFirestore(investmentId, targetOrder);
+      } else {
+        await denyOrderInFirestore(investmentId, targetOrder);
+      }
+
+      // 2. Sync with backend server so customer's machine cycle & wallet stay in lockstep
       const res = await fetch('/api/admin/orders/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           investment_id: investmentId,
           action,
+          customername: targetOrder?.customername || targetOrder?.customer_name,
+          name: targetOrder?.name || targetOrder?.machine_title,
+          customer_phone: targetOrder?.customer_phone,
+          user_id: targetOrder?.user_id,
+          machine_id: targetOrder?.machine_id,
+          machine_title: targetOrder?.machine_title || targetOrder?.name,
+          amount_invested: targetOrder?.amount_invested || targetOrder?.amount,
+          daily_return: targetOrder?.daily_return || targetOrder?.daily_yield,
+          duration_days: targetOrder?.duration_days,
+          units: targetOrder?.units,
           notes:
             action === 'APPROVE'
-              ? 'Order Confirmed & Delivered by Admin in Pending Orders section'
-              : 'Order Denied by Admin in Pending Orders section',
+              ? 'Order Confirmed & Delivered by Admin in Pending Orders section (Firestore status: confirmed -> ACTIVE & DELIVERED)'
+              : 'Order Denied by Admin in Pending Orders section (Firestore status: denied)',
         }),
       });
       const data = await res.json();
@@ -590,10 +678,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
           order_type: action === 'APPROVE' ? 'ORDER_CONFIRMED_SYNC' : 'ORDER_DENIED_SYNC',
           investment_id: investmentId,
           investment: data.investment,
-          user_id: data.investment?.user_id,
-          user_phone: data.investment?.customer_phone,
-          customer_phone: data.investment?.customer_phone,
+          user_id: data.investment?.user_id || targetOrder?.user_id,
+          user_phone: data.investment?.customer_phone || targetOrder?.customer_phone,
+          customer_phone: data.investment?.customer_phone || targetOrder?.customer_phone,
           status: action === 'APPROVE' ? 'ACTIVE' : 'CANCELLED',
+          firestore_status: action === 'APPROVE' ? 'ACTIVE & DELIVERED' : 'denied',
           timestamp: new Date().toISOString(),
         });
         bc.close();
@@ -604,8 +693,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         text:
           data.message ||
           (action === 'APPROVE'
-            ? 'Order Confirmed & Delivered! Customer has received the machine and active cycle has started (Day 1).'
-            : 'Order cancelled and refunded to customer wallet.'),
+            ? 'Order Confirmed! Firestore order status updated to "confirmed" -> "ACTIVE & DELIVERED" (Day 1 started).'
+            : 'Order Denied! Firestore order status updated to "denied" and refunded to customer wallet.'),
       });
       await fetchAdminData();
       if (onDataChanged) onDataChanged();
@@ -618,6 +707,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
   const handleApproveAllOrders = async () => {
     setStatusMessage(null);
     try {
+      const pendingOrders = investmentsLedger.filter((i) => i.status === 'PENDING');
+      for (const ord of pendingOrders) {
+        await confirmOrderInFirestore(ord.id, ord);
+      }
+
       const res = await fetch('/api/admin/orders/approve-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -631,6 +725,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
           type: 'WALLET_CONFIRMED_SYNC',
           order_type: 'ORDER_CONFIRMED_SYNC',
           status: 'ACTIVE',
+          firestore_status: 'ACTIVE & DELIVERED',
           timestamp: new Date().toISOString(),
         });
         bc.close();
@@ -638,7 +733,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
       setStatusMessage({
         type: 'success',
-        text: data.message || 'All pending machine orders confirmed and delivered!',
+        text: data.message || 'All pending orders updated to "confirmed" -> "ACTIVE & DELIVERED" in Firestore!',
       });
       await fetchAdminData();
       if (onDataChanged) onDataChanged();
@@ -1576,16 +1671,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono text-xs font-black text-emerald-400">{inv.id}</span>
-                      <span className="text-xs font-black text-white">{inv.machine_title}</span>
+                      <span className="text-xs font-black text-white">{inv.name || inv.machine_title}</span>
                       <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                        Wait for admin confirmation
+                        status = &quot;pending&quot; • Wait for admin confirmation
                       </span>
                     </div>
                     <div className="text-xs text-slate-300">
-                      Customer: <span className="font-bold text-white">{inv.customer_name || inv.user_id}</span>
+                      Customer:{' '}
+                      <span className="font-bold text-white">
+                        {inv.customername || inv.customer_name || inv.user_id}
+                      </span>
                       {inv.customer_phone ? ` (${inv.customer_phone})` : ''} • Amount:{' '}
                       <span className="font-mono font-bold text-emerald-300">
-                        UGX {Number(inv.amount_invested || 0).toLocaleString()}
+                        UGX {Number(inv.amount_invested || inv.amount || 0).toLocaleString()}
                       </span>{' '}
                       • Cycle: <span className="font-mono text-sky-300">{inv.duration_days} Days</span>
                     </div>
@@ -1593,7 +1691,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                   <div className="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
-                      onClick={() => handleOrderAction(inv.id, 'APPROVE')}
+                      onClick={() => handleOrderAction(inv.id, 'APPROVE', inv)}
                       className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-emerald-600/30 cursor-pointer flex items-center gap-1.5 transition-all"
                     >
                       <CheckCircle2 className="w-4 h-4" />
@@ -1601,10 +1699,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleOrderAction(inv.id, 'REJECT')}
+                      onClick={() => handleOrderAction(inv.id, 'REJECT', inv)}
                       className="px-3 py-2 bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-500/40 font-bold text-xs rounded-xl cursor-pointer transition-all"
                     >
-                      Deny Order
+                      Deny / Refund
                     </button>
                   </div>
                 </div>
@@ -1786,15 +1884,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                       <div className="space-y-1.5">
                         <div className="flex items-center gap-2.5 flex-wrap">
                           <span className="px-2.5 py-0.5 rounded-md text-[10px] font-mono font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-400/50 animate-pulse">
-                            WAIT FOR ADMIN CONFIRMATION
+                            status = &quot;pending&quot; • WAIT FOR ADMIN CONFIRMATION
                           </span>
                           <span className="font-mono text-xs font-bold text-sky-400">{inv.id}</span>
-                          <span className="text-sm font-black text-white">{inv.machine_title}</span>
+                          <span className="text-sm font-black text-white">{inv.name || inv.machine_title}</span>
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-slate-300 pt-1">
                           <div>
-                            <span className="text-slate-500">Customer: </span>
-                            <span className="font-bold text-white">{inv.customer_name || inv.user_id}</span>
+                            <span className="text-slate-500">Customer (customername): </span>
+                            <span className="font-bold text-white">
+                              {inv.customername || inv.customer_name || inv.user_id}
+                            </span>
                             {inv.customer_phone && (
                               <span className="font-mono text-sky-300 ml-1">({inv.customer_phone})</span>
                             )}
@@ -1802,7 +1902,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                           <div>
                             <span className="text-slate-500">Order Amount: </span>
                             <span className="font-mono font-black text-emerald-400">
-                              UGX {Number(inv.amount_invested || 0).toLocaleString()}
+                              UGX {Number(inv.amount_invested || inv.amount || 0).toLocaleString()}
                             </span>
                             <span className="text-[10px] text-emerald-300/80 ml-1">(Paid via Wallet)</span>
                           </div>
@@ -1818,7 +1918,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                       <div className="flex flex-wrap items-center gap-2.5 shrink-0">
                         <button
                           type="button"
-                          onClick={() => handleOrderAction(inv.id, 'APPROVE')}
+                          onClick={() => handleOrderAction(inv.id, 'APPROVE', inv)}
                           className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-400 hover:brightness-110 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-emerald-500/30 cursor-pointer flex items-center gap-2 transition-all"
                         >
                           <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
@@ -1826,10 +1926,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleOrderAction(inv.id, 'REJECT')}
+                          onClick={() => handleOrderAction(inv.id, 'REJECT', inv)}
                           className="px-3.5 py-2.5 bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-500/40 font-bold text-xs rounded-xl cursor-pointer transition-all"
                         >
-                          Deny / Refund Order
+                          Deny / Refund
                         </button>
                       </div>
                     </div>
@@ -1878,20 +1978,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                     {investmentsLedger.map((inv) => {
                       const isPending = inv.status === 'PENDING';
                       const isActive = inv.status === 'ACTIVE';
+                      const isDenied = inv.status === 'DENIED' || inv.raw_firestore_status === 'denied';
                       const daysLeft = inv.days_left ?? Math.max(0, inv.duration_days - (inv.days_elapsed || 0));
 
                       return (
                         <tr key={inv.id} className="hover:bg-[#0c1630]/60 transition-colors">
                           <td className="py-2.5 px-3 font-bold text-white">{inv.id}</td>
                           <td className="py-2.5 px-3 font-sans">
-                            <div className="font-bold text-white">{inv.customer_name || inv.user_id}</div>
+                            <div className="font-bold text-white">
+                              {inv.customername || inv.customer_name || inv.user_id}
+                            </div>
                             {inv.customer_phone && (
                               <span className="text-[10px] text-slate-400 font-mono block">{inv.customer_phone}</span>
                             )}
                           </td>
-                          <td className="py-2.5 px-3 text-emerald-400 font-semibold">{inv.machine_title}</td>
+                          <td className="py-2.5 px-3 text-emerald-400 font-semibold">
+                            {inv.name || inv.machine_title}
+                          </td>
                           <td className="py-2.5 px-3 font-sans font-bold text-white">
-                            UGX {Number(inv.amount_invested || 0).toLocaleString()}
+                            UGX {Number(inv.amount_invested || inv.amount || 0).toLocaleString()}
                           </td>
                           <td className="py-2.5 px-3">{inv.purchase_date || (inv.start_date || '').split('T')[0]}</td>
                           <td className="py-2.5 px-3">{inv.ending_date || (inv.end_date || '').split('T')[0]}</td>
@@ -1899,44 +2004,56 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                             className={`py-2.5 px-3 font-bold ${
                               isPending
                                 ? 'text-amber-300'
-                                : daysLeft <= 0
-                                  ? 'text-slate-500'
-                                  : 'text-emerald-400'
+                                : isDenied
+                                  ? 'text-rose-400'
+                                  : daysLeft <= 0
+                                    ? 'text-slate-500'
+                                    : 'text-emerald-400'
                             }`}
                           >
                             {isPending
                               ? `Waiting Confirmation (${inv.duration_days}d)`
-                              : daysLeft > 0
-                                ? `Active • ${daysLeft}d left`
-                                : 'Ended'}
+                              : isDenied
+                                ? 'Denied / Refunded'
+                                : daysLeft > 0
+                                  ? `Active • ${daysLeft}d left`
+                                  : 'Ended'}
                           </td>
                           <td className="py-2.5 px-3">
                             <span
                               className={`px-2 py-0.5 rounded text-[10px] font-sans font-semibold ${
                                 isPending
                                   ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30 animate-pulse'
-                                  : isActive
-                                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                                    : 'bg-slate-800 text-slate-400'
+                                  : isDenied
+                                    ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                                    : isActive
+                                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                      : 'bg-slate-800 text-slate-400'
                               }`}
                             >
-                              {isPending ? 'Wait for Admin Confirmation' : isActive ? 'Active & Delivered' : 'Completed'}
+                              {isPending
+                                ? 'pending (Wait for Admin Confirmation)'
+                                : isDenied
+                                  ? 'denied'
+                                  : isActive
+                                    ? 'ACTIVE & DELIVERED'
+                                    : 'Completed'}
                             </span>
                           </td>
                           <td className="py-2.5 px-3 text-right">
                             {isPending ? (
                               <div className="flex items-center justify-end gap-1.5">
                                 <button
-                                  onClick={() => handleOrderAction(inv.id, 'APPROVE')}
+                                  onClick={() => handleOrderAction(inv.id, 'APPROVE', inv)}
                                   className="text-[11px] font-sans font-black px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-sm cursor-pointer transition-all"
                                 >
                                   Confirm Order / Approve / Deliver
                                 </button>
                                 <button
-                                  onClick={() => handleOrderAction(inv.id, 'REJECT')}
+                                  onClick={() => handleOrderAction(inv.id, 'REJECT', inv)}
                                   className="text-[11px] font-sans font-bold px-2.5 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-500/30 cursor-pointer transition-all"
                                 >
-                                  Deny
+                                  Deny / Refund
                                 </button>
                               </div>
                             ) : (

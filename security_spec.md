@@ -1,27 +1,30 @@
 # Firestore Security Specification (`security_spec.md`)
 
 ## 1. Data Invariants
-1. **Path Variable Guard (`isValidId`)**: Every document ID (`{messageId}`, `{adminUid}`) must be a string between 1 and 128 characters matching `^[a-zA-Z0-9_\-]+$`.
-2. **Strict Schema & Key Allowlisting (`isValidAdminMessage`)**:
-   - Required keys on `create`: `['name', 'item', 'timestamp']`.
-   - Allowed keys: `['name', 'item', 'timestamp', 'senderPhone', 'receiverPhone', 'receiverName', 'amount', 'machineTitle', 'paymentMethod', 'paymentReference', 'status', 'authorUid']`.
-   - String length bounds: `name` (1..120), `item` (1..1000), `senderPhone` (3..40), `receiverPhone` (3..40), `receiverName` (1..120), `machineTitle` (1..160), `paymentMethod` (1..100), `paymentReference` (1..120), `authorUid` (1..128).
-   - Temporal Integrity: `incoming().timestamp == request.time`.
-3. **Admin Authorization (`isAdmin`)**:
+1. **Path Variable Guard (`isValidId`)**: Every document ID (`{orderId}`, `{messageId}`, `{adminUid}`) must be a string between 1 and 128 characters matching `^[a-zA-Z0-9_\-]+$`.
+2. **Strict Schema & Key Allowlisting for Orders (`isValidOrder`)**:
+   - Required keys on `create`: `['customername', 'name', 'status', 'timestamp']`.
+   - Allowed keys: `['customername', 'name', 'status', 'timestamp', 'id', 'user_id', 'customer_name', 'customer_phone', 'machine_id', 'machine_title', 'amount_invested', 'amount', 'daily_return', 'duration_days', 'total_return', 'days_elapsed', 'days_left', 'units', 'start_date', 'end_date', 'purchase_date', 'ending_date', 'payment_method', 'payment_reference', 'authorUid', 'updated_at']`.
+   - Valid `status` values: `['pending', 'confirmed', 'ACTIVE & DELIVERED', 'denied', 'PENDING', 'ACTIVE', 'COMPLETED', 'PAYOUT_COMPLETE']`.
+   - Temporal Integrity: `incoming().timestamp == request.time` on `create`, and `incoming().timestamp == existing().timestamp` on `update`.
+3. **Strict Schema & Key Allowlisting for Admin Messages (`isValidAdminMessage`)**:
+   - Required keys on `create`: `['name', 'item', 'timestamp', 'status']`.
+   - Allowed keys: `['name', 'item', 'timestamp', 'senderPhone', 'receiverPhone', 'receiverName', 'amount', 'machineTitle', 'paymentMethod', 'paymentReference', 'status', 'authorUid', 'userId', 'transactionId']`.
+4. **Admin Authorization (`isAdmin`)**:
    - Bootstrapped administrator email `adamsmabrouk268@gmail.com` with `request.auth.token.email_verified == true` OR existence in `/admins/$(request.auth.uid)`.
-4. **Immutable Fields**:
-   - `name`, `item`, and `timestamp` cannot be mutated after creation except by Admin status confirmation.
+5. **Immutable Order Identity Fields**:
+   - `customername`, `name`, and `timestamp` cannot be mutated after creation during status transitions (`pending` -> `confirmed` -> `ACTIVE & DELIVERED` or `denied`).
 
 ## 2. The "Dirty Dozen" Payloads
-1. **Shadow Field Injection**: `{ "name": "Alice", "item": "AV1 Machine 1", "timestamp": "SERVER_TIMESTAMP", "isSuperAdmin": true }` -> Rejected by `hasOnly()`.
-2. **Oversized Name DoW**: `{ "name": "<200-char string>", "item": "AV1", "timestamp": "SERVER_TIMESTAMP" }` -> Rejected by `name.size() <= 120`.
-3. **Oversized Item DoW**: `{ "name": "Alice", "item": "<2000-char string>", "timestamp": "SERVER_TIMESTAMP" }` -> Rejected by `item.size() <= 1000`.
-4. **Forged Client Timestamp**: `{ "name": "Alice", "item": "AV1", "timestamp": "2020-01-01T00:00:00Z" }` -> Rejected by `incoming().timestamp == request.time`.
-5. **Missing Required Field (`item`)**: `{ "name": "Alice", "timestamp": "SERVER_TIMESTAMP" }` -> Rejected by `hasAll(['name', 'item', 'timestamp'])`.
-6. **Invalid Status Enum**: `{ "name": "Alice", "item": "AV1", "timestamp": "SERVER_TIMESTAMP", "status": "HACKED" }` -> Rejected by `status in ['PENDING', 'CONFIRMED', 'SUCCESS']`.
-7. **Negative Deposit Amount**: `{ "name": "Alice", "item": "AV1", "timestamp": "SERVER_TIMESTAMP", "amount": -50000 }` -> Rejected by `amount >= 0 && amount <= 1000000000`.
-8. **Invalid Document ID Poisoning**: Document ID containing spaces or special characters (`msg/../../hack`) -> Rejected by `isValidId(messageId)`.
-9. **Unverified Admin Email Spoof**: User with `email == "adamsmabrouk268@gmail.com"` but `email_verified == false` attempting `delete` on `/admin_messages/{id}` -> Rejected by `request.auth.token.email_verified == true`.
+1. **Shadow Field Injection on `/orders`**: `{ "customername": "Alice", "name": "AV1 Machine 1", "status": "pending", "timestamp": "SERVER_TIMESTAMP", "isSuperAdmin": true }` -> Rejected by `hasOnly()`.
+2. **Oversized `customername` DoW**: `{ "customername": "<200-char string>", "name": "AV1", "status": "pending", "timestamp": "SERVER_TIMESTAMP" }` -> Rejected by `customername.size() <= 160`.
+3. **Oversized `name` DoW**: `{ "customername": "Alice", "name": "<300-char string>", "status": "pending", "timestamp": "SERVER_TIMESTAMP" }` -> Rejected by `name.size() <= 200`.
+4. **Forged Client Timestamp on `/orders`**: `{ "customername": "Alice", "name": "AV1", "status": "pending", "timestamp": "2020-01-01T00:00:00Z" }` -> Rejected by `incoming().timestamp == request.time`.
+5. **Missing Required Field (`customername`)**: `{ "name": "AV1", "status": "pending", "timestamp": "SERVER_TIMESTAMP" }` -> Rejected by `hasAll(['customername', 'name', 'status', 'timestamp'])`.
+6. **Invalid Order Status Enum**: `{ "customername": "Alice", "name": "AV1", "status": "HACKED", "timestamp": "SERVER_TIMESTAMP" }` -> Rejected by `status in [...]`.
+7. **Negative Order Amount**: `{ "customername": "Alice", "name": "AV1", "status": "pending", "timestamp": "SERVER_TIMESTAMP", "amount_invested": -50000 }` -> Rejected by `amount_invested >= 0 && amount_invested <= 1000000000`.
+8. **Invalid Document ID Poisoning**: Document ID containing spaces or special characters (`ord/../../hack`) -> Rejected by `isValidId(orderId)`.
+9. **Unverified Admin Email Spoof**: User with `email == "adamsmabrouk268@gmail.com"` but `email_verified == false` attempting `/admins/{uid}` write -> Rejected by `request.auth.token.email_verified == true`.
 10. **Self-Assigned Admin Role**: Non-admin user attempting to write `/admins/{uid}` -> Rejected by `isAdmin()`.
-11. **Terminal State Mutation**: Attempting to update a message after `status == 'CONFIRMED'` without admin privileges -> Rejected by terminal state lock.
-12. **Type Confusion on `amount`**: `{ "name": "Alice", "item": "AV1", "timestamp": "SERVER_TIMESTAMP", "amount": "35000" }` -> Rejected by `incoming().amount is number`.
+11. **Mutating `customername` During Status Update**: Attempting to change `customername` while updating `status` to `"confirmed"` -> Rejected by `incoming().customername == existing().customername`.
+12. **Type Confusion on `amount_invested`**: `{ "customername": "Alice", "name": "AV1", "status": "pending", "timestamp": "SERVER_TIMESTAMP", "amount_invested": "35000" }` -> Rejected by `data.amount_invested is number`.

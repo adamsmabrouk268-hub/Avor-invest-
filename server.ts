@@ -2155,6 +2155,21 @@ async function startServer() {
         }
       );
 
+      void saveOrderToFirestoreCollection(newInvestment, 'pending');
+      void ensureOrderSavedInFirestore({
+        docId: newInvestment.id.replace(/[^a-zA-Z0-9_-]/g, ''),
+        name: user.full_name || user.name || phone_number || user.phone_number || 'Avor Investor',
+        item: `New Pending Order: ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} — Wait for admin confirmation`,
+        senderPhone: phone_number || user.phone_number || '',
+        receiverPhone: RECEIVER_PHONE,
+        receiverName: RECEIVER_NAME,
+        amount: totalCost,
+        machineTitle: newInvestment.machine_title,
+        paymentMethod: `Wallet (${selectedChannel})`,
+        paymentReference: refCode,
+        status: 'PENDING',
+      });
+
       broadcastRealtimeEvent({
         type: 'MACHINE_ORDER_CREATED_PENDING',
         investment: newInvestment,
@@ -2171,6 +2186,46 @@ async function startServer() {
         wallet_balance: updatedFinances.computedWallet,
         available_wallet: updatedFinances.computedWallet,
         timestamp: new Date().toISOString(),
+      });
+
+      void saveOrderToFirestoreOrdersCollection({
+        id: newInvestment.id,
+        customername: user.full_name || user.name || phone_number || user.phone_number || 'Avor Investor',
+        name: newInvestment.machine_title,
+        status: 'pending',
+        user_id: user.id,
+        customer_name: user.full_name || user.name || 'Avor Investor',
+        customer_phone: phone_number || user.phone_number || '',
+        machine_id: String(newInvestment.machine_id),
+        machine_title: newInvestment.machine_title,
+        amount_invested: totalCost,
+        amount: totalCost,
+        daily_return: Number(newInvestment.daily_yield || 0),
+        duration_days: Number(newInvestment.duration_days || 32),
+        total_return: Number(newInvestment.total_return || 0),
+        days_elapsed: 0,
+        days_left: Number(newInvestment.duration_days || 32),
+        units: Number(units || 1),
+        start_date: newInvestment.start_date,
+        end_date: newInvestment.end_date,
+        purchase_date: (newInvestment.start_date || new Date().toISOString()).split('T')[0],
+        ending_date: (newInvestment.end_date || new Date().toISOString()).split('T')[0],
+        payment_method: `Wallet (${selectedChannel})`,
+        payment_reference: refCode,
+      });
+
+      void ensureOrderSavedInFirestore({
+        docId: newInvestment.id,
+        name: user.full_name || user.name || phone_number || user.phone_number || 'Avor Investor',
+        item: `New Pending Machine Order: ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} using Wallet Balance (${phone_number || user.phone_number || 'N/A'}) — Wait for admin confirmation`,
+        senderPhone: phone_number || user.phone_number || '',
+        receiverPhone: RECEIVER_PHONE,
+        receiverName: RECEIVER_NAME,
+        amount: totalCost,
+        machineTitle: newInvestment.machine_title,
+        paymentMethod: `Wallet (${selectedChannel})`,
+        paymentReference: refCode,
+        status: 'PENDING',
       });
 
       return res.status(201).json({
@@ -4182,6 +4237,175 @@ async function startServer() {
     }
   };
 
+  // Helper to save a customer machine order directly to the Firebase Firestore `orders` collection
+  // with fields: customername, name, status = "pending" (and full order metadata)
+  const saveOrderToFirestoreCollection = async (
+    inv: any,
+    status: 'pending' | 'confirmed' | 'ACTIVE & DELIVERED' | 'denied' = 'pending'
+  ) => {
+    try {
+      const projectId = firebaseAppletConfig.projectId;
+      const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+      const apiKey = firebaseAppletConfig.apiKey;
+      if (!projectId || !apiKey || !inv) return;
+
+      const rawId = String(inv.id || inv.payment_reference || `inv-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '');
+      const cleanOrderId = rawId.slice(0, 120) || `inv-${Date.now()}`;
+      const baseDocsPath = `projects/${projectId}/databases/${databaseId}/documents`;
+      const commitUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:commit?key=${encodeURIComponent(apiKey)}`;
+
+      const safeCustomerName = String(
+        inv.customername || inv.customer_name || inv.customer_phone || inv.user_id || 'Avor Investor'
+      )
+        .trim()
+        .slice(0, 160) || 'Avor Investor';
+      const safeOrderName = String(inv.name || inv.machine_title || 'Machine Order')
+        .trim()
+        .slice(0, 200) || 'Machine Order';
+
+      const fields: Record<string, any> = {
+        id: { stringValue: cleanOrderId },
+        customername: { stringValue: safeCustomerName },
+        name: { stringValue: safeOrderName },
+        status: { stringValue: status },
+        customer_name: { stringValue: safeCustomerName },
+        machine_title: { stringValue: safeOrderName },
+      };
+
+      if (inv.user_id) fields.user_id = { stringValue: String(inv.user_id).slice(0, 128) };
+      if (inv.customer_phone && String(inv.customer_phone).trim().length >= 3) {
+        fields.customer_phone = { stringValue: String(inv.customer_phone).trim().slice(0, 40) };
+      }
+      if (inv.machine_id) fields.machine_id = { stringValue: String(inv.machine_id).slice(0, 128) };
+      const amt = Number(inv.amount_invested ?? inv.amount ?? 0);
+      if (!isNaN(amt) && amt >= 0) {
+        fields.amount_invested = { integerValue: String(Math.round(amt)) };
+        fields.amount = { integerValue: String(Math.round(amt)) };
+      }
+      const daily = Number(inv.daily_return ?? inv.daily_yield ?? 0);
+      if (!isNaN(daily) && daily >= 0) {
+        fields.daily_return = { integerValue: String(Math.round(daily)) };
+      }
+      const dur = Number(inv.duration_days || 45);
+      if (!isNaN(dur) && dur >= 1) {
+        fields.duration_days = { integerValue: String(Math.round(dur)) };
+      }
+      const totRet = Number(inv.total_return || daily * dur);
+      if (!isNaN(totRet) && totRet >= 0) {
+        fields.total_return = { integerValue: String(Math.round(totRet)) };
+      }
+      const daysElapsed = Number(inv.days_elapsed ?? (status === 'pending' ? 0 : 1));
+      fields.days_elapsed = { integerValue: String(Math.max(0, Math.round(daysElapsed))) };
+      fields.days_left = { integerValue: String(Math.max(0, Math.round(dur - daysElapsed))) };
+      fields.units = { integerValue: String(Math.max(1, Number(inv.units || 1))) };
+      if (inv.start_date) fields.start_date = { stringValue: String(inv.start_date).slice(0, 60) };
+      if (inv.end_date) fields.end_date = { stringValue: String(inv.end_date).slice(0, 60) };
+      if (inv.purchase_date || inv.start_date) {
+        fields.purchase_date = { stringValue: String(inv.purchase_date || inv.start_date.split('T')[0]).slice(0, 60) };
+      }
+      if (inv.ending_date || inv.end_date) {
+        fields.ending_date = { stringValue: String(inv.ending_date || inv.end_date.split('T')[0]).slice(0, 60) };
+      }
+      if (inv.payment_method) fields.payment_method = { stringValue: String(inv.payment_method).slice(0, 100) };
+      if (inv.payment_reference) fields.payment_reference = { stringValue: String(inv.payment_reference).slice(0, 120) };
+
+      await fetch(commitUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          writes: [
+            {
+              update: {
+                name: `${baseDocsPath}/orders/${cleanOrderId}`,
+                fields,
+              },
+              updateTransforms: [
+                {
+                  fieldPath: 'timestamp',
+                  setToServerValue: 'REQUEST_TIME',
+                },
+              ],
+            },
+          ],
+        }),
+      });
+    } catch {
+      // Non-blocking background sync to Firestore `orders`
+    }
+  };
+
+  // Helper to update an order status in the Firebase Firestore `orders` collection:
+  // - APPROVE: Updates status to "confirmed" and then to "ACTIVE & DELIVERED"
+  // - REJECT: Updates status to "denied"
+  const updateOrderStatusInFirestoreCollection = async (
+    orderId: string,
+    action: 'APPROVE' | 'REJECT',
+    inv?: any
+  ) => {
+    try {
+      const projectId = firebaseAppletConfig.projectId;
+      const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+      const apiKey = firebaseAppletConfig.apiKey;
+      if (!projectId || !apiKey || !orderId) return;
+
+      const cleanOrderId = String(orderId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+      if (!cleanOrderId) return;
+      const baseDocsPath = `projects/${projectId}/databases/${databaseId}/documents`;
+      const nowIso = new Date().toISOString().slice(0, 40);
+
+      if (action === 'APPROVE') {
+        // Step 1: Update status to "confirmed"
+        const patchConfirmedUrl = `https://firestore.googleapis.com/v1/${baseDocsPath}/orders/${encodeURIComponent(cleanOrderId)}?updateMask.fieldPaths=status&updateMask.fieldPaths=updated_at&key=${encodeURIComponent(apiKey)}`;
+        const res1 = await fetch(patchConfirmedUrl, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fields: {
+              status: { stringValue: 'confirmed' },
+              updated_at: { stringValue: nowIso },
+            },
+          }),
+        });
+
+        // Step 2: Update status to "ACTIVE & DELIVERED"
+        const patchActiveUrl = `https://firestore.googleapis.com/v1/${baseDocsPath}/orders/${encodeURIComponent(cleanOrderId)}?updateMask.fieldPaths=status&updateMask.fieldPaths=days_elapsed&updateMask.fieldPaths=updated_at&key=${encodeURIComponent(apiKey)}`;
+        const res2 = await fetch(patchActiveUrl, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fields: {
+              status: { stringValue: 'ACTIVE & DELIVERED' },
+              days_elapsed: { integerValue: '1' },
+              updated_at: { stringValue: new Date().toISOString().slice(0, 40) },
+            },
+          }),
+        });
+
+        if (!res1.ok && !res2.ok && inv) {
+          await saveOrderToFirestoreCollection(inv, 'ACTIVE & DELIVERED');
+        }
+      } else {
+        // REJECT / Deny: Update status to "denied"
+        const patchDeniedUrl = `https://firestore.googleapis.com/v1/${baseDocsPath}/orders/${encodeURIComponent(cleanOrderId)}?updateMask.fieldPaths=status&updateMask.fieldPaths=updated_at&key=${encodeURIComponent(apiKey)}`;
+        const resDenied = await fetch(patchDeniedUrl, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fields: {
+              status: { stringValue: 'denied' },
+              updated_at: { stringValue: nowIso },
+            },
+          }),
+        });
+        if (!resDenied.ok && inv) {
+          await saveOrderToFirestoreCollection(inv, 'denied');
+        }
+      }
+    } catch {
+      // Non-blocking background update to Firestore `orders`
+    }
+  };
+
   // Helper to delete a denied/fake order document from Firebase Firestore (`admin_messages`)
   const deleteOrderFromFirestore = async (docId?: string) => {
     try {
@@ -4196,6 +4420,216 @@ async function startServer() {
       await fetch(deleteUrl, { method: 'DELETE' });
     } catch {
       // Non-blocking background cleanup
+    }
+  };
+
+  // Helper to create/save an order document in the real Firebase Firestore `orders` collection
+  const saveOrderToFirestoreOrdersCollection = async (order: {
+    id: string;
+    customername: string;
+    name: string;
+    status: 'pending' | 'confirmed' | 'ACTIVE & DELIVERED' | 'denied';
+    user_id?: string;
+    customer_name?: string;
+    customer_phone?: string;
+    machine_id?: string;
+    machine_title?: string;
+    amount_invested?: number;
+    amount?: number;
+    daily_return?: number;
+    duration_days?: number;
+    total_return?: number;
+    days_elapsed?: number;
+    days_left?: number;
+    units?: number;
+    start_date?: string;
+    end_date?: string;
+    purchase_date?: string;
+    ending_date?: string;
+    payment_method?: string;
+    payment_reference?: string;
+  }) => {
+    try {
+      const projectId = firebaseAppletConfig.projectId;
+      const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+      const apiKey = firebaseAppletConfig.apiKey;
+      if (!projectId || !apiKey) return;
+
+      const cleanDocId = (order.id || `ord-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+      if (!cleanDocId) return;
+      const baseDocsPath = `projects/${projectId}/databases/${databaseId}/documents`;
+      const commitUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:commit?key=${encodeURIComponent(apiKey)}`;
+      const nowIso = new Date().toISOString();
+
+      const fields: Record<string, any> = {
+        customername: { stringValue: (order.customername || 'Avor Investor').slice(0, 160) },
+        name: { stringValue: (order.name || 'Machine Order').slice(0, 200) },
+        status: { stringValue: order.status || 'pending' },
+        id: { stringValue: cleanDocId },
+        customer_name: { stringValue: (order.customer_name || order.customername || 'Avor Investor').slice(0, 160) },
+        machine_title: { stringValue: (order.machine_title || order.name || 'Machine Order').slice(0, 200) },
+        updated_at: { stringValue: nowIso.slice(0, 60) },
+      };
+
+      if (order.user_id) fields.user_id = { stringValue: String(order.user_id).slice(0, 128) };
+      if (order.customer_phone && String(order.customer_phone).trim().length >= 3) {
+        fields.customer_phone = { stringValue: String(order.customer_phone).trim().slice(0, 40) };
+      }
+      if (order.machine_id) fields.machine_id = { stringValue: String(order.machine_id).slice(0, 128) };
+      if (typeof order.amount_invested === 'number' && !isNaN(order.amount_invested) && order.amount_invested >= 0) {
+        fields.amount_invested = { integerValue: String(Math.round(order.amount_invested)) };
+        fields.amount = { integerValue: String(Math.round(order.amount_invested)) };
+      }
+      if (typeof order.daily_return === 'number' && !isNaN(order.daily_return) && order.daily_return >= 0) {
+        fields.daily_return = { integerValue: String(Math.round(order.daily_return)) };
+      }
+      if (typeof order.duration_days === 'number' && order.duration_days >= 1) {
+        fields.duration_days = { integerValue: String(Math.round(order.duration_days)) };
+      }
+      if (typeof order.total_return === 'number' && !isNaN(order.total_return) && order.total_return >= 0) {
+        fields.total_return = { integerValue: String(Math.round(order.total_return)) };
+      }
+      if (typeof order.days_elapsed === 'number' && order.days_elapsed >= 0) {
+        fields.days_elapsed = { integerValue: String(Math.round(order.days_elapsed)) };
+      }
+      if (typeof order.days_left === 'number' && order.days_left >= 0) {
+        fields.days_left = { integerValue: String(Math.round(order.days_left)) };
+      }
+      if (typeof order.units === 'number' && order.units >= 1) {
+        fields.units = { integerValue: String(Math.round(order.units)) };
+      }
+      if (order.start_date) fields.start_date = { stringValue: String(order.start_date).slice(0, 60) };
+      if (order.end_date) fields.end_date = { stringValue: String(order.end_date).slice(0, 60) };
+      if (order.purchase_date) fields.purchase_date = { stringValue: String(order.purchase_date).slice(0, 60) };
+      if (order.ending_date) fields.ending_date = { stringValue: String(order.ending_date).slice(0, 60) };
+      if (order.payment_method) fields.payment_method = { stringValue: String(order.payment_method).slice(0, 100) };
+      if (order.payment_reference) fields.payment_reference = { stringValue: String(order.payment_reference).slice(0, 120) };
+
+      await fetch(commitUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          writes: [
+            {
+              update: {
+                name: `${baseDocsPath}/orders/${cleanDocId}`,
+                fields,
+              },
+              updateTransforms: [
+                {
+                  fieldPath: 'timestamp',
+                  setToServerValue: 'REQUEST_TIME',
+                },
+              ],
+            },
+          ],
+        }),
+      });
+    } catch {
+      // Non-blocking background sync to Firestore `orders` collection
+    }
+  };
+
+  // Helper to update an order status in the Firestore `orders` collection:
+  // - On APPROVE: updates status to "confirmed" and then to "ACTIVE & DELIVERED"
+  // - On REJECT: updates status to "denied"
+  const updateOrderStatusInFirestoreOrdersCollection = async (
+    orderId: string,
+    action: 'APPROVE' | 'REJECT',
+    inv?: any
+  ) => {
+    try {
+      const projectId = firebaseAppletConfig.projectId;
+      const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+      const apiKey = firebaseAppletConfig.apiKey;
+      if (!projectId || !apiKey) return;
+
+      const cleanDocId = (orderId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+      if (!cleanDocId) return;
+      const baseDocsPath = `projects/${projectId}/databases/${databaseId}/documents`;
+      const nowIso = new Date().toISOString();
+
+      if (action === 'APPROVE') {
+        // Step 1: Update status to "confirmed"
+        const patchConfirmedUrl = `https://firestore.googleapis.com/v1/${baseDocsPath}/orders/${encodeURIComponent(cleanDocId)}?updateMask.fieldPaths=status&updateMask.fieldPaths=updated_at&key=${encodeURIComponent(apiKey)}`;
+        const res1 = await fetch(patchConfirmedUrl, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fields: {
+              status: { stringValue: 'confirmed' },
+              updated_at: { stringValue: nowIso.slice(0, 60) },
+            },
+          }),
+        });
+
+        if (!res1.ok && inv) {
+          // If document wasn't created yet, create it as 'confirmed' first
+          await saveOrderToFirestoreOrdersCollection({
+            id: cleanDocId,
+            customername: inv.customer_name || inv.user_id || 'Avor Investor',
+            name: inv.machine_title || 'Machine Order',
+            status: 'confirmed',
+            user_id: inv.user_id,
+            customer_name: inv.customer_name,
+            customer_phone: inv.customer_phone,
+            machine_id: String(inv.machine_id || ''),
+            machine_title: inv.machine_title,
+            amount_invested: Number(inv.amount_invested || 0),
+            daily_return: Number(inv.daily_yield || inv.daily_return || 0),
+            duration_days: Number(inv.duration_days || 32),
+            total_return: Number(inv.total_return || 0),
+            days_elapsed: 1,
+            days_left: Math.max(0, Number(inv.duration_days || 32) - 1),
+            units: Number(inv.units || 1),
+            start_date: inv.start_date || nowIso,
+            end_date: inv.end_date,
+          });
+        }
+
+        // Step 2: Update status to "ACTIVE & DELIVERED"
+        const patchActiveUrl = `https://firestore.googleapis.com/v1/${baseDocsPath}/orders/${encodeURIComponent(cleanDocId)}?updateMask.fieldPaths=status&updateMask.fieldPaths=days_elapsed&updateMask.fieldPaths=updated_at&key=${encodeURIComponent(apiKey)}`;
+        await fetch(patchActiveUrl, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fields: {
+              status: { stringValue: 'ACTIVE & DELIVERED' },
+              days_elapsed: { integerValue: '1' },
+              updated_at: { stringValue: new Date().toISOString().slice(0, 60) },
+            },
+          }),
+        });
+      } else {
+        // Deny / Refund -> Update status to "denied"
+        const patchDeniedUrl = `https://firestore.googleapis.com/v1/${baseDocsPath}/orders/${encodeURIComponent(cleanDocId)}?updateMask.fieldPaths=status&updateMask.fieldPaths=updated_at&key=${encodeURIComponent(apiKey)}`;
+        const resDenied = await fetch(patchDeniedUrl, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fields: {
+              status: { stringValue: 'denied' },
+              updated_at: { stringValue: nowIso.slice(0, 60) },
+            },
+          }),
+        });
+        if (!resDenied.ok && inv) {
+          await saveOrderToFirestoreOrdersCollection({
+            id: cleanDocId,
+            customername: inv.customer_name || inv.user_id || 'Avor Investor',
+            name: inv.machine_title || 'Machine Order',
+            status: 'denied',
+            user_id: inv.user_id,
+            customer_name: inv.customer_name,
+            customer_phone: inv.customer_phone,
+            machine_id: String(inv.machine_id || ''),
+            machine_title: inv.machine_title,
+            amount_invested: Number(inv.amount_invested || 0),
+          });
+        }
+      }
+    } catch {
+      // Non-blocking background sync
     }
   };
 
@@ -4695,11 +5129,22 @@ async function startServer() {
         pushNotification(
           user.id,
           `✅ Order Confirmed & Delivered: ${inv.machine_title}!`,
-          `Admin has confirmed your order for ${inv.machine_title}! Your machine is now ACTIVE (Day 1 of ${inv.duration_days} Days) and earning UGX ${Number(inv.daily_yield || 0).toLocaleString()} daily.${rewardNote}`,
+          `Admin has confirmed your order for ${inv.machine_title}! Your machine is now ACTIVE & DELIVERED (Day 1 of ${inv.duration_days} Days) and earning UGX ${Number(inv.daily_yield || 0).toLocaleString()} daily.${rewardNote}`,
           'PAYMENT'
         );
       }
       saveAppStateToDisk();
+
+      // Update Firestore 'orders' document status to "confirmed" and then to "ACTIVE & DELIVERED"
+      void updateOrderStatusInFirestoreOrdersCollection(inv.id, 'APPROVE', inv);
+      void ensureOrderSavedInFirestore({
+        docId: inv.id,
+        name: (inv as any).customer_name || user?.full_name || inv.user_id || 'Avor Investor',
+        item: `Order Confirmed & Delivered: ${inv.machine_title} (ACTIVE & DELIVERED)`,
+        amount: Number(inv.amount_invested || 0),
+        machineTitle: inv.machine_title,
+        status: 'CONFIRMED',
+      });
 
       broadcastRealtimeEvent({
         type: 'WALLET_CONFIRMED_SYNC',
@@ -4707,7 +5152,8 @@ async function startServer() {
         investment: inv,
         investment_id: inv.id,
         status: 'ACTIVE',
-        status_label: 'Active',
+        firestore_status: 'ACTIVE & DELIVERED',
+        status_label: 'ACTIVE & DELIVERED',
         user_id: user?.id || inv.user_id,
         user_phone: user?.phone_number || (inv as any).customer_phone || '',
         customer_phone: (inv as any).customer_phone || user?.phone_number || '',
@@ -4719,12 +5165,14 @@ async function startServer() {
       });
 
       return {
-        message: `Order ${inv.id} (${inv.machine_title}) confirmed & delivered! Customer's machine cycle is now ACTIVE (Day 1 started).`,
+        message: `Order ${inv.id} (${inv.machine_title}) confirmed! Firestore order status updated to "confirmed" -> "ACTIVE & DELIVERED" (Day 1 started).`,
         investment: inv,
         wallet_balance: fin.computedWallet,
       };
     } else {
-      // REJECT / Cancel Pending Order
+      // REJECT / Cancel Pending Order -> Update Firestore 'orders' document status to "denied"
+      void updateOrderStatusInFirestoreOrdersCollection(inv.id, 'REJECT', inv);
+
       const idx = investments.findIndex((i) => i.id === inv.id);
       if (idx !== -1) {
         investments.splice(idx, 1);
@@ -4745,8 +5193,8 @@ async function startServer() {
       if (user) {
         pushNotification(
           user.id,
-          `❌ Machine Order Declined: ${inv.machine_title}`,
-          `Your pending order for ${inv.machine_title} was declined by Admin.`,
+          `❌ Machine Order Denied: ${inv.machine_title}`,
+          `Your pending order for ${inv.machine_title} was denied by Admin and refunded to your wallet.`,
           'PAYMENT'
         );
       }
@@ -4754,8 +5202,10 @@ async function startServer() {
 
       broadcastRealtimeEvent({
         type: 'WALLET_DENIED_SYNC',
+        order_type: 'ORDER_DENIED_SYNC',
         investment_id: inv.id,
         status: 'FAILED',
+        firestore_status: 'denied',
         user_id: user?.id || inv.user_id,
         user_phone: user?.phone_number || (inv as any).customer_phone || '',
         customer_phone: (inv as any).customer_phone || user?.phone_number || '',
@@ -4766,7 +5216,7 @@ async function startServer() {
       });
 
       return {
-        message: `Order ${inv.id} (${inv.machine_title}) declined and removed from Pending Orders.`,
+        message: `Order ${inv.id} (${inv.machine_title}) denied (Firestore status updated to "denied") and refunded to customer wallet.`,
         investment: inv,
         wallet_balance: fin.computedWallet,
       };
@@ -4774,9 +5224,69 @@ async function startServer() {
   };
 
   // Dedicated Admin Pending Orders Action Endpoint (Confirm Order / Approve / Deliver or Deny)
+  // Also supports orders loaded directly from Firestore `orders` collection even if not yet in memory
   app.post('/api/admin/orders/action', (req, res) => {
-    const { investment_id, action = 'APPROVE', notes } = req.body || {};
-    const inv = investments.find((i) => i.id === investment_id);
+    const {
+      investment_id,
+      action = 'APPROVE',
+      notes,
+      customername,
+      name,
+      customer_phone,
+      user_id,
+      machine_id,
+      machine_title,
+      amount_invested,
+      daily_return,
+      duration_days,
+      units,
+    } = req.body || {};
+
+    let inv = investments.find((i) => i.id === investment_id);
+    if (!inv && investment_id) {
+      // Rehydrate order from Firestore payload if it was created directly in Firestore `orders`
+      const targetUser =
+        (user_id && Array.from(users.values()).find((u) => u.id === user_id)) ||
+        (customer_phone &&
+          Array.from(users.values()).find((u) => {
+            const a = String(u.phone_number || '').replace(/\D/g, '').slice(-9);
+            const b = String(customer_phone || '').replace(/\D/g, '').slice(-9);
+            return a.length >= 7 && a === b;
+          })) ||
+        Array.from(users.values())[0];
+      const machineObj =
+        machines.find(
+          (m) =>
+            String(m.id) === String(machine_id) ||
+            (machine_title && m.title && String(machine_title).toLowerCase().includes(m.title.toLowerCase()))
+        ) || machines[0];
+      const amt = Number(amount_invested || machineObj?.price || 15000);
+      const dur = Number(duration_days || machineObj?.duration_days || 32);
+      const daily = Number(daily_return || machineObj?.daily_yield || Math.round(amt * 0.07));
+      const nowIso = new Date().toISOString();
+
+      inv = {
+        id: String(investment_id),
+        user_id: targetUser?.id || String(user_id || 'usr-investor'),
+        machine_id: machineObj?.id || 1,
+        machine_title: String(machine_title || name || machineObj?.title || 'AV1 Machine'),
+        amount_invested: amt,
+        daily_yield: daily,
+        duration_days: dur,
+        total_return: daily * dur,
+        days_elapsed: 0,
+        status: 'PENDING',
+        start_date: nowIso,
+        end_date: new Date(Date.now() + dur * 86400000).toISOString(),
+        last_payout_at: nowIso,
+        units: Number(units || 1),
+      } as any;
+      (inv as any).customer_name = customername || targetUser?.full_name || 'Avor Investor';
+      (inv as any).customer_phone = customer_phone || targetUser?.phone_number || '';
+      (inv as any).wallet_deducted = true;
+      investments.unshift(inv!);
+    }
+
     if (!inv) {
       return res.status(404).json({ error: 'Order record not found.' });
     }

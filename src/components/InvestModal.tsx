@@ -18,7 +18,7 @@ import {
   Cpu,
 } from 'lucide-react';
 import { WhatsAppIcon } from './WhatsAppIcon';
-import { sendMessageToAdmin } from '../firebase';
+import { sendMessageToAdmin, createOrderInFirestore } from '../firebase';
 
 interface InvestModalProps {
   machine: Machine | null;
@@ -437,17 +437,50 @@ export const InvestModal: React.FC<InvestModalProps> = ({
           `Order created for ${machine.title}! Wait for admin confirmation in Pending Orders.`,
         status: data.status || 'PENDING',
       });
+      const orderId = data.investment?.id || `inv-${Date.now()}`;
+      const machineOrderName = `${machine.title} (${units} Unit${units > 1 ? 's' : ''})`;
+      const customerNameStr = user.full_name || user.phone_number || 'Avor Investor';
+      const dailyYieldVal = (machine.daily_yield || machine.daily_return || Math.round(totalCost * 0.07 / units)) * units;
+      const durationVal = machine.duration_days || 32;
+
+      // Save order to real Firebase Firestore 'orders' collection with customername, name, status = "pending"
+      await createOrderInFirestore({
+        id: orderId,
+        customername: customerNameStr,
+        name: machineOrderName,
+        status: 'pending',
+        user_id: user.id,
+        customer_name: customerNameStr,
+        customer_phone: user.phone_number || phoneNumber,
+        machine_id: String(machine.id),
+        machine_title: machineOrderName,
+        amount_invested: totalCost,
+        amount: totalCost,
+        daily_return: dailyYieldVal,
+        duration_days: durationVal,
+        total_return: dailyYieldVal * durationVal,
+        days_elapsed: 0,
+        days_left: durationVal,
+        units,
+        start_date: data.investment?.start_date || new Date().toISOString(),
+        end_date:
+          data.investment?.end_date ||
+          new Date(Date.now() + durationVal * 86400000).toISOString(),
+        payment_method: 'Wallet Balance',
+        payment_reference: orderId,
+      });
+
       await sendMessageToAdmin(
-        user.full_name || user.phone_number || 'Avor Investor',
-        `New Pending Machine Order: Bought ${machine.title} (${units} Unit${units > 1 ? 's' : ''}) for UGX ${totalCost.toLocaleString()} using Wallet Balance (${user.phone_number || phoneNumber}) — Wait for admin confirmation in Pending Orders`,
+        customerNameStr,
+        `New Pending Machine Order: Bought ${machineOrderName} for UGX ${totalCost.toLocaleString()} using Wallet Balance (${user.phone_number || phoneNumber}) — Wait for admin confirmation in Pending Orders`,
         {
           senderPhone: user.phone_number || phoneNumber,
           receiverPhone: activeReceiver.phone_number || RECEIVER_PHONE,
           receiverName: activeReceiver.account_name || RECEIVER_NAME,
           amount: totalCost,
-          machineTitle: `${machine.title} (${units} Unit${units > 1 ? 's' : ''})`,
+          machineTitle: machineOrderName,
           paymentMethod: 'Wallet Balance',
-          paymentReference: data.investment?.id || `INV-${Date.now()}`,
+          paymentReference: orderId,
           status: 'PENDING',
         }
       );

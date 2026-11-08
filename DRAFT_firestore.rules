@@ -34,6 +34,73 @@ service cloud.firestore {
       );
     }
 
+    function isValidOrder(data) {
+      return data.keys().hasAll(['customername', 'name', 'status', 'timestamp']) &&
+        data.keys().hasOnly([
+          'customername',
+          'name',
+          'status',
+          'timestamp',
+          'id',
+          'user_id',
+          'customer_name',
+          'customer_phone',
+          'machine_id',
+          'machine_title',
+          'amount_invested',
+          'amount',
+          'daily_return',
+          'duration_days',
+          'total_return',
+          'days_elapsed',
+          'days_left',
+          'units',
+          'start_date',
+          'end_date',
+          'purchase_date',
+          'ending_date',
+          'payment_method',
+          'payment_reference',
+          'authorUid',
+          'updated_at'
+        ]) &&
+        data.customername is string && data.customername.size() >= 1 && data.customername.size() <= 160 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
+        data.timestamp is timestamp &&
+        data.status is string && data.status in [
+          'pending',
+          'confirmed',
+          'ACTIVE & DELIVERED',
+          'denied',
+          'PENDING',
+          'ACTIVE',
+          'COMPLETED',
+          'PAYOUT_COMPLETE'
+        ] &&
+        (!('id' in data) || (data.id is string && data.id.size() >= 1 && data.id.size() <= 128)) &&
+        (!('user_id' in data) || (data.user_id is string && data.user_id.size() >= 1 && data.user_id.size() <= 128)) &&
+        (!('customer_name' in data) || (data.customer_name is string && data.customer_name.size() >= 1 && data.customer_name.size() <= 160)) &&
+        (!('customer_phone' in data) || (data.customer_phone is string && data.customer_phone.size() >= 3 && data.customer_phone.size() <= 40)) &&
+        (!('machine_id' in data) || (data.machine_id is string && data.machine_id.size() >= 1 && data.machine_id.size() <= 128)) &&
+        (!('machine_title' in data) || (data.machine_title is string && data.machine_title.size() >= 1 && data.machine_title.size() <= 200)) &&
+        (!('amount_invested' in data) || (data.amount_invested is number && data.amount_invested >= 0 && data.amount_invested <= 1000000000)) &&
+        (!('amount' in data) || (data.amount is number && data.amount >= 0 && data.amount <= 1000000000)) &&
+        (!('daily_return' in data) || (data.daily_return is number && data.daily_return >= 0 && data.daily_return <= 1000000000)) &&
+        (!('duration_days' in data) || (data.duration_days is number && data.duration_days >= 1 && data.duration_days <= 3650)) &&
+        (!('total_return' in data) || (data.total_return is number && data.total_return >= 0 && data.total_return <= 1000000000)) &&
+        (!('days_elapsed' in data) || (data.days_elapsed is number && data.days_elapsed >= 0 && data.days_elapsed <= 3650)) &&
+        (!('days_left' in data) || (data.days_left is number && data.days_left >= 0 && data.days_left <= 3650)) &&
+        (!('units' in data) || (data.units is number && data.units >= 1 && data.units <= 100)) &&
+        (!('start_date' in data) || (data.start_date is string && data.start_date.size() >= 1 && data.start_date.size() <= 60)) &&
+        (!('end_date' in data) || (data.end_date is string && data.end_date.size() >= 1 && data.end_date.size() <= 60)) &&
+        (!('purchase_date' in data) || (data.purchase_date is string && data.purchase_date.size() >= 1 && data.purchase_date.size() <= 60)) &&
+        (!('ending_date' in data) || (data.ending_date is string && data.ending_date.size() >= 1 && data.ending_date.size() <= 60)) &&
+        (!('payment_method' in data) || (data.payment_method is string && data.payment_method.size() >= 1 && data.payment_method.size() <= 100)) &&
+        (!('payment_reference' in data) || (data.payment_reference is string && data.payment_reference.size() >= 1 && data.payment_reference.size() <= 120)) &&
+        (!('authorUid' in data) || (data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128)) &&
+        (!('updated_at' in data) || (data.updated_at is string && data.updated_at.size() >= 1 && data.updated_at.size() <= 60));
+    }
+
     function isValidAdminMessage(data) {
       return data.keys().hasAll(['name', 'item', 'timestamp', 'status']) &&
         data.keys().hasOnly([
@@ -84,6 +151,74 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role']);
       allow delete: if isValidId(adminUid) && isAdmin();
+    }
+
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && (
+        isAdmin() ||
+        existing().status in [
+          'pending',
+          'confirmed',
+          'ACTIVE & DELIVERED',
+          'denied',
+          'PENDING',
+          'ACTIVE',
+          'COMPLETED',
+          'PAYOUT_COMPLETE'
+        ]
+      );
+      allow list: if isAdmin() || resource.data.status in [
+        'pending',
+        'confirmed',
+        'ACTIVE & DELIVERED',
+        'denied',
+        'PENDING',
+        'ACTIVE',
+        'COMPLETED',
+        'PAYOUT_COMPLETE'
+      ];
+      allow create: if isValidId(orderId) && isValidOrder(incoming()) && incoming().timestamp == request.time;
+      allow update: if isValidId(orderId) && isValidOrder(incoming()) && (
+        isAdmin() ||
+        (
+          incoming().customername == existing().customername &&
+          incoming().name == existing().name &&
+          incoming().timestamp == existing().timestamp &&
+          incoming().status in [
+            'pending',
+            'confirmed',
+            'ACTIVE & DELIVERED',
+            'denied',
+            'PENDING',
+            'ACTIVE',
+            'COMPLETED',
+            'PAYOUT_COMPLETE'
+          ] &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status',
+            'days_elapsed',
+            'days_left',
+            'start_date',
+            'end_date',
+            'purchase_date',
+            'ending_date',
+            'updated_at'
+          ])
+        )
+      );
+      allow delete: if isValidId(orderId) && (
+        isAdmin() ||
+        existing().status in [
+          'pending',
+          'confirmed',
+          'ACTIVE & DELIVERED',
+          'denied',
+          'PENDING',
+          'ACTIVE',
+          'COMPLETED',
+          'PAYOUT_COMPLETE'
+        ]
+      );
     }
 
     match /admin_messages/{messageId} {

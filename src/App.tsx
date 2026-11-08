@@ -17,6 +17,7 @@ import { LiveWallpaper } from './components/LiveWallpaper';
 import { IncomePlaneView } from './components/IncomePlaneView';
 import { checkAndSyncOwnerDevice } from './components/TopThreeDotMenu';
 import { DEFAULT_MACHINES } from './data/defaultMachines';
+import { subscribeToFirestoreOrders, FirestoreOrderRecord } from './firebase';
 import { CheckCircle2, ArrowRight, Cpu, AlertCircle } from 'lucide-react';
 
 export default function App() {
@@ -33,7 +34,9 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [marketplaceViewMode, setMarketplaceViewMode] = useState<'table' | 'grid'>('grid');
 
-  // User Portfolio Investments
+  // User Portfolio Investments (Synced in real-time from Firebase Firestore 'orders' + backend)
+  const [serverInvestments, setServerInvestments] = useState<Investment[]>([]);
+  const [firestoreUserOrders, setFirestoreUserOrders] = useState<FirestoreOrderRecord[]>([]);
   const [investments, setInvestments] = useState<Investment[]>([]);
   const [invitedCount, setInvitedCount] = useState<number>(0);
 
@@ -212,8 +215,30 @@ export default function App() {
       };
     } catch {}
 
+    // Real-time listener on Firebase Firestore 'orders' collection for this customer
+    const unsubFirestoreOrders = subscribeToFirestoreOrders((allOrders) => {
+      const myTail = (user.phone_number || '').replace(/\D/g, '').slice(-9);
+      const myOrders = allOrders.filter((ord) => {
+        if (ord.user_id && ord.user_id === user.id) return true;
+        if (myTail && myTail.length >= 7) {
+          const ordTail = (ord.customer_phone || '').replace(/\D/g, '').slice(-9);
+          if (ordTail === myTail) return true;
+        }
+        if (
+          user.full_name &&
+          ord.customername &&
+          ord.customername.toLowerCase().trim() === user.full_name.toLowerCase().trim()
+        ) {
+          return true;
+        }
+        return false;
+      });
+      setFirestoreUserOrders(myOrders);
+    });
+
     return () => {
       clearInterval(interval);
+      unsubFirestoreOrders();
       try {
         es?.close();
       } catch {}
@@ -222,6 +247,52 @@ export default function App() {
       } catch {}
     };
   }, [user?.id, user?.phone_number]);
+
+  // Merge Firestore 'orders' with backend portfolio in real-time
+  useEffect(() => {
+    const mergedMap = new Map<string, Investment>();
+
+    for (const srvInv of serverInvestments) {
+      mergedMap.set(srvInv.id, srvInv);
+    }
+
+    for (const fbOrd of firestoreUserOrders) {
+      if (fbOrd.status === 'DENIED' || fbOrd.raw_firestore_status === 'denied') {
+        mergedMap.delete(fbOrd.id);
+        continue;
+      }
+      const existing = mergedMap.get(fbOrd.id);
+      const mappedStatus: 'PENDING' | 'ACTIVE' | 'PAYOUT_COMPLETE' =
+        fbOrd.status === 'ACTIVE'
+          ? 'ACTIVE'
+          : fbOrd.status === 'PAYOUT_COMPLETE'
+            ? 'PAYOUT_COMPLETE'
+            : 'PENDING';
+
+      mergedMap.set(fbOrd.id, {
+        ...(existing || {}),
+        id: fbOrd.id,
+        user_id: fbOrd.user_id || user?.id || '',
+        machine_id: fbOrd.machine_id || existing?.machine_id || '1',
+        machine_title: fbOrd.machine_title || fbOrd.name || existing?.machine_title || 'Machine Order',
+        series_tag: existing?.series_tag || 'AV1',
+        amount_invested: fbOrd.amount_invested || existing?.amount_invested || 0,
+        daily_yield: fbOrd.daily_return || fbOrd.daily_yield || existing?.daily_yield || 0,
+        duration_days: fbOrd.duration_days || existing?.duration_days || 32,
+        total_return: fbOrd.total_return || existing?.total_return || 0,
+        days_elapsed: fbOrd.days_elapsed ?? existing?.days_elapsed ?? (mappedStatus === 'ACTIVE' ? 1 : 0),
+        last_claim_at: existing?.last_claim_at || fbOrd.updated_at || fbOrd.created_at,
+        unclaimed_earnings: existing?.unclaimed_earnings ?? 0,
+        total_claimed: existing?.total_claimed ?? 0,
+        status: mappedStatus,
+        start_date: fbOrd.start_date || existing?.start_date || fbOrd.created_at,
+        end_date: fbOrd.end_date || existing?.end_date || fbOrd.created_at,
+        units: fbOrd.units || existing?.units || 1,
+      });
+    }
+
+    setInvestments(Array.from(mergedMap.values()));
+  }, [serverInvestments, firestoreUserOrders, user?.id]);
 
   const showNotification = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
     setToast({ message, type });
@@ -306,7 +377,7 @@ export default function App() {
       if (res.ok && ct.includes('application/json')) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          setInvestments(data);
+          setServerInvestments(data);
         }
       }
     } catch {

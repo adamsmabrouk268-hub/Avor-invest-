@@ -1,10 +1,12 @@
 import { initializeApp } from 'firebase/app';
+import { getAnalytics } from 'firebase/analytics';
 import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import {
   initializeFirestore,
   collection,
   addDoc,
   setDoc,
+  getDocFromServer,
   serverTimestamp,
   doc,
   onSnapshot,
@@ -15,23 +17,51 @@ import {
   updateDoc,
   setLogLevel,
 } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
 
 // Suppress noisy internal Firestore idle stream / transport warnings
 setLogLevel('silent');
 
-// Initialize the Firebase backend connection using the provisioned configuration
-// Enable long-polling auto-detection so mobile networks and iframe proxies never fail with "client is offline"
+// Your web app's Firebase configuration (avorinvest)
+const firebaseConfig = {
+  apiKey: 'AIzaSyB5ahJx-FXPghLqWaQmodKTJfzkiASqYw8',
+  authDomain: 'avorinvest.firebaseapp.com',
+  projectId: 'avorinvest',
+  storageBucket: 'avorinvest.firebasestorage.app',
+  messagingSenderId: '500402708773',
+  appId: '1:500402708773:web:f901c0b8ba73fe2a19bacc',
+  measurementId: 'G-X1D5N62VYB',
+};
+
+// Initialize Firebase
 const app = initializeApp(firebaseConfig);
-export const db = initializeFirestore(
-  app,
-  {
-    experimentalAutoDetectLongPolling: true,
-  },
-  firebaseConfig.firestoreDatabaseId
-);
+export const analytics =
+  typeof window !== 'undefined'
+    ? (() => {
+        try {
+          return getAnalytics(app);
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+
+export const db = initializeFirestore(app, {
+  experimentalAutoDetectLongPolling: true,
+});
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// Validate connection to Firestore on boot
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+void testConnection();
 
 export enum OperationType {
   CREATE = 'create',
@@ -81,7 +111,399 @@ export function handleFirestoreError(
     operationType,
     path,
   };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
+}
+
+export interface FirestoreOrderInput {
+  id?: string;
+  customername: string;
+  name: string;
+  status?: 'pending' | 'confirmed' | 'ACTIVE & DELIVERED' | 'denied';
+  user_id?: string;
+  customer_name?: string;
+  customer_phone?: string;
+  machine_id?: string;
+  machine_title?: string;
+  amount_invested?: number;
+  amount?: number;
+  daily_return?: number;
+  duration_days?: number;
+  total_return?: number;
+  days_elapsed?: number;
+  days_left?: number;
+  units?: number;
+  start_date?: string;
+  end_date?: string;
+  purchase_date?: string;
+  ending_date?: string;
+  payment_method?: string;
+  payment_reference?: string;
+}
+
+/**
+ * Saves a customer order to the real Firebase Firestore 'orders' collection
+ * with fields: customername, name, status = "pending", plus full order metadata.
+ */
+export async function createOrderInFirestore(orderData: FirestoreOrderInput): Promise<string | null> {
+  const rawOrderId = (orderData.id || orderData.payment_reference || `inv-${Date.now()}`).replace(
+    /[^a-zA-Z0-9_-]/g,
+    ''
+  );
+  const cleanOrderId = rawOrderId.slice(0, 120) || `inv-${Date.now()}`;
+  const path = `orders/${cleanOrderId}`;
+
+  const safeCustomerName = (orderData.customername || orderData.customer_name || 'Avor Investor')
+    .trim()
+    .slice(0, 160) || 'Avor Investor';
+  const safeName = (orderData.name || orderData.machine_title || 'Machine Order')
+    .trim()
+    .slice(0, 200) || 'Machine Order';
+  const safeStatus = orderData.status || 'pending';
+
+  const payload: Record<string, any> = {
+    id: cleanOrderId,
+    customername: safeCustomerName,
+    name: safeName,
+    status: safeStatus,
+    customer_name: safeCustomerName,
+    machine_title: safeName,
+    timestamp: serverTimestamp(),
+  };
+
+  if (orderData.user_id && orderData.user_id.trim().length >= 1) {
+    payload.user_id = orderData.user_id.trim().slice(0, 128);
+  }
+  if (orderData.customer_phone && orderData.customer_phone.trim().length >= 3) {
+    payload.customer_phone = orderData.customer_phone.trim().slice(0, 40);
+  }
+  if (orderData.machine_id && orderData.machine_id.trim().length >= 1) {
+    payload.machine_id = orderData.machine_id.trim().slice(0, 128);
+  }
+  if (
+    typeof orderData.amount_invested === 'number' &&
+    !isNaN(orderData.amount_invested) &&
+    orderData.amount_invested >= 0 &&
+    orderData.amount_invested <= 1000000000
+  ) {
+    payload.amount_invested = orderData.amount_invested;
+    payload.amount = orderData.amount_invested;
+  } else if (
+    typeof orderData.amount === 'number' &&
+    !isNaN(orderData.amount) &&
+    orderData.amount >= 0 &&
+    orderData.amount <= 1000000000
+  ) {
+    payload.amount = orderData.amount;
+    payload.amount_invested = orderData.amount;
+  }
+  if (
+    typeof orderData.daily_return === 'number' &&
+    !isNaN(orderData.daily_return) &&
+    orderData.daily_return >= 0 &&
+    orderData.daily_return <= 1000000000
+  ) {
+    payload.daily_return = orderData.daily_return;
+  }
+  if (
+    typeof orderData.duration_days === 'number' &&
+    !isNaN(orderData.duration_days) &&
+    orderData.duration_days >= 1 &&
+    orderData.duration_days <= 3650
+  ) {
+    payload.duration_days = orderData.duration_days;
+  }
+  if (
+    typeof orderData.total_return === 'number' &&
+    !isNaN(orderData.total_return) &&
+    orderData.total_return >= 0 &&
+    orderData.total_return <= 1000000000
+  ) {
+    payload.total_return = orderData.total_return;
+  }
+  if (
+    typeof orderData.days_elapsed === 'number' &&
+    !isNaN(orderData.days_elapsed) &&
+    orderData.days_elapsed >= 0 &&
+    orderData.days_elapsed <= 3650
+  ) {
+    payload.days_elapsed = orderData.days_elapsed;
+  }
+  if (
+    typeof orderData.days_left === 'number' &&
+    !isNaN(orderData.days_left) &&
+    orderData.days_left >= 0 &&
+    orderData.days_left <= 3650
+  ) {
+    payload.days_left = orderData.days_left;
+  }
+  if (typeof orderData.units === 'number' && !isNaN(orderData.units) && orderData.units >= 1 && orderData.units <= 100) {
+    payload.units = orderData.units;
+  }
+  if (orderData.start_date && orderData.start_date.trim().length >= 1) {
+    payload.start_date = orderData.start_date.trim().slice(0, 60);
+  }
+  if (orderData.end_date && orderData.end_date.trim().length >= 1) {
+    payload.end_date = orderData.end_date.trim().slice(0, 60);
+  }
+  if (orderData.purchase_date && orderData.purchase_date.trim().length >= 1) {
+    payload.purchase_date = orderData.purchase_date.trim().slice(0, 60);
+  }
+  if (orderData.ending_date && orderData.ending_date.trim().length >= 1) {
+    payload.ending_date = orderData.ending_date.trim().slice(0, 60);
+  }
+  if (orderData.payment_method && orderData.payment_method.trim().length >= 1) {
+    payload.payment_method = orderData.payment_method.trim().slice(0, 100);
+  }
+  if (orderData.payment_reference && orderData.payment_reference.trim().length >= 1) {
+    payload.payment_reference = orderData.payment_reference.trim().slice(0, 120);
+  }
+  if (auth.currentUser?.uid) {
+    payload.authorUid = auth.currentUser.uid.slice(0, 128);
+  }
+
+  try {
+    await setDoc(doc(db, 'orders', cleanOrderId), payload);
+    return cleanOrderId;
+  } catch (error) {
+    try {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    } catch {
+      return cleanOrderId;
+    }
+  }
+}
+
+export interface FirestoreOrderRecord {
+  id: string;
+  user_id: string;
+  customername: string;
+  customer_name: string;
+  customer_phone: string;
+  name: string;
+  machine_id: string;
+  machine_title: string;
+  amount_invested: number;
+  amount: number;
+  daily_return: number;
+  daily_yield: number;
+  duration_days: number;
+  total_return: number;
+  days_elapsed: number;
+  days_left: number;
+  units: number;
+  start_date: string;
+  end_date: string;
+  purchase_date: string;
+  ending_date: string;
+  status: 'PENDING' | 'ACTIVE' | 'PAYOUT_COMPLETE' | 'DENIED';
+  firestore_status: string;
+  raw_firestore_status: string;
+  payment_method: string;
+  payment_reference: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * When Admin clicks Confirm Order / Approve / Deliver:
+ * Updates that same Firestore document in 'orders' first to status = "confirmed"
+ * and then to status = "ACTIVE & DELIVERED".
+ */
+export async function confirmOrderInFirestore(
+  orderId: string,
+  extraUpdates?: {
+    days_elapsed?: number;
+    days_left?: number;
+    start_date?: string;
+    end_date?: string;
+    purchase_date?: string;
+    ending_date?: string;
+    [key: string]: any;
+  }
+): Promise<void> {
+  const cleanOrderId = orderId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+  if (!cleanOrderId) return;
+  const path = `orders/${cleanOrderId}`;
+  const orderRef = doc(db, 'orders', cleanOrderId);
+  const nowIso = new Date().toISOString().slice(0, 40);
+
+  try {
+    // Step 1: Update Firestore document status to "confirmed"
+    await updateDoc(orderRef, {
+      status: 'confirmed',
+      updated_at: nowIso,
+    });
+
+    // Step 2: Update that same Firestore document status to "ACTIVE & DELIVERED"
+    const secondPayload: Record<string, any> = {
+      status: 'ACTIVE & DELIVERED',
+      days_elapsed: Math.max(1, Number(extraUpdates?.days_elapsed || 1)),
+      updated_at: new Date().toISOString().slice(0, 40),
+    };
+    if (typeof extraUpdates?.days_left === 'number') {
+      secondPayload.days_left = extraUpdates.days_left;
+    }
+    if (extraUpdates?.start_date) {
+      secondPayload.start_date = String(extraUpdates.start_date).slice(0, 60);
+    }
+    if (extraUpdates?.end_date) {
+      secondPayload.end_date = String(extraUpdates.end_date).slice(0, 60);
+    }
+    if (extraUpdates?.purchase_date) {
+      secondPayload.purchase_date = String(extraUpdates.purchase_date).slice(0, 60);
+    }
+    if (extraUpdates?.ending_date) {
+      secondPayload.ending_date = String(extraUpdates.ending_date).slice(0, 60);
+    }
+    await updateDoc(orderRef, secondPayload);
+  } catch (error) {
+    try {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    } catch {
+      // Handled by server fallback if document was created server-side
+    }
+  }
+}
+
+/**
+ * When Admin clicks Deny / Refund:
+ * Updates that same Firestore document in 'orders' to status = "denied".
+ */
+export async function denyOrderInFirestore(orderId: string, _extraMeta?: any): Promise<void> {
+  const cleanOrderId = orderId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+  if (!cleanOrderId) return;
+  const path = `orders/${cleanOrderId}`;
+  const orderRef = doc(db, 'orders', cleanOrderId);
+
+  try {
+    await updateDoc(orderRef, {
+      status: 'denied',
+      updated_at: new Date().toISOString().slice(0, 40),
+    });
+  } catch (error) {
+    try {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    } catch {
+      // Handled by server fallback
+    }
+  }
+}
+
+/**
+ * Subscribes in real-time to all orders in the Firestore 'orders' collection.
+ */
+export function subscribeToFirestoreOrders(
+  onUpdate: (orders: FirestoreOrderRecord[]) => void
+): () => void {
+  const path = 'orders';
+  const q = query(
+    collection(db, path),
+    where('status', 'in', [
+      'pending',
+      'confirmed',
+      'ACTIVE & DELIVERED',
+      'denied',
+      'PENDING',
+      'ACTIVE',
+      'COMPLETED',
+      'PAYOUT_COMPLETE',
+    ]),
+    limit(150)
+  );
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items: FirestoreOrderRecord[] = snapshot.docs
+        .map((d) => {
+          const data = d.data();
+          const ts = data.timestamp?.toDate
+            ? data.timestamp.toDate().toISOString()
+            : typeof data.timestamp === 'string'
+              ? data.timestamp
+              : data.start_date || new Date().toISOString();
+
+          const rawStatus = String(data.status || 'pending');
+          const upperStatus = rawStatus.toUpperCase();
+          let normalizedStatus: 'PENDING' | 'ACTIVE' | 'PAYOUT_COMPLETE' | 'DENIED' = 'PENDING';
+          if (rawStatus === 'denied' || upperStatus === 'DENIED') {
+            normalizedStatus = 'DENIED';
+          } else if (
+            rawStatus === 'confirmed' ||
+            rawStatus === 'ACTIVE & DELIVERED' ||
+            upperStatus === 'CONFIRMED' ||
+            upperStatus === 'ACTIVE & DELIVERED' ||
+            upperStatus === 'ACTIVE'
+          ) {
+            normalizedStatus = 'ACTIVE';
+          } else if (upperStatus === 'COMPLETED' || upperStatus === 'PAYOUT_COMPLETE') {
+            normalizedStatus = 'PAYOUT_COMPLETE';
+          } else {
+            normalizedStatus = 'PENDING';
+          }
+
+          const durationDays = Number(data.duration_days || 45);
+          const daysElapsed =
+            normalizedStatus === 'PENDING' ? 0 : Math.max(1, Number(data.days_elapsed ?? 1));
+          const daysLeft =
+            typeof data.days_left === 'number'
+              ? data.days_left
+              : Math.max(0, durationDays - daysElapsed);
+          const amountInvested = Number(data.amount_invested ?? data.amount ?? 0);
+          const dailyReturn = Number(data.daily_return || 0);
+          const totalReturn = Number(data.total_return || dailyReturn * durationDays);
+
+          return {
+            id: d.id,
+            user_id: data.user_id || data.customer_phone || data.customername || d.id,
+            customername: data.customername || data.customer_name || 'Avor Investor',
+            customer_name: data.customername || data.customer_name || 'Avor Investor',
+            customer_phone: data.customer_phone || '',
+            name: data.name || data.machine_title || 'Machine Order',
+            machine_id: String(data.machine_id || 'av1-m1'),
+            machine_title: data.machine_title || data.name || 'Machine Order',
+            amount_invested: amountInvested,
+            amount: amountInvested,
+            daily_return: dailyReturn,
+            daily_yield: dailyReturn,
+            duration_days: durationDays,
+            total_return: totalReturn,
+            days_elapsed: daysElapsed,
+            days_left: daysLeft,
+            units: Number(data.units || 1),
+            start_date: data.start_date || ts,
+            end_date:
+              data.end_date ||
+              new Date(new Date(ts).getTime() + durationDays * 24 * 60 * 60 * 1000).toISOString(),
+            purchase_date: data.purchase_date || ts.split('T')[0],
+            ending_date:
+              data.ending_date ||
+              new Date(new Date(ts).getTime() + durationDays * 24 * 60 * 60 * 1000)
+                .toISOString()
+                .split('T')[0],
+            status: normalizedStatus,
+            firestore_status: rawStatus,
+            raw_firestore_status: rawStatus,
+            payment_method: data.payment_method || 'Wallet Balance',
+            payment_reference: data.payment_reference || d.id,
+            created_at: ts,
+            updated_at: data.updated_at || ts,
+          };
+        })
+        .filter((o) => o.status !== 'DENIED')
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+      onUpdate(items);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, path);
+      } catch {
+        // Handled cleanly
+      }
+    }
+  );
 }
 
 export interface AdminMessageExtra {

@@ -1,5 +1,160 @@
 {
   "entities": {
+    "Order": {
+      "title": "Order",
+      "description": "Real-time machine order document stored in the 'orders' Firestore collection.",
+      "type": "object",
+      "properties": {
+        "customername": {
+          "type": "string",
+          "description": "Customer full name or phone identifier",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "name": {
+          "type": "string",
+          "description": "Order or machine product name",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "confirmed",
+            "ACTIVE & DELIVERED",
+            "denied",
+            "PENDING",
+            "ACTIVE",
+            "COMPLETED",
+            "PAYOUT_COMPLETE"
+          ],
+          "description": "Order status lifecycle: pending -> confirmed -> ACTIVE & DELIVERED, or denied"
+        },
+        "id": {
+          "type": "string",
+          "description": "Order / investment document identifier",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "user_id": {
+          "type": "string",
+          "description": "Customer user ID",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "customer_name": {
+          "type": "string",
+          "description": "Customer display name",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "customer_phone": {
+          "type": "string",
+          "description": "Customer phone number",
+          "minLength": 3,
+          "maxLength": 40
+        },
+        "machine_id": {
+          "type": "string",
+          "description": "Machine ID",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "machine_title": {
+          "type": "string",
+          "description": "Machine title",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "amount_invested": {
+          "type": "number",
+          "description": "Order amount in UGX"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Order amount in UGX"
+        },
+        "daily_return": {
+          "type": "number",
+          "description": "Daily yield in UGX"
+        },
+        "duration_days": {
+          "type": "number",
+          "description": "Cycle duration in days"
+        },
+        "total_return": {
+          "type": "number",
+          "description": "Total expected return in UGX"
+        },
+        "days_elapsed": {
+          "type": "number",
+          "description": "Days elapsed in active cycle"
+        },
+        "days_left": {
+          "type": "number",
+          "description": "Days remaining in active cycle"
+        },
+        "units": {
+          "type": "number",
+          "description": "Number of machine units ordered"
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Cycle start date ISO string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Cycle end date ISO string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "purchase_date": {
+          "type": "string",
+          "description": "Purchase date string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "ending_date": {
+          "type": "string",
+          "description": "Ending date string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "payment_method": {
+          "type": "string",
+          "description": "Payment channel used (e.g., Wallet Balance)",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "payment_reference": {
+          "type": "string",
+          "description": "Order or transaction reference",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "authorUid": {
+          "type": "string",
+          "description": "Optional Firebase Auth UID",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Last status update ISO timestamp",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the order was created"
+        }
+      },
+      "required": ["customername", "name", "status", "timestamp"]
+    },
     "AdminMessage": {
       "title": "AdminMessage",
       "description": "Real-time message sent to Admin when a user submits a deposit or taps Buy a Machine.",
@@ -103,6 +258,10 @@
     }
   },
   "firestore": {
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Collection of real-time customer machine orders (pending -> confirmed -> ACTIVE & DELIVERED, or denied)."
+    },
     "/admin_messages/{messageId}": {
       "schema": { "$ref": "#/entities/AdminMessage" },
       "description": "Collection of real-time messages sent to Admin when a user deposits money or buys a machine."
