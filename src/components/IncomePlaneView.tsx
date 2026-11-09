@@ -507,8 +507,8 @@ export const IncomePlaneView: React.FC<IncomePlaneViewProps> = ({
                           <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/40 text-cyan-300">
                             {String(inv.machine_id || '').includes('avclass') ||
                             String(inv.series_tag || '').toLowerCase().includes('class')
-                              ? 'Counts Throughout the Week'
-                              : 'Works Mon – Friday'}
+                              ? 'Counts Throughout the Week (Mon – Sun)'
+                              : 'Auto-Runs Mon – Friday (No Weekends)'}
                           </span>
                         </div>
                         <span className="text-[10px] text-slate-400 font-mono">
@@ -559,11 +559,24 @@ export const IncomePlaneView: React.FC<IncomePlaneViewProps> = ({
                           <span className="text-amber-300 font-bold">
                             ⏳ Waiting for Admin payment confirmation to start Day 1
                           </span>
+                        ) : !(
+                            String(inv.machine_id || '').includes('avclass') ||
+                            String(inv.series_tag || '').toLowerCase().includes('class')
+                          ) &&
+                          (new Date().getDay() === 0 || new Date().getDay() === 6) ? (
+                          <span className="text-amber-300 font-bold">
+                            ⏸️ Weekend Pause (Sat & Sun) — Auto-Resumes Monday
+                          </span>
                         ) : (
                           <>
-                            <span className="text-slate-400">Next Payout Cycle: </span>
+                            <span className="text-slate-400">Auto-Run Schedule: </span>
                             <strong className="text-cyan-300 font-bold">
-                              {hasUnclaimed ? 'Ready Now!' : `${nextPayout.hours}h ${nextPayout.minutes}m`}
+                              {String(inv.machine_id || '').includes('avclass') ||
+                              String(inv.series_tag || '').toLowerCase().includes('class')
+                                ? 'Running Daily (Mon–Sun)'
+                                : hasUnclaimed
+                                  ? 'Ready Now!'
+                                  : `Running Mon–Fri (${nextPayout.hours}h ${nextPayout.minutes}m)`}
                             </strong>
                           </>
                         )}

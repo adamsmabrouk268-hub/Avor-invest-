@@ -391,6 +391,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       );
       setDepositRefInput('');
       setDepositStep('SUBMITTED');
+      try {
+        const bc = new BroadcastChannel('avor_realtime_wallet_sync');
+        bc.postMessage({ type: 'ORDER_OR_DEPOSIT_PLACED', amount: depositAmt });
+        bc.close();
+      } catch {}
       onRefreshUser();
       fetchTransactions();
       fetchActiveReceiver();

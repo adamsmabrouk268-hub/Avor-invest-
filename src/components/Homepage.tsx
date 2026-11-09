@@ -160,7 +160,19 @@ export const Homepage: React.FC<HomepageProps> = ({
   useEffect(() => {
     if (!user || !user.id) return;
     const loadSummary = () => {
-      fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}`)
+      let refsParam = '';
+      try {
+        const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
+        if (Array.isArray(savedRefs) && savedRefs.length > 0) {
+          refsParam = `&refs=${encodeURIComponent(savedRefs.join(','))}`;
+        }
+      } catch {}
+      const phoneParam = user.phone_number
+        ? `?phone=${encodeURIComponent(user.phone_number)}${refsParam}`
+        : refsParam
+          ? `?${refsParam.slice(1)}`
+          : '';
+      fetch(`/api/user/dashboard-summary/${encodeURIComponent(user.id)}${phoneParam}`)
         .then((res) => {
           const ct = res.headers.get('content-type') || '';
           if (res.ok && ct.includes('application/json')) return res.json();
@@ -172,9 +184,46 @@ export const Homepage: React.FC<HomepageProps> = ({
         .catch(() => {});
     };
     loadSummary();
-    const interval = setInterval(loadSummary, 4000);
-    return () => clearInterval(interval);
-  }, [user?.id, user?.balance, investments.length]);
+    const interval = setInterval(loadSummary, 2500);
+
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource('/api/realtime/wallet-stream');
+      es.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data);
+          if (
+            parsed &&
+            (parsed.type === 'WALLET_CONFIRMED_SYNC' ||
+              parsed.type === 'WALLET_DENIED_SYNC' ||
+              parsed.type === 'DEPOSIT_CREATED_PENDING' ||
+              parsed.type === 'MACHINE_ORDER_CREATED_PENDING' ||
+              parsed.type === 'ORDER_CONFIRMED_ACTIVE')
+          ) {
+            loadSummary();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('avor_realtime_wallet_sync');
+      bc.onmessage = () => {
+        loadSummary();
+      };
+    } catch {}
+
+    return () => {
+      clearInterval(interval);
+      try {
+        es?.close();
+      } catch {}
+      try {
+        bc?.close();
+      } catch {}
+    };
+  }, [user?.id, user?.phone_number, user?.balance, user?.wallet_balance, user?.available_wallet, investments.length]);
 
   const hasBoughtMachine =
     investments.some((i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') ||
@@ -184,23 +233,38 @@ export const Homepage: React.FC<HomepageProps> = ({
   const completedOrActiveInvestments = investments.filter(
     (i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE'
   );
-  const activeDailyYield = activeInvestments.reduce(
-    (sum, i) => sum + (Number(i.daily_yield) || 0),
-    0
-  );
+  const placedOrdersTotal = investments
+    .filter((i) => i.status === 'PENDING' || i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE')
+    .reduce((sum, i) => sum + Number(i.amount_invested || 0), 0);
+
+  const todayDayOfWeek = new Date().getDay();
+  const isTodayMonToFri = todayDayOfWeek >= 1 && todayDayOfWeek <= 5;
+  const isAv1OrAv2Inv = (inv: Investment) => {
+    const tag = String(inv.series_tag || inv.machine?.series_tag || '').toUpperCase();
+    const title = String(inv.machine_title || inv.machine?.title || '').toUpperCase();
+    if (inv.machine?.is_av_class || tag.includes('CLASS') || title.includes('CLASS')) return false;
+    return true;
+  };
+
+  const activeDailyYield = activeInvestments.reduce((sum, i) => {
+    if (isAv1OrAv2Inv(i) && !isTodayMonToFri) return sum;
+    return sum + (Number(i.daily_yield) || 0);
+  }, 0);
   const totalDailyYieldsAll = completedOrActiveInvestments.reduce(
     (sum, i) => sum + (Number(i.daily_yield) || 0) * Math.max(1, Number(i.days_elapsed) || 1),
     0
   );
 
-  // Item 1: In the "deposit details" icon on the home page, the total amount reflected on the wallet should be displayed
-  const totalDeposited =
-    summary?.available_wallet ??
-    summary?.wallet_balance ??
-    user?.available_wallet ??
-    user?.wallet_balance ??
-    summary?.deposit_details?.total_deposited ??
-    0;
+  // Item 1 & Order Reflection: After placing order, money reflects automatically on Wallet and Deposit Details on Homepage
+  const totalDeposited = Math.max(
+    Number(summary?.deposit_details?.total_deposited ?? 0),
+    Number(summary?.available_wallet ?? 0),
+    Number(summary?.wallet_balance ?? 0),
+    Number(user?.available_wallet ?? 0),
+    Number(user?.wallet_balance ?? 0),
+    Number(summary?.deposit_details?.pending_deposits ?? 0),
+    placedOrdersTotal
+  );
   const pendingDeposits = summary?.deposit_details?.pending_deposits || 0;
   const totalWithdrawn = summary?.withdraw_details?.total_withdrawn || 0;
   // Item 6: In the "AI income" icon on the home page, all the total daily yields should be born
@@ -210,7 +274,7 @@ export const Homepage: React.FC<HomepageProps> = ({
       : activeDailyYield > 0
         ? activeDailyYield
         : summary?.ai_income || 0;
-  // Item 5: In the "today's earnings" icon on the home page, the daily yield should be born
+  // Item 5: In the "today's earnings" icon on the home page, the daily yield should be born (Mon-Fri for AV1 & AV2)
   const todayEarnings =
     activeDailyYield > 0 ? activeDailyYield : summary?.today_earnings || 0;
   const inviteCount = summary?.team_size_details?.total_joined ?? 0;

@@ -516,6 +516,147 @@ function linkKnownDepositRefsToUser(user?: User & { password_hash?: string }, ra
   }
 }
 
+// Helper: Check if a given Date falls on Monday (1) through Friday (5) — no Weekends (Saturday=6, Sunday=0)
+function isWeekdayMonToFri(d: Date = new Date()): boolean {
+  const day = d.getDay();
+  return day >= 1 && day <= 5;
+}
+
+// Helper: Determine if a machine/investment is AV1 or AV2 series (runs Monday to Friday only, no Weekends)
+function isAv1OrAv2WeekdayMachine(invOrMachine: any): boolean {
+  if (!invOrMachine) return false;
+  if (invOrMachine.is_av_class) return false;
+  const tag = String(invOrMachine.series_tag || invOrMachine.machine?.series_tag || '').toUpperCase();
+  const title = String(invOrMachine.machine_title || invOrMachine.title || invOrMachine.machine?.title || '').toUpperCase();
+  const id = String(invOrMachine.machine_id || invOrMachine.id || '').toLowerCase();
+  if (tag.includes('CLASS') || title.includes('CLASS')) return false;
+  if (
+    tag.includes('AV1') ||
+    tag.includes('AV2') ||
+    tag.includes('AX2') ||
+    title.includes('AV1') ||
+    title.includes('AV2') ||
+    id.startsWith('av1') ||
+    id.startsWith('av2')
+  ) {
+    return true;
+  }
+  return true;
+}
+
+// Helper: Compute maturity end_date advancing only on Monday–Friday working days for AV1 and AV2
+function computeMachineEndDate(startDate: Date, durationDays: number, monToFriOnly: boolean): Date {
+  const totalDays = Math.max(1, Number(durationDays) || 32);
+  if (!monToFriOnly) {
+    return new Date(startDate.getTime() + totalDays * 24 * 60 * 60 * 1000);
+  }
+  const cursor = new Date(startDate.getTime());
+  let workingDaysAdded = 0;
+  while (workingDaysAdded < totalDays) {
+    cursor.setDate(cursor.getDate() + 1);
+    const dow = cursor.getDay();
+    if (dow >= 1 && dow <= 5) {
+      workingDaysAdded++;
+    }
+  }
+  return cursor;
+}
+
+// Helper: Count elapsed working days (Monday–Friday only for AV1 & AV2, skipping Saturday and Sunday)
+function countElapsedMachineDays(
+  startDate: Date,
+  nowDate: Date,
+  durationDays: number,
+  monToFriOnly: boolean
+): number {
+  const maxDays = Math.max(1, Number(durationDays) || 32);
+  const diffMs = nowDate.getTime() - startDate.getTime();
+  if (diffMs < 0) return 0;
+
+  if (!monToFriOnly) {
+    const rawDays = Math.floor(diffMs / (24 * 60 * 60 * 1000)) + 1;
+    return Math.min(maxDays, Math.max(1, rawDays));
+  }
+
+  // Count distinct Monday–Friday calendar days from startDate up to nowDate
+  const startDay = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const endDay = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate());
+  let weekdaysCount = 0;
+  const cursor = new Date(startDay.getTime());
+  while (cursor <= endDay && weekdaysCount < maxDays) {
+    const dow = cursor.getDay();
+    if (dow >= 1 && dow <= 5) {
+      weekdaysCount++;
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return Math.min(maxDays, Math.max(0, weekdaysCount));
+}
+
+// Helper: Automatically run ACTIVE machines (Monday–Friday for AV1 & AV2, no Weekends; Mon–Sun for AV Classes)
+function syncSingleActiveMachineAutoRun(inv: Investment, nowDate: Date = new Date()): void {
+  if (!inv || inv.status === 'PENDING' || (inv.status as string) === 'DENIED') {
+    if (inv && inv.status === 'PENDING') {
+      inv.days_elapsed = 0;
+      inv.unclaimed_earnings = 0;
+    }
+    return;
+  }
+
+  const monToFriOnly = isAv1OrAv2WeekdayMachine(inv);
+  const startDate = new Date(inv.start_date || nowDate.toISOString());
+  const expectedEndDate = computeMachineEndDate(startDate, inv.duration_days || 32, monToFriOnly);
+  inv.end_date = expectedEndDate.toISOString();
+
+  if (inv.status !== 'ACTIVE') return;
+
+  const elapsedWorkingDays = countElapsedMachineDays(
+    startDate,
+    nowDate,
+    inv.duration_days || 32,
+    monToFriOnly
+  );
+  inv.days_elapsed = elapsedWorkingDays;
+
+  const dailyYield = Number(inv.daily_yield || 0);
+  const totalReturn = Number(inv.total_return || dailyYield * (inv.duration_days || 32));
+  const targetEarnedSoFar = Math.min(totalReturn, elapsedWorkingDays * dailyYield);
+  const alreadyClaimed = Number(inv.total_claimed || 0);
+
+  // Automatically credit any newly elapsed Monday–Friday working day yield onto user's DAILY_YIELD transactions
+  if (targetEarnedSoFar > alreadyClaimed && dailyYield > 0) {
+    const newlyEarned = targetEarnedSoFar - alreadyClaimed;
+    inv.total_claimed = targetEarnedSoFar;
+    inv.unclaimed_earnings = 0;
+    inv.last_claim_at = nowDate.toISOString();
+
+    const txRef = `AUTO-YIELD-${inv.id}-DAY-${elapsedWorkingDays}`;
+    const alreadyLogged = transactions.some((t) => t.payment_reference === txRef);
+    if (!alreadyLogged) {
+      transactions.unshift({
+        id: `tx-autoyield-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        user_id: inv.user_id,
+        investment_id: inv.id,
+        amount: newlyEarned,
+        type: 'DAILY_YIELD',
+        status: 'SUCCESS',
+        payment_method: monToFriOnly
+          ? `Auto Daily Yield (Mon–Fri Active • ${inv.machine_title})`
+          : `Auto Daily Yield (${inv.machine_title})`,
+        payment_reference: txRef,
+        machine_title: inv.machine_title,
+        created_at: nowDate.toISOString(),
+      });
+    }
+  }
+
+  if (elapsedWorkingDays >= (inv.duration_days || 32) || Number(inv.total_claimed || 0) >= totalReturn) {
+    inv.status = 'PAYOUT_COMPLETE';
+    inv.days_elapsed = inv.duration_days || 32;
+    inv.unclaimed_earnings = 0;
+  }
+}
+
 function syncUserConfirmedFinances(user: User & { password_hash?: string }, explicitUserId?: string) {
   // Automatically clean up any duplicate PENDING deposit if a CONFIRMED/SUCCESS or DENIED/FAILED deposit with the same reference or firebase_doc_id exists
   const resolvedRefs = new Set<string>();
@@ -535,6 +676,26 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
         ((t as any).firebase_doc_id && resolvedDocIds.has((t as any).firebase_doc_id)))
     ) {
       transactions.splice(idx, 1);
+    }
+  }
+
+  const userPhoneTail = (user.phone_number || user.phoneNumber || '').replace(/\D/g, '').slice(-9);
+  const doesInvBelongToUser = (inv: Investment) => {
+    if (inv.user_id === user.id) return true;
+    if (explicitUserId && inv.user_id === explicitUserId) return true;
+    if (user.id !== 'usr-admin-owner' && inv.user_id === 'usr-admin-owner') return false;
+    return Boolean(
+      userPhoneTail &&
+        userPhoneTail.length >= 7 &&
+        ((inv as any).customer_phone || '').replace(/\D/g, '').slice(-9) === userPhoneTail
+    );
+  };
+
+  // Automatically advance Monday-Friday schedule for user's active machines before computing yields
+  const nowDate = new Date();
+  for (const inv of investments) {
+    if (doesInvBelongToUser(inv) && inv.status === 'ACTIVE') {
+      syncSingleActiveMachineAutoRun(inv, nowDate);
     }
   }
 
@@ -564,45 +725,28 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     .filter((t) => t.status === 'SUCCESS' || t.status === 'CONFIRMED' || t.status === 'PENDING')
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
-  const userPhoneTail = (user.phone_number || user.phoneNumber || '').replace(/\D/g, '').slice(-9);
-  const doesInvBelongToUser = (inv: Investment) => {
-    if (inv.user_id === user.id) return true;
-    if (explicitUserId && inv.user_id === explicitUserId) return true;
-    if (user.id !== 'usr-admin-owner' && inv.user_id === 'usr-admin-owner') return false;
-    return Boolean(
-      userPhoneTail &&
-        userPhoneTail.length >= 7 &&
-        ((inv as any).customer_phone || '').replace(/\D/g, '').slice(-9) === userPhoneTail
-    );
-  };
-
   const userConfirmedInvestments = investments.filter(
     (inv) => doesInvBelongToUser(inv) && (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE')
   );
   const hasBoughtMachine = userConfirmedInvestments.length > 0;
 
-  const deductedInvestments = investments
+  // All non-denied machine orders placed by the user
+  const allPlacedOrdersAmount = investments
     .filter(
       (inv) =>
         doesInvBelongToUser(inv) &&
-        inv.wallet_deducted &&
-        (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE' || inv.status === 'PENDING')
+        (inv.status === 'PENDING' || inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE')
     )
     .reduce((sum, inv) => sum + Number(inv.amount_invested || 0), 0);
 
-  const confirmedDeductedInvestments = investments
-    .filter(
-      (inv) =>
-        doesInvBelongToUser(inv) &&
-        inv.wallet_deducted &&
-        (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE')
-    )
-    .reduce((sum, inv) => sum + Number(inv.amount_invested || 0), 0);
-
-  // Deposited money automatically reflects on the user's Wallet immediately after depositing (minus any machines ordered/bought from Wallet):
-  const computedWallet = Math.max(0, allWalletDeposits - deductedInvestments);
-  // Portion of Wallet backed by Admin-confirmed deposits:
-  const confirmedWallet = Math.max(0, confirmedDeposits - deductedInvestments);
+  // After placing an order (deposit or machine order), the money automatically reflects on Wallet and Deposit Details on Homepage
+  const computedWallet = Math.max(0, allWalletDeposits, allPlacedOrdersAmount);
+  // Portion of Wallet backed by Admin-confirmed deposits or confirmed orders:
+  const confirmedOrdersAmount = userConfirmedInvestments.reduce(
+    (sum, inv) => sum + Number(inv.amount_invested || 0),
+    0
+  );
+  const confirmedWallet = Math.max(0, confirmedDeposits, confirmedOrdersAmount);
   // Money on the Balance is 3,000 UGX got as a reward after registration (+ earned yields/rewards - withdrawals):
   const computedBalance = Math.max(
     0,
@@ -651,6 +795,7 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     userDeposits,
     confirmedDeposits,
     pendingDeposits,
+    allWalletDeposits: Math.max(allWalletDeposits, computedWallet),
     userWithdrawals,
     computedBalance,
     computedWallet,
@@ -2095,30 +2240,16 @@ async function startServer() {
       }
     }
 
-    // Check that the user has deposited enough money on their Wallet (NOT the 3,000 UGX registration reward on Balance)
-    if (computedWallet < totalCost) {
-      pushNotification(
-        user.id,
-        '⚠️ Wallet Balance Not Enough',
-        `Your Wallet balance is not enough to buy ${machine.title}. Required: ${totalCost.toLocaleString()} UGX • Available Wallet: ${computedWallet.toLocaleString()} UGX. Please deposit money onto your Wallet first.`,
-        'PAYMENT'
-      );
-
-      return res.status(400).json({
-        error: `Wallet balance is not enough to buy ${machine.title} (${totalCost.toLocaleString()} UGX required • Available Wallet: ${computedWallet.toLocaleString()} UGX). Please deposit money via MTN Mobile Money or Airtel Money onto your Wallet first.`,
-        requires_deposit: true,
-      });
-    }
-
     const dailyYield = machine.daily_yield * units;
     const totalReturn = machine.total_return * units;
 
     const startDate = new Date();
-    const endDate = new Date(startDate.getTime() + machine.duration_days * 24 * 60 * 60 * 1000);
+    const monToFriOnly = isAv1OrAv2WeekdayMachine(machine);
+    const endDate = computeMachineEndDate(startDate, machine.duration_days, monToFriOnly);
     const selectedChannel = payment_method || 'Wallet Balance';
 
-    // When customer clicks Buy, the system creates a new Pending Order ("Wait for admin confirmation")
-    // that goes to Pending Orders / Orders / Active Cycles in the Admin Panel for Admin to Confirm / Approve / Deliver!
+    // When customer clicks Buy / Places Order, the system creates a Pending Order ("Wait for admin confirmation")
+    // and ensures the order money reflects automatically on Wallet and Deposit Details on Homepage!
     const requiresAdminConfirmation = true;
 
     const refCode = `ORD-${Math.floor(100000 + Math.random() * 900000)}`;
@@ -2149,6 +2280,7 @@ async function startServer() {
     (newInvestment as any).customer_name = user.full_name || user.name || 'Investor';
     (newInvestment as any).customer_phone = phone_number || user.phone_number || '';
     (newInvestment as any).payment_reference = refCode;
+    (newInvestment as any).work_days = monToFriOnly ? 'Mon – Friday' : 'Monday – Sunday';
 
     investments.unshift(newInvestment);
 
@@ -2164,6 +2296,26 @@ async function startServer() {
       if (!targetDepositToLink.machine_title) {
         targetDepositToLink.machine_title = newInvestment.machine_title;
       }
+    } else if (computedWallet < totalCost) {
+      // Automatically create a matching DEPOSIT transaction for the placed order so it reflects in Deposit Details history too
+      const autoDepTx: Transaction = {
+        id: `tx-dep-ord-${Date.now()}`,
+        user_id: user.id,
+        investment_id: newInvestment.id,
+        amount: totalCost,
+        type: 'DEPOSIT',
+        status: 'PENDING',
+        payment_method: `Order Deposit (${selectedChannel}) • ${newInvestment.machine_title}`,
+        payment_reference: refCode,
+        machine_title: newInvestment.machine_title,
+        created_at: new Date().toISOString(),
+      };
+      (autoDepTx as any).customer_name = user.full_name || user.name || 'Investor';
+      (autoDepTx as any).customer_phone = phone_number || user.phone_number || '';
+      (autoDepTx as any).user_phone = user.phone_number || phone_number || '';
+      (autoDepTx as any).receiver_phone = RECEIVER_PHONE;
+      (autoDepTx as any).receiver_name = RECEIVER_NAME;
+      transactions.unshift(autoDepTx);
     }
 
     const newTx: Transaction = {
@@ -2358,12 +2510,14 @@ async function startServer() {
       }
     }
 
+    const monToFriOnly = isAv1OrAv2WeekdayMachine(inv);
     inv.status = 'ACTIVE';
     inv.confirmed_at = now.toISOString();
     inv.start_date = now.toISOString();
-    inv.end_date = new Date(now.getTime() + inv.duration_days * 24 * 60 * 60 * 1000).toISOString();
+    inv.end_date = computeMachineEndDate(now, inv.duration_days, monToFriOnly).toISOString();
     inv.last_claim_at = now.toISOString();
-    inv.days_elapsed = 1;
+    inv.days_elapsed = monToFriOnly && !isWeekdayMonToFri(now) ? 0 : 1;
+    syncSingleActiveMachineAutoRun(inv, now);
 
     if (user) {
       user.has_bought_machine = true;
@@ -2568,8 +2722,8 @@ async function startServer() {
       (u) => u.id !== user.id && (u.referred_by || '').toLowerCase() === userRefCode
     );
 
-    // Helper to check and settle any completed cycles and credit 8% team income to the inviter's balance
-    const nowMs = Date.now();
+    // Helper to check and settle any completed cycles (AV1 & AV2 run Monday–Friday only, no Weekends) and credit 8% team income to the inviter's balance
+    const nowDateObj = new Date();
     investments.forEach((inv) => {
       // PENDING machines do NOT count days until Admin confirms payment
       if (inv.status === 'PENDING') {
@@ -2578,12 +2732,7 @@ async function startServer() {
         return;
       }
 
-      const startMs = new Date(inv.start_date).getTime();
-      const endMs = new Date(inv.end_date).getTime();
-      const elapsedDays = Math.floor((nowMs - startMs) / (24 * 60 * 60 * 1000));
-      if (elapsedDays >= inv.duration_days || nowMs >= endMs || inv.total_claimed >= inv.total_return) {
-        inv.status = 'PAYOUT_COMPLETE';
-      }
+      syncSingleActiveMachineAutoRun(inv, nowDateObj);
 
       // If cycle has ended and 8% team income hasn't been settled yet, check same-machine eligibility and settle onto inviter's balance
       if (inv.status === 'PAYOUT_COMPLETE' && !inv.team_income_settled) {
@@ -2724,8 +2873,13 @@ async function startServer() {
     );
     const totalMachineReturns = confirmedUserInvestments.reduce((sum, i) => sum + (i.total_return || 0), 0);
     const aiIncome = Math.max(totalClaimedYield, totalDailyYieldsAll);
+    const isTodayWeekday = isWeekdayMonToFri(new Date());
     const todayEarnings = confirmedUserInvestments.reduce((sum, i) => {
       if (i.status === 'ACTIVE') {
+        // AV1 and AV2 automatically run Monday to Friday (no Weekends)
+        if (isAv1OrAv2WeekdayMachine(i) && !isTodayWeekday) {
+          return sum;
+        }
         return sum + (i.daily_yield || 0);
       }
       return sum;
@@ -2735,6 +2889,7 @@ async function startServer() {
       (i) => i.status === 'PAYOUT_COMPLETE' || (i.days_elapsed || 0) >= (i.duration_days || 1)
     );
     const hasCompletedCycle = userCompletedCycles.length > 0;
+    const reflectedTotalDeposited = Math.max(totalDeposited + pendingDeposits, computedWallet);
 
     res.json({
       user_id: user.id,
@@ -2743,7 +2898,7 @@ async function startServer() {
       available_wallet: computedWallet,
       confirmed_wallet: confirmedWallet,
       deposit_details: {
-        total_deposited: totalDeposited,
+        total_deposited: reflectedTotalDeposited,
         wallet_balance: computedWallet,
         available_wallet: computedWallet,
         confirmed_wallet: confirmedWallet,
@@ -2963,8 +3118,8 @@ async function startServer() {
       (i) => i.user_id === userId || (user && i.user_id === user.id) || doesTxBelongToUser({ user_id: i.user_id, customer_phone: (i as any).customer_phone } as any, user, userId)
     );
 
-    // Calculate accrued earnings based on time passed
-    const now = Date.now();
+    // Calculate accrued earnings based on Monday–Friday automatic running for AV1 & AV2 (no Weekends)
+    const nowDateObj = new Date();
     userInvestments.forEach((inv) => {
       // Do NOT count days or accrue yield while PENDING Admin payment confirmation
       if (inv.status === 'PENDING') {
@@ -2973,25 +3128,11 @@ async function startServer() {
         return;
       }
 
-      const start = new Date(inv.start_date).getTime();
-      const diffMs = now - start;
-      const daysElapsed = Math.min(inv.duration_days, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
-      inv.days_elapsed = Math.max(1, daysElapsed);
-
-      // Check time since last claim
-      const lastClaimTime = new Date(inv.last_claim_at).getTime();
-      const hoursSinceLastClaim = (now - lastClaimTime) / (1000 * 60 * 60);
-      const daysUnclaimed = Math.floor(hoursSinceLastClaim / 24);
-
-      if (daysUnclaimed > 0 && inv.status === 'ACTIVE') {
-        const potentialUnclaimed = daysUnclaimed * inv.daily_yield;
-        inv.unclaimed_earnings = Math.min(inv.total_return - inv.total_claimed, potentialUnclaimed);
-      }
-
-      if (inv.total_claimed >= inv.total_return) {
-        inv.status = 'PAYOUT_COMPLETE';
-      }
+      syncSingleActiveMachineAutoRun(inv, nowDateObj);
     });
+    if (user) {
+      syncUserConfirmedFinances(user, user.id);
+    }
 
     res.json(userInvestments);
   });
@@ -3792,8 +3933,72 @@ async function startServer() {
     (newTx as any).machine_id = machine_id || undefined;
     transactions.unshift(newTx);
 
-    // Customer deposits strictly go to Wallet upon Admin confirmation so customer can buy a machine using Wallet
-    const pendingInv: Investment | null = null;
+    // If customer placed a machine order while depositing, create the linked PENDING machine order and reflect money automatically on Wallet & Deposit Details on Homepage
+    let pendingInv: Investment | null = null;
+    if (machine_id) {
+      const targetMachine = machines.find((m) => String(m.id) === String(machine_id));
+      if (targetMachine) {
+        const startDate = new Date();
+        const monToFriOnly = isAv1OrAv2WeekdayMachine(targetMachine);
+        const endDate = computeMachineEndDate(startDate, targetMachine.duration_days, monToFriOnly);
+        const inferredUnits = Math.max(1, Math.round(numAmt / (targetMachine.total_cost || numAmt)));
+        pendingInv = {
+          id: `inv-${Date.now()}`,
+          user_id: user.id,
+          machine_id: targetMachine.id,
+          machine_title: machine_title || `${targetMachine.title} (${inferredUnits} Unit${inferredUnits > 1 ? 's' : ''})`,
+          series_tag: targetMachine.series_tag,
+          units: inferredUnits,
+          amount_invested: numAmt,
+          daily_yield: (targetMachine.daily_yield || 0) * inferredUnits,
+          total_return: (targetMachine.total_return || 0) * inferredUnits,
+          duration_days: targetMachine.duration_days,
+          days_elapsed: 0,
+          last_claim_at: startDate.toISOString(),
+          unclaimed_earnings: 0,
+          total_claimed: 0,
+          status: 'PENDING',
+          start_date: startDate.toISOString(),
+          end_date: endDate.toISOString(),
+          confirmed_at: undefined,
+          machine: targetMachine,
+          wallet_deducted: true,
+          payment_method: payment_method || 'Mobile Money',
+        };
+        (pendingInv as any).customer_name = user.full_name || user.name || 'Investor';
+        (pendingInv as any).customer_phone = senderPhone;
+        (pendingInv as any).payment_reference = refCode;
+        (pendingInv as any).work_days = monToFriOnly ? 'Mon – Friday' : 'Monday – Sunday';
+        newTx.investment_id = pendingInv.id;
+        investments.unshift(pendingInv);
+        void saveOrderToFirestoreCollection(pendingInv, 'pending');
+        void saveOrderToFirestoreOrdersCollection({
+          id: pendingInv.id,
+          customername: user.full_name || user.name || senderPhone || 'Avor Investor',
+          name: pendingInv.machine_title,
+          status: 'pending',
+          user_id: user.id,
+          customer_name: user.full_name || user.name || 'Avor Investor',
+          customer_phone: senderPhone,
+          machine_id: String(pendingInv.machine_id),
+          machine_title: pendingInv.machine_title,
+          amount_invested: numAmt,
+          amount: numAmt,
+          daily_return: Number(pendingInv.daily_yield || 0),
+          duration_days: Number(pendingInv.duration_days || 32),
+          total_return: Number(pendingInv.total_return || 0),
+          days_elapsed: 0,
+          days_left: Number(pendingInv.duration_days || 32),
+          units: inferredUnits,
+          start_date: pendingInv.start_date,
+          end_date: pendingInv.end_date,
+          purchase_date: (pendingInv.start_date || new Date().toISOString()).split('T')[0],
+          ending_date: (pendingInv.end_date || new Date().toISOString()).split('T')[0],
+          payment_method: payment_method || 'Mobile Money',
+          payment_reference: refCode,
+        });
+      }
+    }
 
     syncUserConfirmedFinances(user, user.id);
     saveRegisteredUserToDisk(user);
@@ -4056,24 +4261,11 @@ async function startServer() {
     }
     const userList = Array.from(uniqueUserMap.values()).map(({ password_hash, ...u }) => u);
 
-    // Transition any ACTIVE machine whose cycle has finished to PAYOUT_COMPLETE (Completed Cycle)
+    // Automatically run ACTIVE machines (Monday–Friday for AV1 & AV2, no Weekends) and transition completed cycles to PAYOUT_COMPLETE
+    const nowDateObj = new Date();
     for (const inv of investments) {
       if (inv.status === 'ACTIVE') {
-        const startMs = new Date(inv.start_date || Date.now()).getTime();
-        const elapsedDays = Math.min(
-          inv.duration_days,
-          Math.max(1, Math.floor((Date.now() - startMs) / (1000 * 60 * 60 * 24)) + 1)
-        );
-        if ((inv.days_elapsed || 0) < elapsedDays) {
-          inv.days_elapsed = elapsedDays;
-        }
-        const endMs = inv.end_date
-          ? new Date(inv.end_date).getTime()
-          : startMs + inv.duration_days * 24 * 60 * 60 * 1000;
-        if (Date.now() >= endMs || (inv.days_elapsed || 0) >= inv.duration_days) {
-          inv.status = 'PAYOUT_COMPLETE';
-          inv.days_elapsed = inv.duration_days;
-        }
+        syncSingleActiveMachineAutoRun(inv, nowDateObj);
       }
     }
 

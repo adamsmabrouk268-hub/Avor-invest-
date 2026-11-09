@@ -347,12 +347,17 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       }
       setPendingDepositAmount((prev) => Math.max(prev, totalCost));
       setSelectedChannel('Wallet Balance');
+      try {
+        const bc = new BroadcastChannel('avor_realtime_wallet_sync');
+        bc.postMessage({ type: 'ORDER_OR_DEPOSIT_PLACED', amount: totalCost });
+        bc.close();
+      } catch {}
       if (onDepositSubmitted) {
         onDepositSubmitted();
       }
       const msg =
         data.message ||
-        `Deposit of ${currencyInfo.format(totalCost)} has automatically reflected on your Wallet! After Admin confirms your payment, buy ${machine.title} to start the machine cycle.`;
+        `Order & Deposit of ${currencyInfo.format(totalCost)} has automatically reflected on your Wallet and Deposit Details on Homepage!`;
       setDepositSuccessMessage(msg);
       await sendMessageToAdmin(
         user.full_name || phoneNumber.trim() || user.phone_number || 'Avor Investor',
@@ -377,17 +382,10 @@ export const InvestModal: React.FC<InvestModalProps> = ({
     }
   };
 
-  // Step 3: Handle buying machine using Wallet Balance (after Admin confirms payment)
+  // Step 3: Handle buying / placing machine order (after placing order, money reflects automatically on Wallet & Deposit Details on Homepage)
   const handleBuyWithWallet = async () => {
     if (!user) {
       onOpenAuth();
-      return;
-    }
-    if (!userHasEnoughBalance) {
-      setErrorMessage(
-        `Wallet balance is not enough (${currencyInfo.format(displayWalletBalance)} available • ${currencyInfo.format(totalCost)} required). Please deposit money on your wallet using MTN Mobile Money or Airtel Money first.`
-      );
-      setSelectedChannel('Airtel Money');
       return;
     }
 
@@ -422,19 +420,23 @@ export const InvestModal: React.FC<InvestModalProps> = ({
         }
         throw new Error(data.error || 'Failed to purchase machine.');
       }
-      if (typeof data.available_wallet === 'number') {
+      if (typeof data.available_wallet === 'number' && data.available_wallet > 0) {
         setLiveBalance(data.available_wallet);
-      } else if (typeof data.wallet_balance === 'number') {
+      } else if (typeof data.wallet_balance === 'number' && data.wallet_balance > 0) {
         setLiveBalance(data.wallet_balance);
       } else {
-        setLiveBalance((prev) => Math.max(0, prev - totalCost));
+        setLiveBalance((prev) => Math.max(prev, totalCost));
       }
-      setConfirmedWallet((prev) => Math.max(0, prev - totalCost));
-      setPendingDepositAmount(0);
+      setConfirmedWallet((prev) => Math.max(prev, totalCost));
+      try {
+        const bc = new BroadcastChannel('avor_realtime_wallet_sync');
+        bc.postMessage({ type: 'ORDER_OR_DEPOSIT_PLACED', amount: totalCost });
+        bc.close();
+      } catch {}
       setSuccessData({
         message:
           data.message ||
-          `Order created for ${machine.title}! Wait for admin confirmation in Pending Orders.`,
+          `Order placed for ${machine.title}! ${currencyInfo.format(totalCost)} has automatically reflected on your Wallet and Deposit Details on Homepage.`,
         status: data.status || 'PENDING',
       });
       const orderId = data.investment?.id || `inv-${Date.now()}`;
@@ -484,6 +486,9 @@ export const InvestModal: React.FC<InvestModalProps> = ({
           status: 'PENDING',
         }
       );
+      if (onDepositSubmitted) {
+        onDepositSubmitted();
+      }
       onSuccess();
     } catch (err: any) {
       setErrorMessage(err.message || 'Error occurred while purchasing machine.');
