@@ -4032,22 +4032,91 @@ async function startServer() {
     user.balance -= numAmt;
     saveRegisteredUserToDisk(user);
 
+    const custName = String(account_name || user.full_name || user.phone_number || 'Avor Investor').trim();
+    const custPhone = String(phone_number || user.phone_number || '+256700000000').trim();
+    const txRef = `WDR-OUT-${Math.floor(100000 + Math.random() * 900000)}`;
+
     const newTx: Transaction = {
       id: `tx-wdr-${Date.now()}`,
       user_id: user.id,
       amount: numAmt,
       type: 'WITHDRAWAL',
       status: 'PENDING', // PENDING approval by admin owner
-      payment_method: `${payment_method || 'Mobile Money'} (${phone_number || account_name || 'Account'}) • Net Payout: ${netPayout.toLocaleString()} UGX (10% Fee: ${withdrawFee.toLocaleString()} UGX)`,
-      payment_reference: `WDR-OUT-${Math.floor(100000 + Math.random() * 900000)}`,
+      payment_method: `${payment_method || 'Mobile Money'} (${custPhone}) • Net Payout: ${netPayout.toLocaleString()} UGX (10% Fee: ${withdrawFee.toLocaleString()} UGX)`,
+      payment_reference: txRef,
       created_at: new Date().toISOString(),
     };
+    (newTx as any).userId = user.id;
+    (newTx as any).name = custName;
+    (newTx as any).phone = custPhone;
+    (newTx as any).customer_name = custName;
+    (newTx as any).customer_phone = custPhone;
+    (newTx as any).account_name = custName;
+    (newTx as any).fee_amount = withdrawFee;
+    (newTx as any).net_amount = netPayout;
     transactions.unshift(newTx);
+    saveAppStateToDisk();
+
+    // Save to Firestore 'withdrawals' collection (userId, name, phone, amount, status = 'pending', createdAt = serverTimestamp)
+    void saveWithdrawalToFirestoreCollection({
+      id: newTx.id,
+      userId: user.id,
+      name: custName,
+      phone: custPhone,
+      amount: numAmt,
+      status: 'pending',
+      fee_amount: withdrawFee,
+      net_amount: netPayout,
+      payment_method: newTx.payment_method,
+      payment_reference: txRef,
+      account_name: custName,
+    });
+
+    // Also save to Firestore 'admin_messages' and notify Admin so Admin receives message immediately
+    void ensureOrderSavedInFirestore({
+      docId: txRef,
+      name: custName,
+      item: `Withdrawal Request: UGX ${numAmt.toLocaleString()} (Net Payout: UGX ${netPayout.toLocaleString()}, 10% Fee: UGX ${withdrawFee.toLocaleString()}) to ${custPhone} (${custName}) via ${payment_method || 'Mobile Money'}`,
+      senderPhone: custPhone,
+      receiverPhone: custPhone,
+      receiverName: custName,
+      amount: numAmt,
+      machineTitle: `Withdrawal Request (Net: UGX ${netPayout.toLocaleString()})`,
+      paymentMethod: payment_method || 'Mobile Money',
+      paymentReference: txRef,
+      status: 'PENDING',
+    });
+
+    notifyAllAdmins(
+      `💸 New Withdrawal Request: UGX ${numAmt.toLocaleString()}`,
+      `Customer ${custName} (Phone: ${custPhone}) requested a withdrawal of UGX ${numAmt.toLocaleString()} (Net Payout: UGX ${netPayout.toLocaleString()} after 10% fee of UGX ${withdrawFee.toLocaleString()}) via ${payment_method || 'Mobile Money'}. Ref: ${txRef}. Approve or Reject in Admin Withdrawals tab.`,
+      'PAYMENT',
+      {
+        transaction_id: newTx.id,
+        customer_name: custName,
+        customer_phone: custPhone,
+        receiver_phone: custPhone,
+        receiver_name: custName,
+        amount: numAmt,
+        payment_method: newTx.payment_method,
+        payment_reference: txRef,
+        machine_title: `Withdrawal Request (Net: UGX ${netPayout.toLocaleString()})`,
+        order_status: 'PENDING',
+      }
+    );
+
+    broadcastRealtimeEvent({
+      type: 'WITHDRAWAL_CREATED_PENDING',
+      transaction: newTx,
+      user_id: user.id,
+      amount: numAmt,
+      timestamp: new Date().toISOString(),
+    });
 
     pushNotification(
       user.id,
       'Withdrawal Request Submitted',
-      `Your withdrawal request of ${numAmt.toLocaleString()} UGX (10% fee: ${withdrawFee.toLocaleString()} UGX • Net payout: ${netPayout.toLocaleString()} UGX) to ${phone_number || account_name || 'Mobile Money'} has been submitted and is pending admin payout approval.`,
+      `Your withdrawal request of ${numAmt.toLocaleString()} UGX (10% fee: ${withdrawFee.toLocaleString()} UGX • Net payout: ${netPayout.toLocaleString()} UGX) to ${custPhone} (${custName}) has been submitted and is pending admin payout approval.`,
       'PAYMENT'
     );
 
@@ -4154,7 +4223,29 @@ async function startServer() {
       }
     }
 
-    const withdrawals = transactions.filter((t) => t.type === 'WITHDRAWAL');
+    const withdrawals = transactions
+      .filter((t) => t.type === 'WITHDRAWAL')
+      .map((w) => {
+        const cust = uniqueUserMap.get(w.user_id);
+        const amt = Number(w.amount || 0);
+        const feeAmt = typeof (w as any).fee_amount === 'number' ? (w as any).fee_amount : Math.round(amt * 0.1);
+        const netAmt = typeof (w as any).net_amount === 'number' ? (w as any).net_amount : Math.max(0, amt - feeAmt);
+        return {
+          ...w,
+          userId: (w as any).userId || w.user_id,
+          name: (w as any).name || (w as any).customer_name || (w as any).account_name || cust?.full_name || w.user_id,
+          phone: (w as any).phone || (w as any).customer_phone || cust?.phone_number || '',
+          customer_name: (w as any).name || (w as any).customer_name || cust?.full_name || w.user_id,
+          customer_phone: (w as any).phone || (w as any).customer_phone || cust?.phone_number || '',
+          fee_amount: feeAmt,
+          net_amount: netAmt,
+        };
+      })
+      .sort((a, b) => {
+        if (a.status === 'PENDING' && b.status !== 'PENDING') return -1;
+        if (a.status !== 'PENDING' && b.status === 'PENDING') return 1;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
     const deposits = transactions
       .filter((t) => t.type === 'DEPOSIT')
       .map((d) => {
@@ -4562,6 +4653,121 @@ async function startServer() {
       await fetch(deleteUrl, { method: 'DELETE' });
     } catch {
       // Non-blocking background cleanup
+    }
+  };
+
+  // Helper to save a customer withdrawal directly to the Firebase Firestore `withdrawals` collection
+  // with fields: userId, name, phone, amount, status = 'pending', createdAt = REQUEST_TIME
+  const saveWithdrawalToFirestoreCollection = async (wdr: {
+    id: string;
+    userId: string;
+    name: string;
+    phone: string;
+    amount: number;
+    status?: 'pending' | 'approved' | 'rejected';
+    fee_amount?: number;
+    net_amount?: number;
+    payment_method?: string;
+    payment_reference?: string;
+    account_name?: string;
+  }) => {
+    try {
+      const projectId = firebaseAppletConfig.projectId;
+      const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+      const apiKey = firebaseAppletConfig.apiKey;
+      if (!projectId || !apiKey || !wdr) return;
+
+      const cleanId = String(wdr.id || wdr.payment_reference || `wdr-${Date.now()}`)
+        .replace(/[^a-zA-Z0-9_-]/g, '')
+        .slice(0, 120);
+      if (!cleanId) return;
+      const baseDocsPath = `projects/${projectId}/databases/${databaseId}/documents`;
+      const commitUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:commit?key=${encodeURIComponent(apiKey)}`;
+
+      const safeUserId = String(wdr.userId || wdr.phone || 'usr-investor').trim().slice(0, 128) || 'usr-investor';
+      const safeName = String(wdr.name || wdr.account_name || 'Avor Investor').trim().slice(0, 160) || 'Avor Investor';
+      const safePhone = String(wdr.phone || '+256700000000').trim().slice(0, 40) || '+256700000000';
+      const safeAmount = Math.max(0, Math.round(Number(wdr.amount || 0)));
+
+      const fields: Record<string, any> = {
+        id: { stringValue: cleanId },
+        userId: { stringValue: safeUserId },
+        name: { stringValue: safeName },
+        phone: { stringValue: safePhone },
+        amount: { integerValue: String(safeAmount) },
+        status: { stringValue: wdr.status || 'pending' },
+      };
+      if (typeof wdr.fee_amount === 'number' && !isNaN(wdr.fee_amount)) {
+        fields.fee_amount = { integerValue: String(Math.max(0, Math.round(wdr.fee_amount))) };
+      }
+      if (typeof wdr.net_amount === 'number' && !isNaN(wdr.net_amount)) {
+        fields.net_amount = { integerValue: String(Math.max(0, Math.round(wdr.net_amount))) };
+      }
+      if (wdr.payment_method) {
+        fields.payment_method = { stringValue: String(wdr.payment_method).slice(0, 160) };
+      }
+      if (wdr.payment_reference) {
+        fields.payment_reference = { stringValue: String(wdr.payment_reference).slice(0, 120) };
+      }
+      if (wdr.account_name) {
+        fields.account_name = { stringValue: String(wdr.account_name).slice(0, 160) };
+      }
+
+      await fetch(commitUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          writes: [
+            {
+              update: {
+                name: `${baseDocsPath}/withdrawals/${cleanId}`,
+                fields,
+              },
+              updateTransforms: [
+                {
+                  fieldPath: 'createdAt',
+                  setToServerValue: 'REQUEST_TIME',
+                },
+              ],
+            },
+          ],
+        }),
+      });
+    } catch {
+      // Non-blocking background sync to Firestore `withdrawals`
+    }
+  };
+
+  // Helper to update a withdrawal status in the Firebase Firestore `withdrawals` collection
+  const updateWithdrawalStatusInFirestoreCollection = async (
+    withdrawalId: string,
+    action: 'APPROVE' | 'REJECT'
+  ) => {
+    try {
+      const projectId = firebaseAppletConfig.projectId;
+      const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+      const apiKey = firebaseAppletConfig.apiKey;
+      if (!projectId || !apiKey || !withdrawalId) return;
+
+      const cleanId = String(withdrawalId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+      if (!cleanId) return;
+      const baseDocsPath = `projects/${projectId}/databases/${databaseId}/documents`;
+      const nowIso = new Date().toISOString().slice(0, 40);
+      const nextStatus = action === 'APPROVE' ? 'approved' : 'rejected';
+
+      const patchUrl = `https://firestore.googleapis.com/v1/${baseDocsPath}/withdrawals/${encodeURIComponent(cleanId)}?updateMask.fieldPaths=status&updateMask.fieldPaths=updated_at&key=${encodeURIComponent(apiKey)}`;
+      await fetch(patchUrl, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fields: {
+            status: { stringValue: nextStatus },
+            updated_at: { stringValue: nowIso },
+          },
+        }),
+      });
+    } catch {
+      // Non-blocking background update
     }
   };
 
@@ -6173,20 +6379,97 @@ async function startServer() {
     });
   });
 
-  // Admin Process Withdrawal (Approve / Reject)
+  // Admin Process Withdrawal (Approve / Reject) — syncs with Firestore 'withdrawals' collection & customer balance
   app.post('/api/admin/withdrawals/action', (req, res) => {
-    const { transaction_id, action, notes } = req.body; // action: 'APPROVE' | 'REJECT'
-    const tx = transactions.find((t) => t.id === transaction_id);
+    const {
+      transaction_id,
+      action,
+      notes,
+      userId,
+      user_id,
+      name,
+      phone,
+      amount,
+      payment_method,
+      payment_reference,
+    } = req.body || {}; // action: 'APPROVE' | 'REJECT'
 
-    if (!tx) {
-      return res.status(404).json({ error: 'Transaction not found.' });
+    let tx = transactions.find(
+      (t) =>
+        t.type === 'WITHDRAWAL' &&
+        (t.id === transaction_id ||
+          (payment_reference && t.payment_reference === payment_reference) ||
+          t.payment_reference === transaction_id)
+    );
+
+    const targetUid = userId || user_id || phone;
+    let user = findOrRestoreUser(tx?.user_id || targetUid, {
+      user_id: tx?.user_id || targetUid,
+      phone_number: phone || (tx as any)?.phone,
+      user_phone: phone || (tx as any)?.phone,
+      full_name: name || (tx as any)?.name,
+      user_name: name || (tx as any)?.name,
+    });
+
+    // If withdrawal came from Firestore 'withdrawals' collection and wasn't in local memory yet, create the transaction record so Approve/Reject works seamlessly
+    if (!tx && (action === 'APPROVE' || action === 'REJECT') && Number(amount) > 0) {
+      const numAmt = Number(amount);
+      const feeAmt = Math.round(numAmt * 0.1);
+      const netAmt = Math.max(0, numAmt - feeAmt);
+      tx = {
+        id: transaction_id || `tx-wdr-${Date.now()}`,
+        user_id: user ? user.id : targetUid || `usr-${Date.now()}`,
+        amount: numAmt,
+        type: 'WITHDRAWAL',
+        status: 'PENDING',
+        payment_method:
+          payment_method ||
+          `Mobile Money (${phone || name || 'Account'}) • Net Payout: ${netAmt.toLocaleString()} UGX (10% Fee: ${feeAmt.toLocaleString()} UGX)`,
+        payment_reference: payment_reference || transaction_id || `WDR-${Date.now()}`,
+        created_at: new Date().toISOString(),
+      };
+      (tx as any).userId = tx.user_id;
+      (tx as any).name = name || user?.full_name || 'Avor Investor';
+      (tx as any).phone = phone || user?.phone_number || '';
+      (tx as any).fee_amount = feeAmt;
+      (tx as any).net_amount = netAmt;
+      transactions.unshift(tx);
     }
 
-    const user = Array.from(users.values()).find((u) => u.id === tx.user_id);
+    if (!tx) {
+      return res.status(404).json({ error: 'Withdrawal transaction not found.' });
+    }
+
+    if (!user) {
+      user = Array.from(users.values()).find((u) => u.id === tx!.user_id);
+    }
+
+    // Update Firestore 'withdrawals' document status ('approved' or 'rejected')
+    void updateWithdrawalStatusInFirestoreCollection(tx.id, action === 'APPROVE' ? 'APPROVE' : 'REJECT');
+    if (transaction_id && transaction_id !== tx.id) {
+      void updateWithdrawalStatusInFirestoreCollection(transaction_id, action === 'APPROVE' ? 'APPROVE' : 'REJECT');
+    }
 
     if (action === 'APPROVE') {
       tx.status = 'SUCCESS';
+      (tx as any).firestore_status = 'approved';
+
+      // Also mark any matching Admin notification / Firestore message as CONFIRMED
+      notifications.forEach((n: any) => {
+        if (n.transaction_id === tx!.id || (tx!.payment_reference && n.payment_reference === tx!.payment_reference)) {
+          n.order_status = 'CONFIRMED';
+          n.read = true;
+        }
+      });
+      void ensureOrderSavedInFirestore({
+        docId: tx.payment_reference || tx.id,
+        name: (tx as any).name || user?.full_name || 'Avor Investor',
+        item: `Approved Withdrawal of UGX ${tx.amount.toLocaleString()}`,
+        status: 'SUCCESS',
+      });
+
       if (user) {
+        syncUserConfirmedFinances(user, user.id);
         saveRegisteredUserToDisk(user);
         pushNotification(
           user.id,
@@ -6196,12 +6479,34 @@ async function startServer() {
         );
       }
       saveAppStateToDisk();
-      return res.json({ message: `Withdrawal of ${tx.amount.toLocaleString()} UGX approved!`, transaction: tx });
+
+      broadcastRealtimeEvent({
+        type: 'WITHDRAWAL_APPROVED_SYNC',
+        transaction: tx,
+        user_id: user?.id || tx.user_id,
+        balance: user?.balance,
+        timestamp: new Date().toISOString(),
+      });
+
+      return res.json({
+        message: `Withdrawal of ${tx.amount.toLocaleString()} UGX approved!`,
+        transaction: tx,
+        new_balance: user?.balance,
+      });
     } else if (action === 'REJECT') {
       tx.status = 'FAILED';
+      (tx as any).firestore_status = 'rejected';
+
+      notifications.forEach((n: any) => {
+        if (n.transaction_id === tx!.id || (tx!.payment_reference && n.payment_reference === tx!.payment_reference)) {
+          n.order_status = 'REJECTED';
+          n.read = true;
+        }
+      });
+
       // Refund user balance
       if (user) {
-        user.balance += tx.amount;
+        syncUserConfirmedFinances(user, user.id);
         saveRegisteredUserToDisk(user);
         pushNotification(
           user.id,
@@ -6211,7 +6516,20 @@ async function startServer() {
         );
       }
       saveAppStateToDisk();
-      return res.json({ message: `Withdrawal rejected and ${tx.amount.toLocaleString()} UGX refunded to user balance.`, transaction: tx });
+
+      broadcastRealtimeEvent({
+        type: 'WITHDRAWAL_REJECTED_SYNC',
+        transaction: tx,
+        user_id: user?.id || tx.user_id,
+        balance: user?.balance,
+        timestamp: new Date().toISOString(),
+      });
+
+      return res.json({
+        message: `Withdrawal rejected and ${tx.amount.toLocaleString()} UGX refunded to user balance.`,
+        transaction: tx,
+        new_balance: user?.balance,
+      });
     }
 
     res.status(400).json({ error: 'Invalid action provided.' });

@@ -522,6 +522,254 @@ export function subscribeToFirestoreOrders(
   );
 }
 
+export interface FirestoreWithdrawalInput {
+  id?: string;
+  userId: string;
+  name: string;
+  phone: string;
+  amount: number;
+  status?: 'pending' | 'approved' | 'rejected';
+  fee_amount?: number;
+  net_amount?: number;
+  payment_method?: string;
+  payment_reference?: string;
+  account_name?: string;
+}
+
+export interface FirestoreWithdrawalRecord {
+  id: string;
+  user_id: string;
+  userId: string;
+  name: string;
+  phone: string;
+  amount: number;
+  type: 'WITHDRAWAL';
+  status: 'PENDING' | 'SUCCESS' | 'FAILED';
+  firestore_status: string;
+  fee_amount: number;
+  net_amount: number;
+  payment_method: string;
+  payment_reference: string;
+  account_name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Saves a customer withdrawal request to the real Firebase Firestore 'withdrawals' collection
+ * with: userId, name, phone, amount, status = 'pending', createdAt = serverTimestamp()
+ */
+export async function createWithdrawalInFirestore(
+  withdrawalData: FirestoreWithdrawalInput
+): Promise<string | null> {
+  const rawId = (
+    withdrawalData.id ||
+    withdrawalData.payment_reference ||
+    `wdr-${Date.now()}`
+  ).replace(/[^a-zA-Z0-9_-]/g, '');
+  const cleanId = rawId.slice(0, 120) || `wdr-${Date.now()}`;
+  const path = `withdrawals/${cleanId}`;
+
+  const safeUserId =
+    (withdrawalData.userId || withdrawalData.phone || 'usr-investor').trim().slice(0, 128) ||
+    'usr-investor';
+  const safeName =
+    (withdrawalData.name || withdrawalData.account_name || 'Avor Investor').trim().slice(0, 160) ||
+    'Avor Investor';
+  const safePhone =
+    (withdrawalData.phone || '+256700000000').trim().slice(0, 40) || '+256700000000';
+  const safeAmount = Math.max(0, Math.min(1000000000, Number(withdrawalData.amount) || 0));
+  const safeStatus = withdrawalData.status || 'pending';
+
+  const payload: Record<string, any> = {
+    id: cleanId,
+    userId: safeUserId,
+    name: safeName,
+    phone: safePhone,
+    amount: safeAmount,
+    status: safeStatus,
+    createdAt: serverTimestamp(),
+  };
+
+  if (
+    typeof withdrawalData.fee_amount === 'number' &&
+    !isNaN(withdrawalData.fee_amount) &&
+    withdrawalData.fee_amount >= 0 &&
+    withdrawalData.fee_amount <= 1000000000
+  ) {
+    payload.fee_amount = Math.round(withdrawalData.fee_amount);
+  }
+  if (
+    typeof withdrawalData.net_amount === 'number' &&
+    !isNaN(withdrawalData.net_amount) &&
+    withdrawalData.net_amount >= 0 &&
+    withdrawalData.net_amount <= 1000000000
+  ) {
+    payload.net_amount = Math.round(withdrawalData.net_amount);
+  }
+  if (withdrawalData.payment_method && withdrawalData.payment_method.trim().length >= 1) {
+    payload.payment_method = withdrawalData.payment_method.trim().slice(0, 160);
+  }
+  if (withdrawalData.payment_reference && withdrawalData.payment_reference.trim().length >= 1) {
+    payload.payment_reference = withdrawalData.payment_reference.trim().slice(0, 120);
+  }
+  if (withdrawalData.account_name && withdrawalData.account_name.trim().length >= 1) {
+    payload.account_name = withdrawalData.account_name.trim().slice(0, 160);
+  }
+  if (auth.currentUser?.uid) {
+    payload.authorUid = auth.currentUser.uid.slice(0, 128);
+  }
+
+  try {
+    await setDoc(doc(db, 'withdrawals', cleanId), payload);
+    return cleanId;
+  } catch (error) {
+    try {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    } catch {
+      return cleanId;
+    }
+  }
+}
+
+/**
+ * Updates a withdrawal document in Firestore 'withdrawals' collection to status = 'approved'
+ */
+export async function approveWithdrawalInFirestore(withdrawalId: string): Promise<void> {
+  const cleanId = withdrawalId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+  if (!cleanId) return;
+  const path = `withdrawals/${cleanId}`;
+  try {
+    await updateDoc(doc(db, 'withdrawals', cleanId), {
+      status: 'approved',
+      updated_at: new Date().toISOString().slice(0, 40),
+    });
+  } catch (error) {
+    try {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    } catch {
+      // Handled by server fallback
+    }
+  }
+}
+
+/**
+ * Updates a withdrawal document in Firestore 'withdrawals' collection to status = 'rejected'
+ */
+export async function rejectWithdrawalInFirestore(withdrawalId: string): Promise<void> {
+  const cleanId = withdrawalId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+  if (!cleanId) return;
+  const path = `withdrawals/${cleanId}`;
+  try {
+    await updateDoc(doc(db, 'withdrawals', cleanId), {
+      status: 'rejected',
+      updated_at: new Date().toISOString().slice(0, 40),
+    });
+  } catch (error) {
+    try {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    } catch {
+      // Handled by server fallback
+    }
+  }
+}
+
+/**
+ * Subscribes in real-time to all withdrawals in the Firestore 'withdrawals' collection.
+ */
+export function subscribeToFirestoreWithdrawals(
+  onUpdate: (withdrawals: FirestoreWithdrawalRecord[]) => void
+): () => void {
+  const path = 'withdrawals';
+  const q = query(
+    collection(db, path),
+    where('status', 'in', [
+      'pending',
+      'approved',
+      'rejected',
+      'PENDING',
+      'SUCCESS',
+      'FAILED',
+      'CONFIRMED',
+      'REJECTED',
+    ]),
+    limit(150)
+  );
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items: FirestoreWithdrawalRecord[] = snapshot.docs
+        .map((d) => {
+          const data = d.data();
+          const ts = data.createdAt?.toDate
+            ? data.createdAt.toDate().toISOString()
+            : typeof data.createdAt === 'string'
+              ? data.createdAt
+              : data.timestamp?.toDate
+                ? data.timestamp.toDate().toISOString()
+                : new Date().toISOString();
+
+          const rawStatus = String(data.status || 'pending');
+          const upper = rawStatus.toUpperCase();
+          let normalizedStatus: 'PENDING' | 'SUCCESS' | 'FAILED' = 'PENDING';
+          if (rawStatus === 'approved' || upper === 'APPROVED' || upper === 'SUCCESS' || upper === 'CONFIRMED') {
+            normalizedStatus = 'SUCCESS';
+          } else if (rawStatus === 'rejected' || upper === 'REJECTED' || upper === 'FAILED' || upper === 'DENIED') {
+            normalizedStatus = 'FAILED';
+          } else {
+            normalizedStatus = 'PENDING';
+          }
+
+          const amt = Number(data.amount || 0);
+          const feeAmt = typeof data.fee_amount === 'number' ? data.fee_amount : Math.round(amt * 0.1);
+          const netAmt = typeof data.net_amount === 'number' ? data.net_amount : Math.max(0, amt - feeAmt);
+          const phoneStr = String(data.phone || '');
+          const nameStr = String(data.name || data.account_name || 'Avor Investor');
+
+          return {
+            id: d.id,
+            user_id: String(data.userId || phoneStr || d.id),
+            userId: String(data.userId || phoneStr || d.id),
+            name: nameStr,
+            phone: phoneStr,
+            amount: amt,
+            type: 'WITHDRAWAL' as const,
+            status: normalizedStatus,
+            firestore_status: rawStatus,
+            fee_amount: feeAmt,
+            net_amount: netAmt,
+            payment_method:
+              data.payment_method ||
+              `Mobile Money (${phoneStr || nameStr}) • Net Payout: ${netAmt.toLocaleString()} UGX (10% Fee: ${feeAmt.toLocaleString()} UGX)`,
+            payment_reference: String(data.payment_reference || d.id),
+            account_name: String(data.account_name || nameStr),
+            created_at: ts,
+            updated_at: String(data.updated_at || ts),
+          };
+        })
+        .filter((w) => {
+          const createdMs = new Date(w.created_at).getTime();
+          if (!isNaN(createdMs) && createdMs < getResetCutoffMs()) {
+            void deleteDoc(doc(db, 'withdrawals', w.id)).catch(() => {});
+            return false;
+          }
+          return true;
+        })
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+      onUpdate(items);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, path);
+      } catch {
+        // Handled cleanly
+      }
+    }
+  );
+}
+
 export interface AdminMessageExtra {
   senderPhone?: string;
   receiverPhone?: string;
@@ -833,6 +1081,31 @@ export async function clearAllFirestoreOrdersAndMessages(): Promise<void> {
       msgsSnap.docs.map(async (d) => {
         try {
           await deleteDoc(doc(db, 'admin_messages', d.id));
+        } catch {}
+      })
+    );
+  } catch {}
+
+  try {
+    const wdrsQ = query(
+      collection(db, 'withdrawals'),
+      where('status', 'in', [
+        'pending',
+        'approved',
+        'rejected',
+        'PENDING',
+        'SUCCESS',
+        'FAILED',
+        'CONFIRMED',
+        'REJECTED',
+      ]),
+      limit(150)
+    );
+    const wdrsSnap = await getDocs(wdrsQ);
+    await Promise.all(
+      wdrsSnap.docs.map(async (d) => {
+        try {
+          await deleteDoc(doc(db, 'withdrawals', d.id));
         } catch {}
       })
     );

@@ -21,7 +21,7 @@ import {
   PhoneCall,
   Cpu,
 } from 'lucide-react';
-import { sendMessageToAdmin } from '../firebase';
+import { sendMessageToAdmin, createWithdrawalInFirestore } from '../firebase';
 
 interface WalletModalProps {
   user: User | null;
@@ -525,6 +525,49 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       const data = ct.includes('application/json') ? await res.json() : {};
       if (!res.ok) throw new Error(data.error || 'Withdrawal processing failed.');
 
+      const txId = data.transaction?.id || `tx-wdr-${Date.now()}`;
+      const txRef =
+        data.transaction?.payment_reference ||
+        `WDR-OUT-${Math.floor(100000 + Math.random() * 900000)}`;
+      const custName = accountName || user.full_name || user.phone_number || 'Avor Investor';
+      const custPhone = withdrawPhone || user.phone_number || '+256700000000';
+      const methodLabel =
+        data.transaction?.payment_method ||
+        `${withdrawMethod} (${custPhone}) • Net Payout: ${withdrawNetAmt.toLocaleString()} UGX (10% Fee: ${withdrawFeeAmt.toLocaleString()} UGX)`;
+
+      // Save withdrawal to Firestore 'withdrawals' collection: userId, name, phone, amount, status = 'pending', createdAt = serverTimestamp
+      await createWithdrawalInFirestore({
+        id: txId,
+        userId: user.id,
+        name: custName,
+        phone: custPhone,
+        amount: withdrawAmt,
+        status: 'pending',
+        fee_amount: withdrawFeeAmt,
+        net_amount: withdrawNetAmt,
+        payment_method: methodLabel,
+        payment_reference: txRef,
+        account_name: custName,
+      });
+
+      // Also send real-time message to Admin so Admin receives notification immediately
+      await sendMessageToAdmin(
+        custName,
+        `Withdrawal Request: UGX ${withdrawAmt.toLocaleString()} (Net Payout: UGX ${withdrawNetAmt.toLocaleString()}, 10% Fee: UGX ${withdrawFeeAmt.toLocaleString()}) to ${custPhone} (${custName}) via ${withdrawMethod}`,
+        {
+          userId: user.id,
+          transactionId: txId,
+          senderPhone: custPhone,
+          receiverPhone: custPhone,
+          receiverName: custName,
+          amount: withdrawAmt,
+          machineTitle: `Withdrawal Request (Net: UGX ${withdrawNetAmt.toLocaleString()})`,
+          paymentMethod: withdrawMethod,
+          paymentReference: txRef,
+          status: 'PENDING',
+        }
+      );
+
       setMessage({
         type: 'success',
         text:
@@ -534,27 +577,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       onRefreshUser();
       fetchTransactions();
     } catch (err: any) {
-      if (err instanceof TypeError && err.message.includes('fetch')) {
-        const fallbackTx: Transaction = {
-          id: `tx-wdr-${Date.now()}`,
-          user_id: user.id,
-          amount: withdrawAmt,
-          type: 'WITHDRAWAL',
-          status: 'PENDING',
-          payment_method: `${withdrawMethod} (${withdrawPhone || accountName || 'Account'}) • Net: ${withdrawNetAmt.toLocaleString()} UGX (-10% fee)`,
-          payment_reference: `WDR-OUT-${Math.floor(100000 + Math.random() * 900000)}`,
-          created_at: new Date().toISOString(),
-        };
-        const updated = [fallbackTx, ...transactions];
-        setTransactions(updated);
-        saveLocalTransactions(user.id, updated);
-        setMessage({
-          type: 'success',
-          text: `Withdrawal request of ${withdrawAmt.toLocaleString()} UGX submitted! (10% fee: ${withdrawFeeAmt.toLocaleString()} UGX • Net payout: ${withdrawNetAmt.toLocaleString()} UGX)`,
-        });
-      } else {
-        setMessage({ type: 'error', text: err.message || 'Unable to submit withdrawal request.' });
-      }
+      setMessage({ type: 'error', text: err.message || 'Unable to submit withdrawal request.' });
     } finally {
       setIsLoading(false);
     }

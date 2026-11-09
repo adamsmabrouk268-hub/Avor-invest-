@@ -255,6 +255,99 @@
         }
       },
       "required": ["email", "role", "createdAt"]
+    },
+    "Withdrawal": {
+      "title": "Withdrawal",
+      "description": "Real-time customer withdrawal request stored in the 'withdrawals' Firestore collection.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Customer user ID",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "description": "Customer full name or recipient account name",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "phone": {
+          "type": "string",
+          "description": "Customer recipient Mobile Money phone number",
+          "minLength": 3,
+          "maxLength": 40
+        },
+        "amount": {
+          "type": "number",
+          "description": "Withdrawal amount in UGX"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "approved",
+            "rejected",
+            "PENDING",
+            "SUCCESS",
+            "FAILED",
+            "CONFIRMED",
+            "REJECTED"
+          ],
+          "description": "Withdrawal status: pending -> approved or rejected"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the withdrawal was requested"
+        },
+        "id": {
+          "type": "string",
+          "description": "Withdrawal document identifier",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "fee_amount": {
+          "type": "number",
+          "description": "10% withdrawal fee in UGX"
+        },
+        "net_amount": {
+          "type": "number",
+          "description": "Net payout amount in UGX after 10% fee"
+        },
+        "payment_method": {
+          "type": "string",
+          "description": "Mobile Money carrier or payout method",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "payment_reference": {
+          "type": "string",
+          "description": "Withdrawal reference code",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "account_name": {
+          "type": "string",
+          "description": "Registered Mobile Money account name",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Last status update ISO timestamp",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "authorUid": {
+          "type": "string",
+          "description": "Optional Firebase Auth UID",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": ["userId", "name", "phone", "amount", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -262,9 +355,13 @@
       "schema": { "$ref": "#/entities/Order" },
       "description": "Collection of real-time customer machine orders (pending -> confirmed -> ACTIVE & DELIVERED, or denied)."
     },
+    "/withdrawals/{withdrawalId}": {
+      "schema": { "$ref": "#/entities/Withdrawal" },
+      "description": "Collection of real-time customer withdrawal requests (pending -> approved or rejected)."
+    },
     "/admin_messages/{messageId}": {
       "schema": { "$ref": "#/entities/AdminMessage" },
-      "description": "Collection of real-time messages sent to Admin when a user deposits money or buys a machine."
+      "description": "Collection of real-time messages sent to Admin when a user deposits money, buys a machine, or requests a withdrawal."
     },
     "/admins/{adminUid}": {
       "schema": { "$ref": "#/entities/AdminUser" },

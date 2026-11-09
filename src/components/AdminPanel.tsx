@@ -7,10 +7,14 @@ import {
   auth,
   subscribeToFirestoreAdminMessages,
   subscribeToFirestoreOrders,
+  subscribeToFirestoreWithdrawals,
   confirmOrderInFirestore,
   denyOrderInFirestore,
+  approveWithdrawalInFirestore,
+  rejectWithdrawalInFirestore,
   clearAllFirestoreOrdersAndMessages,
   FirestoreOrderRecord,
+  FirestoreWithdrawalRecord,
   signInAdminWithGoogle,
   deleteFirestoreAdminMessage,
 } from '../firebase';
@@ -142,9 +146,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
   const [adminMessages, setAdminMessages] = useState<any[]>([]);
   const [firestoreMessages, setFirestoreMessages] = useState<any[]>([]);
   const [firestoreOrders, setFirestoreOrders] = useState<FirestoreOrderRecord[]>([]);
+  const [firestoreWithdrawals, setFirestoreWithdrawals] = useState<FirestoreWithdrawalRecord[]>([]);
   const [serverInvestments, setServerInvestments] = useState<any[]>([]);
+  const [serverWithdrawals, setServerWithdrawals] = useState<any[]>([]);
   const [firebaseAdminEmail, setFirebaseAdminEmail] = useState<string | null>(null);
-  const [withdrawals, setWithdrawals] = useState<Transaction[]>([]);
+  const [withdrawals, setWithdrawals] = useState<any[]>([]);
   const [investmentsLedger, setInvestmentsLedger] = useState<any[]>([]);
   const [userList, setUserList] = useState<User[]>([]);
   const [machineList, setMachineList] = useState<Machine[]>([]);
@@ -265,7 +271,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         setStats(data);
         setDeposits(data.deposits || []);
         setAdminMessages(data.admin_notifications || []);
-        setWithdrawals(data.withdrawals || []);
+        setServerWithdrawals(data.withdrawals || []);
         setServerInvestments(data.investments || []);
         setUserList(data.users || []);
         if (data.homepage_config) {
@@ -310,8 +316,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       } catch {}
 
       setFirestoreOrders([]);
+      setFirestoreWithdrawals([]);
       setFirestoreMessages([]);
       setServerInvestments([]);
+      setServerWithdrawals([]);
       setInvestmentsLedger([]);
       setDeposits([]);
       setWithdrawals([]);
@@ -361,8 +369,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
             const parsed = JSON.parse(event.data);
             if (parsed?.order_type === 'SYSTEM_RESET_ZERO') {
               setFirestoreOrders([]);
+              setFirestoreWithdrawals([]);
               setFirestoreMessages([]);
               setServerInvestments([]);
+              setServerWithdrawals([]);
               setInvestmentsLedger([]);
               setDeposits([]);
               setWithdrawals([]);
@@ -373,6 +383,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
               parsed &&
               (parsed.type === 'DEPOSIT_CREATED_PENDING' ||
                 parsed.type === 'MACHINE_ORDER_CREATED_PENDING' ||
+                parsed.type === 'WITHDRAWAL_CREATED_PENDING' ||
+                parsed.type === 'WITHDRAWAL_APPROVED_SYNC' ||
+                parsed.type === 'WITHDRAWAL_REJECTED_SYNC' ||
                 parsed.type === 'WALLET_CONFIRMED_SYNC' ||
                 parsed.type === 'WALLET_DENIED_SYNC')
             ) {
@@ -384,8 +397,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
       const handleSystemZeroReset = () => {
         setFirestoreOrders([]);
+        setFirestoreWithdrawals([]);
         setFirestoreMessages([]);
         setServerInvestments([]);
+        setServerWithdrawals([]);
         setInvestmentsLedger([]);
         setDeposits([]);
         setWithdrawals([]);
@@ -411,6 +426,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     const unsubOrders = subscribeToFirestoreOrders((orders) => {
       setFirestoreOrders(orders);
     });
+    const unsubWithdrawals = subscribeToFirestoreWithdrawals((wdrs) => {
+      setFirestoreWithdrawals(wdrs);
+    });
     const unsubTrigger = notifyAdminOnDeposit.startListener();
 
     const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
@@ -424,9 +442,57 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       unsubAuth();
       unsubFirestore();
       unsubOrders();
+      unsubWithdrawals();
       unsubTrigger();
     };
   }, [isAdminAuthenticated]);
+
+  // Real-time merge of Firebase Firestore `withdrawals` collection with backend withdrawals
+  useEffect(() => {
+    const mergedWdrMap = new Map<string, any>();
+
+    // 1. Load all withdrawals from real-time Firebase Firestore `withdrawals` collection first
+    for (const fbWdr of firestoreWithdrawals) {
+      mergedWdrMap.set(fbWdr.id, {
+        ...fbWdr,
+        userId: fbWdr.userId || fbWdr.user_id || fbWdr.phone,
+        user_id: fbWdr.user_id || fbWdr.userId || fbWdr.phone,
+        name: fbWdr.name || fbWdr.account_name || 'Avor Investor',
+        phone: fbWdr.phone || '',
+      });
+    }
+
+    // 2. Merge with backend server withdrawals
+    for (const srvWdr of serverWithdrawals) {
+      const existingFb = mergedWdrMap.get(srvWdr.id);
+      if (existingFb) {
+        mergedWdrMap.set(srvWdr.id, {
+          ...srvWdr,
+          ...existingFb,
+          status: existingFb.status || srvWdr.status,
+          firestore_status:
+            existingFb.firestore_status ||
+            (srvWdr.status === 'SUCCESS' ? 'approved' : srvWdr.status === 'FAILED' ? 'rejected' : 'pending'),
+        });
+      } else {
+        mergedWdrMap.set(srvWdr.id, {
+          ...srvWdr,
+          userId: srvWdr.userId || srvWdr.user_id || '',
+          name: srvWdr.name || srvWdr.customer_name || srvWdr.user_id || 'Avor Investor',
+          phone: srvWdr.phone || srvWdr.customer_phone || '',
+          firestore_status:
+            srvWdr.status === 'SUCCESS' ? 'approved' : srvWdr.status === 'FAILED' ? 'rejected' : 'pending',
+        });
+      }
+    }
+
+    const mergedWdrList = Array.from(mergedWdrMap.values()).sort((a, b) => {
+      if (a.status === 'PENDING' && b.status !== 'PENDING') return -1;
+      if (a.status !== 'PENDING' && b.status === 'PENDING') return 1;
+      return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+    });
+    setWithdrawals(mergedWdrList);
+  }, [firestoreWithdrawals, serverWithdrawals]);
 
   // Real-time merge of Firebase Firestore `orders` collection with backend investments
   useEffect(() => {
@@ -818,16 +884,36 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     }
   };
 
-  // Handle Withdrawal Action
-  const handleWithdrawalAction = async (transactionId: string, action: 'APPROVE' | 'REJECT') => {
+  // Handle Withdrawal Action (Approve / Reject in Firestore 'withdrawals' collection and backend)
+  const handleWithdrawalAction = async (
+    transactionId: string,
+    action: 'APPROVE' | 'REJECT',
+    wdrObj?: any
+  ) => {
     setStatusMessage(null);
+    const targetWdr = wdrObj || withdrawals.find((w) => w.id === transactionId);
     try {
+      // 1. Update Firestore 'withdrawals' document first
+      if (action === 'APPROVE') {
+        await approveWithdrawalInFirestore(transactionId);
+      } else {
+        await rejectWithdrawalInFirestore(transactionId);
+      }
+
+      // 2. Sync with backend server so customer balance & notifications stay in lockstep
       const res = await fetch('/api/admin/withdrawals/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           transaction_id: transactionId,
           action,
+          userId: targetWdr?.userId || targetWdr?.user_id,
+          user_id: targetWdr?.user_id || targetWdr?.userId,
+          name: targetWdr?.name,
+          phone: targetWdr?.phone,
+          amount: targetWdr?.amount,
+          payment_method: targetWdr?.payment_method,
+          payment_reference: targetWdr?.payment_reference,
           notes: action === 'APPROVE' ? 'Paid out via admin gateway' : 'Declined by admin',
         }),
       });
@@ -837,9 +923,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
       setStatusMessage({
         type: 'success',
-        text: action === 'APPROVE' ? 'Withdrawal approved & paid out!' : 'Withdrawal rejected & refunded.',
+        text:
+          action === 'APPROVE'
+            ? 'Withdrawal approved & paid out! (Firestore status updated to "approved")'
+            : 'Withdrawal rejected & refunded to customer balance! (Firestore status updated to "rejected")',
       });
-      fetchAdminData();
+      await fetchAdminData();
+      if (onDataChanged) onDataChanged();
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message });
     }
@@ -1597,7 +1687,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
             >
               <span className="text-[10px] text-slate-400 font-bold uppercase block">Pending Withdrawals</span>
               <span className="text-base font-extrabold text-rose-400 font-mono mt-0.5 block">
-                {stats.pending_withdrawals_count ?? 0} Requests
+                {withdrawals.filter((w) => w.status === 'PENDING').length} Requests
               </span>
               <span className="text-[10px] text-slate-500 block">Awaiting Admin approval</span>
             </div>
@@ -2664,13 +2754,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         <DepositNumbersManager onRefreshAdmin={fetchAdminData} />
       )}
 
-      {/* TAB 2: WITHDRAWALS MANAGEMENT */}
+      {/* TAB 2: WITHDRAWALS MANAGEMENT (Real-Time Firestore 'withdrawals' Collection) */}
       {activeTab === 'WITHDRAWALS' && (
         <div className="shining-card border border-blue-950/80 rounded-2xl p-6 space-y-4 shadow-xl text-white">
-          <div className="flex items-center justify-between pb-3 border-b border-blue-950/80">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-blue-950/80">
             <div>
-              <h3 className="text-base font-extrabold text-white">Withdrawal Payout Requests</h3>
-              <p className="text-xs text-slate-300">Approve payouts after time lock/duration to process mobile money cashouts.</p>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-extrabold text-white">Withdrawal Payout Requests</h3>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-[10px] font-mono font-bold">
+                  Firestore &apos;withdrawals&apos; Live
+                </span>
+              </div>
+              <p className="text-xs text-slate-300">
+                Real-time withdrawals from Firebase project <span className="font-mono text-sky-300">avorinvest</span>. Approve or Reject customer withdrawal requests.
+              </p>
+            </div>
+            <div className="text-xs font-mono text-slate-300">
+              Total: <span className="font-bold text-white">{withdrawals.length}</span> • Pending:{' '}
+              <span className="font-bold text-amber-300">
+                {withdrawals.filter((w) => w.status === 'PENDING').length}
+              </span>
             </div>
           </div>
 
@@ -2684,67 +2787,92 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                 <thead>
                   <tr className="border-b border-blue-950/80 bg-[#070e1f] text-slate-300 uppercase text-[10px] font-bold">
                     <th className="py-3 px-3">Date</th>
-                    <th className="py-3 px-3">User / Account Info</th>
+                    <th className="py-3 px-3">Customer Name &amp; Phone</th>
                     <th className="py-3 px-3">Withdraw Amount</th>
-                    <th className="py-3 px-3">Ref Code</th>
+                    <th className="py-3 px-3">Ref / ID</th>
                     <th className="py-3 px-3">Status</th>
                     <th className="py-3 px-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-blue-950/60">
-                  {withdrawals.map((w) => (
-                    <tr key={w.id} className="hover:bg-[#0c1630]/60 transition-colors">
-                      <td className="py-3 px-3 font-mono text-[11px] text-slate-400">
-                        {new Date(w.created_at).toLocaleDateString()}
-                      </td>
-                      <td className="py-3 px-3 font-bold text-white">
-                        <div>{w.user_id}</div>
-                        <span className="text-[10px] text-slate-400 font-normal block">{w.payment_method}</span>
-                      </td>
-                      <td className="py-3 px-3 font-mono font-bold text-sky-400">
-                        UGX {w.amount.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-3 font-mono text-[11px] text-slate-400">
-                        {w.payment_reference}
-                      </td>
-                      <td className="py-3 px-3">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold font-mono uppercase ${
-                            w.status === 'SUCCESS'
-                              ? 'bg-emerald-950/70 text-emerald-300 border border-emerald-500/40'
-                              : w.status === 'PENDING'
-                              ? 'bg-blue-950/70 text-blue-300 border border-blue-500/40 animate-pulse'
-                              : 'bg-rose-950/70 text-rose-300 border border-rose-500/40'
-                          }`}
-                        >
-                          {w.status}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        {w.status === 'PENDING' ? (
-                          <div className="flex items-center justify-end gap-2">
-                            <button
-                              onClick={() => handleWithdrawalAction(w.id, 'APPROVE')}
-                              className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-[10px] font-black rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-xs border border-emerald-500/30"
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                              <span>Approve & Pay Out</span>
-                            </button>
+                  {withdrawals.map((w) => {
+                    const feeAmt =
+                      typeof w.fee_amount === 'number' ? w.fee_amount : Math.round(Number(w.amount || 0) * 0.1);
+                    const netAmt =
+                      typeof w.net_amount === 'number'
+                        ? w.net_amount
+                        : Math.max(0, Number(w.amount || 0) - feeAmt);
+                    return (
+                      <tr key={w.id} className="hover:bg-[#0c1630]/60 transition-colors">
+                        <td className="py-3 px-3 font-mono text-[11px] text-slate-400">
+                          {new Date(w.created_at).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-3 font-bold text-white">
+                          <div className="text-sky-200">{w.name || w.customer_name || 'Avor Investor'}</div>
+                          {w.phone && (
+                            <span className="text-[11px] text-emerald-300 font-mono block">
+                              Phone: {w.phone}
+                            </span>
+                          )}
+                          <span className="text-[10px] text-slate-400 font-mono block">
+                            User ID: {w.userId || w.user_id}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-normal block">
+                            {w.payment_method}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 font-mono">
+                          <span className="font-bold text-sky-400 block">
+                            UGX {Number(w.amount || 0).toLocaleString()}
+                          </span>
+                          <span className="text-[10px] text-emerald-300 block">
+                            Net Payout: UGX {netAmt.toLocaleString()} (-10% fee: {feeAmt.toLocaleString()})
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 font-mono text-[11px] text-slate-400">
+                          {w.payment_reference || w.id}
+                        </td>
+                        <td className="py-3 px-3">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold font-mono uppercase ${
+                              w.status === 'SUCCESS'
+                                ? 'bg-emerald-950/70 text-emerald-300 border border-emerald-500/40'
+                                : w.status === 'PENDING'
+                                ? 'bg-blue-950/70 text-blue-300 border border-blue-500/40 animate-pulse'
+                                : 'bg-rose-950/70 text-rose-300 border border-rose-500/40'
+                            }`}
+                          >
+                            {w.firestore_status || w.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          {w.status === 'PENDING' ? (
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                onClick={() => handleWithdrawalAction(w.id, 'APPROVE', w)}
+                                className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-[10px] font-black rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-xs border border-emerald-500/30"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Approve</span>
+                              </button>
 
-                            <button
-                              onClick={() => handleWithdrawalAction(w.id, 'REJECT')}
-                              className="px-3 py-1.5 bg-rose-950/60 hover:bg-rose-900/60 text-rose-300 text-[10px] font-bold rounded-lg border border-rose-500/30 transition-all flex items-center gap-1 cursor-pointer"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                              <span>Decline & Refund</span>
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="text-[10px] text-slate-400 font-mono">Processed</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                              <button
+                                onClick={() => handleWithdrawalAction(w.id, 'REJECT', w)}
+                                className="px-3 py-1.5 bg-rose-950/60 hover:bg-rose-900/60 text-rose-300 text-[10px] font-bold rounded-lg border border-rose-500/30 transition-all flex items-center gap-1 cursor-pointer"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                                <span>Reject</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {w.status === 'SUCCESS' ? 'Approved' : 'Rejected'}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

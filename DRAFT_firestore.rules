@@ -101,6 +101,49 @@ service cloud.firestore {
         (!('updated_at' in data) || (data.updated_at is string && data.updated_at.size() >= 1 && data.updated_at.size() <= 60));
     }
 
+    function isValidWithdrawal(data) {
+      return data.keys().hasAll(['userId', 'name', 'phone', 'amount', 'status', 'createdAt']) &&
+        data.keys().hasOnly([
+          'userId',
+          'name',
+          'phone',
+          'amount',
+          'status',
+          'createdAt',
+          'id',
+          'fee_amount',
+          'net_amount',
+          'payment_method',
+          'payment_reference',
+          'account_name',
+          'updated_at',
+          'authorUid'
+        ]) &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 160 &&
+        data.phone is string && data.phone.size() >= 3 && data.phone.size() <= 40 &&
+        data.amount is number && data.amount >= 0 && data.amount <= 1000000000 &&
+        data.createdAt is timestamp &&
+        data.status is string && data.status in [
+          'pending',
+          'approved',
+          'rejected',
+          'PENDING',
+          'SUCCESS',
+          'FAILED',
+          'CONFIRMED',
+          'REJECTED'
+        ] &&
+        (!('id' in data) || (data.id is string && data.id.size() >= 1 && data.id.size() <= 128)) &&
+        (!('fee_amount' in data) || (data.fee_amount is number && data.fee_amount >= 0 && data.fee_amount <= 1000000000)) &&
+        (!('net_amount' in data) || (data.net_amount is number && data.net_amount >= 0 && data.net_amount <= 1000000000)) &&
+        (!('payment_method' in data) || (data.payment_method is string && data.payment_method.size() >= 1 && data.payment_method.size() <= 160)) &&
+        (!('payment_reference' in data) || (data.payment_reference is string && data.payment_reference.size() >= 1 && data.payment_reference.size() <= 120)) &&
+        (!('account_name' in data) || (data.account_name is string && data.account_name.size() >= 1 && data.account_name.size() <= 160)) &&
+        (!('updated_at' in data) || (data.updated_at is string && data.updated_at.size() >= 1 && data.updated_at.size() <= 60)) &&
+        (!('authorUid' in data) || (data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128));
+    }
+
     function isValidAdminMessage(data) {
       return data.keys().hasAll(['name', 'item', 'timestamp', 'status']) &&
         data.keys().hasOnly([
@@ -217,6 +260,70 @@ service cloud.firestore {
           'ACTIVE',
           'COMPLETED',
           'PAYOUT_COMPLETE'
+        ]
+      );
+    }
+
+    match /withdrawals/{withdrawalId} {
+      allow get: if isValidId(withdrawalId) && (
+        isAdmin() ||
+        existing().status in [
+          'pending',
+          'approved',
+          'rejected',
+          'PENDING',
+          'SUCCESS',
+          'FAILED',
+          'CONFIRMED',
+          'REJECTED'
+        ]
+      );
+      allow list: if isAdmin() || resource.data.status in [
+        'pending',
+        'approved',
+        'rejected',
+        'PENDING',
+        'SUCCESS',
+        'FAILED',
+        'CONFIRMED',
+        'REJECTED'
+      ];
+      allow create: if isValidId(withdrawalId) && isValidWithdrawal(incoming()) && incoming().createdAt == request.time;
+      allow update: if isValidId(withdrawalId) && isValidWithdrawal(incoming()) && (
+        isAdmin() ||
+        (
+          incoming().userId == existing().userId &&
+          incoming().name == existing().name &&
+          incoming().phone == existing().phone &&
+          incoming().amount == existing().amount &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().status in [
+            'pending',
+            'approved',
+            'rejected',
+            'PENDING',
+            'SUCCESS',
+            'FAILED',
+            'CONFIRMED',
+            'REJECTED'
+          ] &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status',
+            'updated_at'
+          ])
+        )
+      );
+      allow delete: if isValidId(withdrawalId) && (
+        isAdmin() ||
+        existing().status in [
+          'pending',
+          'approved',
+          'rejected',
+          'PENDING',
+          'SUCCESS',
+          'FAILED',
+          'CONFIRMED',
+          'REJECTED'
         ]
       );
     }
