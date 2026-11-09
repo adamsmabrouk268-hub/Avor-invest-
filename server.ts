@@ -730,23 +730,20 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
   );
   const hasBoughtMachine = userConfirmedInvestments.length > 0;
 
-  // All non-denied machine orders placed by the user
-  const allPlacedOrdersAmount = investments
+  const deductedInvestments = investments
     .filter(
       (inv) =>
         doesInvBelongToUser(inv) &&
-        (inv.status === 'PENDING' || inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE')
+        inv.wallet_deducted &&
+        (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE' || inv.status === 'PENDING')
     )
     .reduce((sum, inv) => sum + Number(inv.amount_invested || 0), 0);
 
-  // After placing an order (deposit or machine order), the money automatically reflects on Wallet and Deposit Details on Homepage
-  const computedWallet = Math.max(0, allWalletDeposits, allPlacedOrdersAmount);
-  // Portion of Wallet backed by Admin-confirmed deposits or confirmed orders:
-  const confirmedOrdersAmount = userConfirmedInvestments.reduce(
-    (sum, inv) => sum + Number(inv.amount_invested || 0),
-    0
-  );
-  const confirmedWallet = Math.max(0, confirmedDeposits, confirmedOrdersAmount);
+  // Deposited money reflects automatically on the user's Wallet & Deposit details on Homepage,
+  // and when someone buys a machine, the amount on his Wallet reduces accordingly to the machine he has bought:
+  const computedWallet = Math.max(0, allWalletDeposits - deductedInvestments);
+  // Portion of Wallet backed by Admin-confirmed deposits:
+  const confirmedWallet = Math.max(0, confirmedDeposits - deductedInvestments);
   // Money on the Balance is 3,000 UGX got as a reward after registration (+ earned yields/rewards - withdrawals):
   const computedBalance = Math.max(
     0,
@@ -2240,6 +2237,21 @@ async function startServer() {
       }
     }
 
+    // Check that the user has deposited enough money on their Wallet (NOT the 3,000 UGX registration reward on Balance)
+    if (computedWallet < totalCost) {
+      pushNotification(
+        user.id,
+        '⚠️ Wallet Balance Not Enough',
+        `Your Wallet balance is not enough to buy ${machine.title}. Required: ${totalCost.toLocaleString()} UGX • Available Wallet: ${computedWallet.toLocaleString()} UGX. Please deposit money onto your Wallet first.`,
+        'PAYMENT'
+      );
+
+      return res.status(400).json({
+        error: `Wallet balance is not enough to buy ${machine.title} (${totalCost.toLocaleString()} UGX required • Available Wallet: ${computedWallet.toLocaleString()} UGX). Please deposit money via MTN Mobile Money or Airtel Money onto your Wallet first.`,
+        requires_deposit: true,
+      });
+    }
+
     const dailyYield = machine.daily_yield * units;
     const totalReturn = machine.total_return * units;
 
@@ -2248,8 +2260,8 @@ async function startServer() {
     const endDate = computeMachineEndDate(startDate, machine.duration_days, monToFriOnly);
     const selectedChannel = payment_method || 'Wallet Balance';
 
-    // When customer clicks Buy / Places Order, the system creates a Pending Order ("Wait for admin confirmation")
-    // and ensures the order money reflects automatically on Wallet and Deposit Details on Homepage!
+    // When customer clicks Buy, the system creates a Pending Order ("Wait for admin confirmation")
+    // and deducts the machine price from the customer's Wallet accordingly!
     const requiresAdminConfirmation = true;
 
     const refCode = `ORD-${Math.floor(100000 + Math.random() * 900000)}`;
@@ -2296,26 +2308,6 @@ async function startServer() {
       if (!targetDepositToLink.machine_title) {
         targetDepositToLink.machine_title = newInvestment.machine_title;
       }
-    } else if (computedWallet < totalCost) {
-      // Automatically create a matching DEPOSIT transaction for the placed order so it reflects in Deposit Details history too
-      const autoDepTx: Transaction = {
-        id: `tx-dep-ord-${Date.now()}`,
-        user_id: user.id,
-        investment_id: newInvestment.id,
-        amount: totalCost,
-        type: 'DEPOSIT',
-        status: 'PENDING',
-        payment_method: `Order Deposit (${selectedChannel}) • ${newInvestment.machine_title}`,
-        payment_reference: refCode,
-        machine_title: newInvestment.machine_title,
-        created_at: new Date().toISOString(),
-      };
-      (autoDepTx as any).customer_name = user.full_name || user.name || 'Investor';
-      (autoDepTx as any).customer_phone = phone_number || user.phone_number || '';
-      (autoDepTx as any).user_phone = user.phone_number || phone_number || '';
-      (autoDepTx as any).receiver_phone = RECEIVER_PHONE;
-      (autoDepTx as any).receiver_name = RECEIVER_NAME;
-      transactions.unshift(autoDepTx);
     }
 
     const newTx: Transaction = {
@@ -2545,28 +2537,37 @@ async function startServer() {
                 machine.title &&
                 i.machine_title.toLowerCase().includes(machine.title.toLowerCase())))
         );
-        const teamIncome8Pct = inviterHasSameMachine ? Math.round(inv.amount_invested * 0.08) : 0;
+        const teamIncome8Pct = Math.round(inv.amount_invested * 0.08);
 
         inv.inviter_id = inviter.id;
         inv.inviter_has_same_machine = inviterHasSameMachine;
         inv.team_income_amount = teamIncome8Pct;
-        inv.team_income_settled = false;
+        inv.team_income_settled = true;
 
-        if (inviterHasSameMachine) {
-          pushNotification(
-            inviter.id,
-            '8% Team Income Scheduled (Cycle End)',
-            `Your invited customer (${user.phone_number || 'Referral'}) had their ${machine.title} payment confirmed! Your 8% team income (${teamIncome8Pct.toLocaleString()} UGX) will be credited to your balance when their ${machine.duration_days}-day machine cycle ends.`,
-            'YIELD'
-          );
-        } else {
-          pushNotification(
-            inviter.id,
-            'Team Member Machine Confirmed',
-            `Your invited customer (${user.phone_number || 'Referral'}) activated ${machine.title}. Note: 8% team income is only collected if an invited customer buys the same machine as the inviter.`,
-            'SYSTEM'
-          );
+        inviter.balance += teamIncome8Pct;
+        saveRegisteredUserToDisk(inviter);
+
+        const commRef = `TEAM-8PCT-${inv.id}`;
+        if (!transactions.some((t) => t.payment_reference === commRef)) {
+          transactions.unshift({
+            id: `tx-comm-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            user_id: inviter.id,
+            investment_id: inv.id,
+            amount: teamIncome8Pct,
+            type: 'COMMISSION',
+            status: 'SUCCESS',
+            payment_method: `Team Commission (8% • ${machine.title})`,
+            payment_reference: commRef,
+            created_at: new Date().toISOString(),
+          });
         }
+
+        pushNotification(
+          inviter.id,
+          '8% Team Commission Credited to Balance!',
+          `Your invited customer (${user.phone_number || 'Referral'}) activated ${machine.title}! Your 8% commission (${teamIncome8Pct.toLocaleString()} UGX) has been credited directly to your balance for withdrawal.`,
+          'YIELD'
+        );
       }
     }
 
@@ -2734,8 +2735,8 @@ async function startServer() {
 
       syncSingleActiveMachineAutoRun(inv, nowDateObj);
 
-      // If cycle has ended and 8% team income hasn't been settled yet, check same-machine eligibility and settle onto inviter's balance
-      if (inv.status === 'PAYOUT_COMPLETE' && !inv.team_income_settled) {
+      // Settle 8% team commission immediately for any active or completed investment (no end-of-cycle wait)
+      if ((inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE') && !inv.team_income_settled) {
         const buyer = Array.from(users.values()).find((u) => u.id === inv.user_id);
         let inviterUser: (User & { password_hash: string }) | undefined;
         if (inv.inviter_id) {
@@ -2748,27 +2749,13 @@ async function startServer() {
         }
 
         if (inviterUser && inviterUser.id !== inv.user_id) {
-          const hasSameMachine =
-            inv.inviter_has_same_machine !== undefined
-              ? inv.inviter_has_same_machine
-              : investments.some(
-                  (i) =>
-                    i.user_id === inviterUser!.id &&
-                    (i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') &&
-                    (i.machine_id === inv.machine_id ||
-                      (i.machine_title &&
-                        inv.machine_title &&
-                        i.machine_title.toLowerCase() === inv.machine_title.toLowerCase()))
-                );
-
+          const teamBonus = inv.team_income_amount || Math.round(inv.amount_invested * 0.08);
           inv.inviter_id = inviterUser.id;
-          inv.inviter_has_same_machine = hasSameMachine;
+          inv.team_income_amount = teamBonus;
+          inv.team_income_settled = true;
 
-          if (hasSameMachine) {
-            const teamBonus = inv.team_income_amount || Math.round(inv.amount_invested * 0.08);
-            inv.team_income_amount = teamBonus;
-            inv.team_income_settled = true;
-
+          const commRef = `TEAM-8PCT-${inv.id}`;
+          if (!transactions.some((t) => t.payment_reference === commRef)) {
             inviterUser.balance += teamBonus;
             saveRegisteredUserToDisk(inviterUser);
 
@@ -2779,19 +2766,17 @@ async function startServer() {
               amount: teamBonus,
               type: 'COMMISSION',
               status: 'SUCCESS',
-              payment_method: 'Team Income (8% - Same Machine Cycle Completed)',
-              payment_reference: `TEAM-8PCT-${inv.id}`,
+              payment_method: `Team Commission (8% • ${inv.machine_title})`,
+              payment_reference: commRef,
               created_at: new Date().toISOString(),
             });
 
             pushNotification(
               inviterUser.id,
-              '8% Team Income Credited to Balance!',
-              `The cycle of ${inv.machine_title} bought by your invited customer has ended! ${teamBonus.toLocaleString()} UGX (8% team income) has been collected onto your balance.`,
+              '8% Team Commission Credited to Balance!',
+              `${teamBonus.toLocaleString()} UGX (8% commission from ${inv.machine_title}) has been credited directly to your balance for withdrawal.`,
               'YIELD'
             );
-          } else {
-            inv.team_income_settled = true;
           }
         } else {
           inv.team_income_settled = true;
@@ -2806,10 +2791,6 @@ async function startServer() {
     );
     const hasBoughtMachine = confirmedUserInvestments.length > 0;
     user.has_bought_machine = hasBoughtMachine;
-    const inviterOwnedMachineIds = new Set(confirmedUserInvestments.map((i) => i.machine_id));
-    const inviterOwnedMachineTitles = new Set(
-      confirmedUserInvestments.map((i) => (i.machine_title || '').toLowerCase()).filter(Boolean)
-    );
 
     let pendingTeamIncome = 0;
 
@@ -2820,22 +2801,11 @@ async function startServer() {
       const hasBought = memberInvestments.length > 0;
       const totalInvested = memberInvestments.reduce((sum, i) => sum + i.amount_invested, 0);
 
-      // Team income is 8% ONLY on machines that match the inviter's machines AND whose cycle has ended
+      // Team commission (8%) is credited immediately without waiting for end of cycle
       let settledCommission = 0;
       memberInvestments.forEach((mInv) => {
-        const sameMachine =
-          mInv.inviter_has_same_machine !== undefined
-            ? mInv.inviter_has_same_machine
-            : inviterOwnedMachineIds.has(mInv.machine_id) ||
-              inviterOwnedMachineTitles.has((mInv.machine_title || '').toLowerCase());
-        if (sameMachine) {
-          const bonus8Pct = mInv.team_income_amount || Math.round(mInv.amount_invested * 0.08);
-          if (mInv.status === 'PAYOUT_COMPLETE' || mInv.team_income_settled) {
-            settledCommission += bonus8Pct;
-          } else {
-            pendingTeamIncome += bonus8Pct;
-          }
-        }
+        const bonus8Pct = mInv.team_income_amount || Math.round(mInv.amount_invested * 0.08);
+        settledCommission += bonus8Pct;
       });
 
       const rawPhone = member.phone_number || member.phoneNumber || 'Investor';
@@ -2889,7 +2859,7 @@ async function startServer() {
       (i) => i.status === 'PAYOUT_COMPLETE' || (i.days_elapsed || 0) >= (i.duration_days || 1)
     );
     const hasCompletedCycle = userCompletedCycles.length > 0;
-    const reflectedTotalDeposited = Math.max(totalDeposited + pendingDeposits, computedWallet);
+    const reflectedTotalDeposited = computedWallet;
 
     res.json({
       user_id: user.id,
@@ -2913,8 +2883,8 @@ async function startServer() {
         pending_withdrawals: pendingWithdrawals,
         withdrawals_count: userWithdrawals.length,
         withdrawable_balance: user.balance,
-        has_completed_cycle: hasCompletedCycle,
-        can_withdraw: hasCompletedCycle && user.balance >= 3000,
+        has_completed_cycle: true,
+        can_withdraw: user.balance >= 3000,
         min_withdrawal: 3000,
         recent_withdrawals: userWithdrawals.slice(0, 5),
       },
@@ -3933,72 +3903,8 @@ async function startServer() {
     (newTx as any).machine_id = machine_id || undefined;
     transactions.unshift(newTx);
 
-    // If customer placed a machine order while depositing, create the linked PENDING machine order and reflect money automatically on Wallet & Deposit Details on Homepage
-    let pendingInv: Investment | null = null;
-    if (machine_id) {
-      const targetMachine = machines.find((m) => String(m.id) === String(machine_id));
-      if (targetMachine) {
-        const startDate = new Date();
-        const monToFriOnly = isAv1OrAv2WeekdayMachine(targetMachine);
-        const endDate = computeMachineEndDate(startDate, targetMachine.duration_days, monToFriOnly);
-        const inferredUnits = Math.max(1, Math.round(numAmt / (targetMachine.total_cost || numAmt)));
-        pendingInv = {
-          id: `inv-${Date.now()}`,
-          user_id: user.id,
-          machine_id: targetMachine.id,
-          machine_title: machine_title || `${targetMachine.title} (${inferredUnits} Unit${inferredUnits > 1 ? 's' : ''})`,
-          series_tag: targetMachine.series_tag,
-          units: inferredUnits,
-          amount_invested: numAmt,
-          daily_yield: (targetMachine.daily_yield || 0) * inferredUnits,
-          total_return: (targetMachine.total_return || 0) * inferredUnits,
-          duration_days: targetMachine.duration_days,
-          days_elapsed: 0,
-          last_claim_at: startDate.toISOString(),
-          unclaimed_earnings: 0,
-          total_claimed: 0,
-          status: 'PENDING',
-          start_date: startDate.toISOString(),
-          end_date: endDate.toISOString(),
-          confirmed_at: undefined,
-          machine: targetMachine,
-          wallet_deducted: true,
-          payment_method: payment_method || 'Mobile Money',
-        };
-        (pendingInv as any).customer_name = user.full_name || user.name || 'Investor';
-        (pendingInv as any).customer_phone = senderPhone;
-        (pendingInv as any).payment_reference = refCode;
-        (pendingInv as any).work_days = monToFriOnly ? 'Mon – Friday' : 'Monday – Sunday';
-        newTx.investment_id = pendingInv.id;
-        investments.unshift(pendingInv);
-        void saveOrderToFirestoreCollection(pendingInv, 'pending');
-        void saveOrderToFirestoreOrdersCollection({
-          id: pendingInv.id,
-          customername: user.full_name || user.name || senderPhone || 'Avor Investor',
-          name: pendingInv.machine_title,
-          status: 'pending',
-          user_id: user.id,
-          customer_name: user.full_name || user.name || 'Avor Investor',
-          customer_phone: senderPhone,
-          machine_id: String(pendingInv.machine_id),
-          machine_title: pendingInv.machine_title,
-          amount_invested: numAmt,
-          amount: numAmt,
-          daily_return: Number(pendingInv.daily_yield || 0),
-          duration_days: Number(pendingInv.duration_days || 32),
-          total_return: Number(pendingInv.total_return || 0),
-          days_elapsed: 0,
-          days_left: Number(pendingInv.duration_days || 32),
-          units: inferredUnits,
-          start_date: pendingInv.start_date,
-          end_date: pendingInv.end_date,
-          purchase_date: (pendingInv.start_date || new Date().toISOString()).split('T')[0],
-          ending_date: (pendingInv.end_date || new Date().toISOString()).split('T')[0],
-          payment_method: payment_method || 'Mobile Money',
-          payment_reference: refCode,
-        });
-      }
-    }
+    // Deposit reflects automatically on Wallet & Deposit details on Homepage; machine purchase will then deduct from Wallet when customer buys the machine
+    const pendingInv: Investment | null = null;
 
     syncUserConfirmedFinances(user, user.id);
     saveRegisteredUserToDisk(user);
@@ -4092,29 +3998,8 @@ async function startServer() {
       });
     }
 
-    // Rule: Money on the wallet is used to buy machine only. Money on balance is for withdrawal only after the total cycle duration of days
-    const confirmedUserInvestments = investments.filter(
-      (i) => i.user_id === user.id && (i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE')
-    );
-    const isCustomer = confirmedUserInvestments.length > 0;
-    if (!isCustomer) {
-      return res.status(400).json({
-        error: 'Access Denied: Money on the wallet is used to buy machine only. Money on balance is for withdrawal only after the total cycle duration of days. Please buy a machine first.',
-      });
-    }
-
-    const completedCycles = confirmedUserInvestments.filter(
-      (i) => i.status === 'PAYOUT_COMPLETE' || (i.days_elapsed || 0) >= (i.duration_days || 1)
-    );
-    if (completedCycles.length === 0) {
-      const activeInv = confirmedUserInvestments[0];
-      const daysElapsed = activeInv.days_elapsed || 1;
-      const totalDays = activeInv.duration_days || 1;
-      const remainingDays = Math.max(1, totalDays - daysElapsed);
-      return res.status(400).json({
-        error: `Withdrawal Locked: Money on balance is for withdrawal only after the total cycle duration of days. Your active machine (${activeInv.machine_title}) is currently on Day ${daysElapsed} of ${totalDays} Days (${remainingDays} day${remainingDays > 1 ? 's' : ''} remaining in cycle).`,
-      });
-    }
+    // Sync user's latest balance (includes 3,000 UGX registration bonus + commissions + yields)
+    syncUserConfirmedFinances(user, user.id);
 
     // Rule 3: Minimum withdraw is 3k and Maximum withdraw is 5M
     const numAmt = Number(amount);

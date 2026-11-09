@@ -208,13 +208,11 @@ export const InvestModal: React.FC<InvestModalProps> = ({
               0
           );
           const rawWallet = Number(
-            sData?.available_wallet ?? sData?.wallet_balance ?? newConfirmed + newPending
+            sData?.available_wallet ?? sData?.wallet_balance ?? 0
           );
-          // Ensure reflected wallet balance includes pending deposits if not yet deducted
-          const effectiveWallet = Math.max(rawWallet, newPending > 0 && rawWallet === 0 ? newPending : rawWallet);
-          setLiveBalance(effectiveWallet);
+          setLiveBalance(rawWallet);
           setConfirmedWallet(newConfirmed);
-          setPendingDepositAmount(newPending);
+          setPendingDepositAmount(Math.min(newPending, rawWallet));
           if (newPending === 0) {
             setDepositSuccessMessage(null);
           }
@@ -256,7 +254,8 @@ export const InvestModal: React.FC<InvestModalProps> = ({
             parsed &&
             (parsed.type === 'WALLET_CONFIRMED_SYNC' ||
               parsed.type === 'WALLET_DENIED_SYNC' ||
-              parsed.type === 'DEPOSIT_CREATED_PENDING')
+              parsed.type === 'DEPOSIT_CREATED_PENDING' ||
+              parsed.type === 'MACHINE_ORDER_CREATED_PENDING')
           ) {
             if (parsed.type === 'WALLET_DENIED_SYNC') {
               setDepositSuccessMessage(null);
@@ -288,7 +287,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
     };
   }, [user?.id, user?.wallet_balance, user?.available_wallet, totalCost]);
 
-  const displayWalletBalance = Math.max(liveBalance, pendingDepositAmount);
+  const displayWalletBalance = liveBalance;
   const isPaymentConfirmedByAdmin = confirmedWallet >= totalCost || (displayWalletBalance >= totalCost && pendingDepositAmount === 0);
   const userHasEnoughBalance = displayWalletBalance >= totalCost;
   const isMobileMoney = selectedChannel === 'MTN Mobile Money' || selectedChannel === 'Airtel Money';
@@ -382,10 +381,17 @@ export const InvestModal: React.FC<InvestModalProps> = ({
     }
   };
 
-  // Step 3: Handle buying / placing machine order (after placing order, money reflects automatically on Wallet & Deposit Details on Homepage)
+  // Step 3: Handle buying machine using Wallet Balance (reduces Wallet balance accordingly to the machine bought)
   const handleBuyWithWallet = async () => {
     if (!user) {
       onOpenAuth();
+      return;
+    }
+    if (!userHasEnoughBalance) {
+      setErrorMessage(
+        `Wallet balance is not enough (${currencyInfo.format(displayWalletBalance)} available • ${currencyInfo.format(totalCost)} required). Please deposit money on your wallet using MTN Mobile Money or Airtel Money first.`
+      );
+      setSelectedChannel('Airtel Money');
       return;
     }
 
@@ -420,23 +426,24 @@ export const InvestModal: React.FC<InvestModalProps> = ({
         }
         throw new Error(data.error || 'Failed to purchase machine.');
       }
-      if (typeof data.available_wallet === 'number' && data.available_wallet > 0) {
+      if (typeof data.available_wallet === 'number') {
         setLiveBalance(data.available_wallet);
-      } else if (typeof data.wallet_balance === 'number' && data.wallet_balance > 0) {
+      } else if (typeof data.wallet_balance === 'number') {
         setLiveBalance(data.wallet_balance);
       } else {
-        setLiveBalance((prev) => Math.max(prev, totalCost));
+        setLiveBalance((prev) => Math.max(0, prev - totalCost));
       }
-      setConfirmedWallet((prev) => Math.max(prev, totalCost));
+      setConfirmedWallet((prev) => Math.max(0, prev - totalCost));
+      setPendingDepositAmount((prev) => Math.max(0, prev - totalCost));
       try {
         const bc = new BroadcastChannel('avor_realtime_wallet_sync');
-        bc.postMessage({ type: 'ORDER_OR_DEPOSIT_PLACED', amount: totalCost });
+        bc.postMessage({ type: 'MACHINE_BOUGHT_WALLET_REDUCED', amount: totalCost });
         bc.close();
       } catch {}
       setSuccessData({
         message:
           data.message ||
-          `Order placed for ${machine.title}! ${currencyInfo.format(totalCost)} has automatically reflected on your Wallet and Deposit Details on Homepage.`,
+          `Order created for ${machine.title}! ${currencyInfo.format(totalCost)} has been deducted from your Wallet.`,
         status: data.status || 'PENDING',
       });
       const orderId = data.investment?.id || `inv-${Date.now()}`;

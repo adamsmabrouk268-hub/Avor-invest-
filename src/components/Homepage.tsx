@@ -255,16 +255,15 @@ export const Homepage: React.FC<HomepageProps> = ({
     0
   );
 
-  // Item 1 & Order Reflection: After placing order, money reflects automatically on Wallet and Deposit Details on Homepage
-  const totalDeposited = Math.max(
-    Number(summary?.deposit_details?.total_deposited ?? 0),
-    Number(summary?.available_wallet ?? 0),
-    Number(summary?.wallet_balance ?? 0),
-    Number(user?.available_wallet ?? 0),
-    Number(user?.wallet_balance ?? 0),
-    Number(summary?.deposit_details?.pending_deposits ?? 0),
-    placedOrdersTotal
-  );
+  // Item 1: In the "deposit details" icon on the home page, the total amount reflected on the wallet should be displayed
+  // (reflects automatically after deposit order and reduces accordingly when a machine is bought)
+  const totalDeposited =
+    summary?.available_wallet ??
+    summary?.wallet_balance ??
+    user?.available_wallet ??
+    user?.wallet_balance ??
+    summary?.deposit_details?.total_deposited ??
+    0;
   const pendingDeposits = summary?.deposit_details?.pending_deposits || 0;
   const totalWithdrawn = summary?.withdraw_details?.total_withdrawn || 0;
   // Item 6: In the "AI income" icon on the home page, all the total daily yields should be born
@@ -1266,21 +1265,16 @@ export const Homepage: React.FC<HomepageProps> = ({
             </div>
 
             <div className="bg-[#031420] border border-[#00d2c4]/30 p-4 rounded-xl space-y-2.5 text-center">
-              <span className="text-xs text-[#7ba3b0]">Collected Team Income (8%)</span>
+              <span className="text-xs text-[#7ba3b0]">Collected Team Commission (8%)</span>
               <span className="text-2xl font-black text-emerald-400 font-mono block">
                 {formatVal(teamIncome)}
               </span>
-              {(summary?.team_size_details?.pending_team_income || 0) > 0 && (
-                <div className="text-[11px] font-mono text-amber-300 bg-amber-950/50 border border-amber-500/30 rounded-lg px-2.5 py-1">
-                  Pending Cycle Maturity (8%): {formatVal(summary?.team_size_details?.pending_team_income || 0)}
-                </div>
-              )}
               <div className="text-left bg-[#020f18] border border-[#0c3a47] rounded-lg p-3 space-y-1.5 text-[11px] text-slate-200 leading-relaxed">
                 <p>
-                  • It is collected <strong>only if an invited customer buys the same machine as the inviter</strong>.
+                  • The <strong>8% commission</strong> is credited directly onto your <strong>balance</strong> when an invited customer activates a machine.
                 </p>
                 <p>
-                  • The <strong>8%</strong> team income is collected on the <strong>inviter&apos;s balance</strong> when the <strong>cycle of the machine of the corresponding invited customer has ended</strong>.
+                  • Users can withdraw the <strong>3,000 UGX registration bonus</strong> and <strong>commission</strong> directly from their balance without waiting for the end of a cycle.
                 </p>
               </div>
             </div>
