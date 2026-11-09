@@ -296,14 +296,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     setTimeout(() => setCopiedField(null), 2500);
   };
 
-  // Step 3 -> Step 4 handler: Validates any custom amount (>= 5,000 UGX) & sender phone, then reveals Company Payment Information
+  // Step 3 -> Step 4 handler: Validates any custom amount (>= 25,000 UGX) & sender phone, then reveals Company Payment Information
   const handleProceedToPaymentInfo = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage(null);
     const cleanDigits = String(depositAmtInput || depositAmt || '').replace(/[^0-9]/g, '');
     const numAmt = Number(cleanDigits);
-    if (!cleanDigits || isNaN(numAmt) || numAmt < 5000) {
-      setMessage({ type: 'error', text: 'MINIMUM DEPOSIT: UGX 5,000. Please enter any amount of 5,000 UGX or more (e.g. 35,000 or 140,000).' });
+    if (!cleanDigits || isNaN(numAmt) || numAmt < 25000) {
+      setMessage({ type: 'error', text: 'MINIMUM DEPOSIT: UGX 25,000. Please enter an amount of 25,000 UGX or more (e.g. 25,000, 35,000, or 140,000).' });
       return;
     }
     if (!depositPhone.trim() || depositPhone.replace(/\D/g, '').length < 7) {
@@ -814,7 +814,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                       <input
                         type="text"
                         inputMode="numeric"
-                        placeholder="Enter any amount you wish to deposit (e.g. 35000, 140000)"
+                        placeholder="Enter amount (min 25,000 UGX, e.g. 25000, 35000)"
                         value={depositAmtInput}
                         onChange={(e) => {
                           const rawDigits = e.target.value.replace(/[^0-9]/g, '');
@@ -838,9 +838,9 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                       )}
                     </div>
 
-                    {/* Quick Amount Buttons (Users can also type/edit any custom amount above like 35,000 or 140,000) */}
+                    {/* Quick Amount Buttons (Users can also type/edit any custom amount above like 25,000, 35,000, or 140,000) */}
                     <div className="grid grid-cols-5 gap-2 pt-1">
-                      {[20000, 50000, 100000, 250000, 500000].map((preset) => {
+                      {[25000, 50000, 100000, 250000, 500000].map((preset) => {
                         const isPresetActive = Number(depositAmtInput) === preset;
                         return (
                           <button
@@ -864,10 +864,10 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
                     <div className="flex flex-wrap items-center justify-between gap-1 pt-0.5">
                       <p className="text-[11px] font-extrabold text-sky-300 uppercase tracking-wider">
-                        MINIMUM DEPOSIT: UGX 5,000
+                        MINIMUM DEPOSIT: UGX 25,000
                       </p>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
-                        TYPE OR EDIT ANY AMOUNT ABOVE (E.G. 35,000 • 140,000)
+                        TYPE OR EDIT ANY AMOUNT ABOVE (E.G. 25,000 • 35,000 • 140,000)
                       </p>
                     </div>
                   </div>

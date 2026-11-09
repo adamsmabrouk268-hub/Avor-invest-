@@ -117,16 +117,18 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
     initialAccountInfo.hasAccount ? 'login' : 'register'
   );
 
-  // Simplified Gateway Form Fields (NB: Modified and simplified Gateway)
+  // Simplified Gateway Form Fields with Password Confirmation
   const [selectedCountry, setSelectedCountry] = useState<CountryOption>(
     initialAccountInfo.savedCountry || SUPPORTED_COUNTRIES[0]
   );
   const [phone, setPhone] = useState<string>(initialAccountInfo.savedPhone || '');
   const [password, setPassword] = useState<string>('');
+  const [confirmPassword, setConfirmPassword] = useState<string>('');
   const [referralCode, setReferralCode] = useState<string>(initialReferralCode || '2B1D9846');
 
   // UI state
   const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState<boolean>(false);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -193,10 +195,18 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
 
     const fullPhoneNumber = `${selectedCountry.dialCode}${normalizedLocal}`;
 
-    // 2. Password validation (streamlined — no Captcha or duplicate password required)
+    // 2. Password & Confirmation validation
     if (activeTab === 'register') {
       if (password.length < 4) {
         setError('Password must be at least 4 characters long.');
+        return;
+      }
+      if (!confirmPassword) {
+        setError('Please confirm your password.');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError('Passwords do not match. Please check your password confirmation.');
         return;
       }
     } else {
@@ -478,6 +488,62 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* Field 2b: Confirm Password (Only in Register mode) */}
+            {activeTab === 'register' && (
+              <div className="w-full animate-fade-in">
+                <div className="flex items-center justify-between mb-1 pl-1 pr-1">
+                  <label className="text-[11px] font-bold text-slate-300">
+                    Confirm Password
+                  </label>
+                  {confirmPassword.length > 0 && (
+                    <span
+                      className={`text-[10px] font-mono font-bold flex items-center gap-1 ${
+                        password === confirmPassword ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {password === confirmPassword ? (
+                        <>
+                          <Check className="w-3 h-3" />
+                          <span>Confirmed</span>
+                        </>
+                      ) : (
+                        <span>Passwords do not match</span>
+                      )}
+                    </span>
+                  )}
+                </div>
+                <div
+                  className={`relative flex items-center bg-[#030919] border ${
+                    confirmPassword.length > 0
+                      ? password === confirmPassword
+                        ? 'border-emerald-500/70 focus-within:border-emerald-400'
+                        : 'border-rose-500/70 focus-within:border-rose-400'
+                      : 'border-blue-900/80 hover:border-blue-500/80 focus-within:border-cyan-400'
+                  } focus-within:ring-1 focus-within:ring-cyan-400/40 rounded-2xl px-4 py-3 sm:py-3.5 transition-all shadow-inner`}
+                >
+                  <KeyRound className="w-5 h-5 text-cyan-400 shrink-0 mr-3 stroke-[1.6]" />
+
+                  <input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Confirm your password"
+                    className="w-full bg-transparent text-white placeholder-slate-500 text-sm sm:text-base outline-none font-sans pr-8"
+                    required
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-4 text-slate-400 hover:text-white cursor-pointer"
+                    tabIndex={-1}
+                  >
+                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Field 3: Optional Referral / Invite Code (Only in Register mode) */}
             {activeTab === 'register' && (

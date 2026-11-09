@@ -3604,8 +3604,8 @@ async function startServer() {
       return res.status(400).json({ error: 'Invalid deposit data provided. Amount and phone number are required.' });
     }
 
-    if (finalAmount < 5000) {
-      return res.status(400).json({ error: 'Minimum deposit amount is 5,000 UGX.' });
+    if (finalAmount < 25000) {
+      return res.status(400).json({ error: 'Minimum deposit amount is 25,000 UGX.' });
     }
 
     try {
@@ -3742,8 +3742,8 @@ async function startServer() {
     if (!user) return res.status(400).json({ error: 'User not found.' });
 
     const numAmt = Number(amount);
-    if (isNaN(numAmt) || numAmt < 5000) {
-      return res.status(400).json({ error: 'Minimum deposit amount is 5,000 UGX.' });
+    if (isNaN(numAmt) || numAmt < 25000) {
+      return res.status(400).json({ error: 'Minimum deposit amount is 25,000 UGX.' });
     }
 
     // Identify the target receiver (or fallback safely if rotation pool is empty)
