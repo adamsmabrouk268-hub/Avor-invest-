@@ -17,7 +17,7 @@ import { LiveWallpaper } from './components/LiveWallpaper';
 import { IncomePlaneView } from './components/IncomePlaneView';
 import { checkAndSyncOwnerDevice } from './components/TopThreeDotMenu';
 import { DEFAULT_MACHINES } from './data/defaultMachines';
-import { subscribeToFirestoreOrders, FirestoreOrderRecord } from './firebase';
+import { subscribeToFirestoreOrders, FirestoreOrderRecord, applyLocalZeroReset } from './firebase';
 import { CheckCircle2, ArrowRight, Cpu, AlertCircle } from 'lucide-react';
 
 export default function App() {
@@ -90,6 +90,31 @@ export default function App() {
       setIsGuestPreview(false);
       showNotification(`Invitation code "${codeToUse}" verified! Register below to get started.`, 'info');
     }
+
+    const onSystemZeroReset = () => {
+      setInvestments([]);
+      setServerInvestments([]);
+      setFirestoreUserOrders([]);
+      setInvitedCount(0);
+      setUser((prev) => {
+        if (!prev) return prev;
+        const zeroed = {
+          ...prev,
+          balance: 0,
+          wallet_balance: 0,
+          available_wallet: 0,
+          has_bought_machine: false,
+        };
+        try {
+          localStorage.setItem('avor_invest_user', JSON.stringify(zeroed));
+        } catch {}
+        return zeroed;
+      });
+    };
+    window.addEventListener('avor-system-reset-zero', onSystemZeroReset);
+    return () => {
+      window.removeEventListener('avor-system-reset-zero', onSystemZeroReset);
+    };
   }, []);
 
   useEffect(() => {
@@ -125,6 +150,23 @@ export default function App() {
 
     const handleRealtimeConfirm = (evData: any) => {
       if (!evData) return;
+      if (evData.order_type === 'SYSTEM_RESET_ZERO') {
+        if (evData.reset_epoch_id) {
+          applyLocalZeroReset(evData.reset_epoch_id, evData.reset_cutoff_ms);
+        }
+        setInvestments([]);
+        setServerInvestments([]);
+        setFirestoreUserOrders([]);
+        setInvitedCount(0);
+        syncUserToStorage({
+          ...user,
+          balance: 0,
+          wallet_balance: 0,
+          available_wallet: 0,
+          has_bought_machine: false,
+        });
+        return;
+      }
       if (evData.type === 'DEPOSIT_CREATED_PENDING') {
         if (doesEventMatchCurrentUser(evData)) {
           if (typeof evData.wallet_balance === 'number') {

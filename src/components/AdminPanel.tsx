@@ -359,6 +359,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         es.onmessage = (event) => {
           try {
             const parsed = JSON.parse(event.data);
+            if (parsed?.order_type === 'SYSTEM_RESET_ZERO') {
+              setFirestoreOrders([]);
+              setFirestoreMessages([]);
+              setServerInvestments([]);
+              setInvestmentsLedger([]);
+              setDeposits([]);
+              setWithdrawals([]);
+              fetchAdminData();
+              return;
+            }
             if (
               parsed &&
               (parsed.type === 'DEPOSIT_CREATED_PENDING' ||
@@ -372,8 +382,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         };
       } catch {}
 
+      const handleSystemZeroReset = () => {
+        setFirestoreOrders([]);
+        setFirestoreMessages([]);
+        setServerInvestments([]);
+        setInvestmentsLedger([]);
+        setDeposits([]);
+        setWithdrawals([]);
+        fetchAdminData();
+      };
+      window.addEventListener('avor-system-reset-zero', handleSystemZeroReset);
+
       return () => {
         clearInterval(interval);
+        window.removeEventListener('avor-system-reset-zero', handleSystemZeroReset);
         try {
           es?.close();
         } catch {}

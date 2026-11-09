@@ -446,8 +446,35 @@ function doesTxBelongToUser(t: Transaction, user?: User, explicitUserId?: string
   );
 }
 
-// Item 4: 3,000 UGX should be eligible for customers (credited to customer balance; Total System Wallet remains 0 until real deposits)
-const REGISTRATION_REWARD_UGX = 3000;
+// System reset to 0 across all devices: 0 money on wallet and 0 money on balance until real activity occurs
+const REGISTRATION_REWARD_UGX = 0;
+
+const SYSTEM_RESET_FILE = path.join(DATA_DIR, 'system_reset.json');
+let systemResetEpochId = 'avor-zero-reset-v8-all-devices';
+let systemResetCutoffMs = 1794158500000;
+let firestoreCleanedForEpoch = false;
+
+try {
+  if (fs.existsSync(SYSTEM_RESET_FILE)) {
+    const parsedReset = JSON.parse(fs.readFileSync(SYSTEM_RESET_FILE, 'utf-8'));
+    if (parsedReset?.reset_epoch_id) systemResetEpochId = String(parsedReset.reset_epoch_id);
+    if (Number(parsedReset?.reset_cutoff_ms) > 0) systemResetCutoffMs = Number(parsedReset.reset_cutoff_ms);
+  }
+} catch {
+  // Use defaults
+}
+
+const saveSystemResetToDisk = () => {
+  try {
+    fs.writeFileSync(
+      SYSTEM_RESET_FILE,
+      JSON.stringify({ reset_epoch_id: systemResetEpochId, reset_cutoff_ms: systemResetCutoffMs }, null, 2),
+      'utf-8'
+    );
+  } catch {
+    // Ignore write error
+  }
+};
 
 function linkKnownDepositRefsToUser(user?: User & { password_hash?: string }, rawRefs?: any) {
   if (!user || !rawRefs) return;
@@ -4190,6 +4217,8 @@ async function startServer() {
       deposit_rotation_config: depositRotationConfig,
       active_receiver: activeInfo.receiver,
       rotation_time_remaining_seconds: activeInfo.timeRemainingSeconds,
+      reset_epoch_id: systemResetEpochId,
+      reset_cutoff_ms: systemResetCutoffMs,
     });
   });
 
@@ -4697,6 +4726,14 @@ async function startServer() {
       paymentReference,
       createdAt,
     } = payload || {};
+
+    // Ignore any historical/cached Firestore documents created before the global system zero-reset
+    if (createdAt) {
+      const createdMs = new Date(createdAt).getTime();
+      if (!isNaN(createdMs) && createdMs < systemResetCutoffMs) {
+        return { duplicate: true };
+      }
+    }
 
     // Ignore deleted historical demo/test documents or denied fake orders
     const alreadyDeniedTx = transactions.find(
@@ -5924,12 +5961,10 @@ async function startServer() {
   });
 
   // System Zero-Reset State Tracking
-  let systemResetEpochId = 'avor-zero-reset-v5';
-  let firestoreCleanedForEpoch = false;
-
   app.get('/api/system/reset-state', (_req, res) => {
     res.json({
       reset_epoch_id: systemResetEpochId,
+      reset_cutoff_ms: systemResetCutoffMs,
       firestore_cleaned: firestoreCleanedForEpoch,
     });
   });
@@ -5938,6 +5973,7 @@ async function startServer() {
     firestoreCleanedForEpoch = true;
     res.json({
       reset_epoch_id: systemResetEpochId,
+      reset_cutoff_ms: systemResetCutoffMs,
       firestore_cleaned: firestoreCleanedForEpoch,
     });
   });
@@ -5966,12 +6002,16 @@ async function startServer() {
     saveDepositNumbersToDisk();
     saveAppStateToDisk();
 
-    systemResetEpochId = `avor-zero-reset-${Date.now()}`;
+    systemResetCutoffMs = Date.now();
+    systemResetEpochId = `avor-zero-reset-${systemResetCutoffMs}`;
     firestoreCleanedForEpoch = false;
+    saveSystemResetToDisk();
 
     broadcastRealtimeEvent({
       type: 'WALLET_DENIED_SYNC',
       order_type: 'SYSTEM_RESET_ZERO',
+      reset_epoch_id: systemResetEpochId,
+      reset_cutoff_ms: systemResetCutoffMs,
       wallet_balance: 0,
       available_wallet: 0,
       balance: 0,
@@ -5979,8 +6019,9 @@ async function startServer() {
     });
 
     return res.json({
-      message: 'System reset to 0: No machines sold, 0 money in total system wallet, 0 active cycles, 0 pending orders.',
+      message: 'System reset to 0 across all devices: No machines sold, 0 money in total system wallet, 0 active cycles, 0 pending payments.',
       reset_epoch_id: systemResetEpochId,
+      reset_cutoff_ms: systemResetCutoffMs,
     });
   });
 

@@ -712,20 +712,6 @@ export const AccountView: React.FC<AccountViewProps> = ({
           }
         });
 
-        // Include Customer Welcome Eligibility Record (3,000 UGX) if user has balance >= 3000 and no bonus record yet
-        if (liveBalanceValue >= 3000 && !Array.from(recordMap.values()).some((r) => r.amount === 3000 && !r.isDebit)) {
-          recordMap.set('welcome-eligible-3000', {
-            id: 'welcome-eligible-3000',
-            type: 'CUSTOMER BONUS',
-            title: 'Customer Eligible Balance Credit',
-            subtitle: '3,000 UGX Eligible for Customers • Official Account Record',
-            amount: 3000,
-            isDebit: false,
-            status: 'CREDITED',
-            created_at: (user as any)?.created_at || new Date().toISOString(),
-          });
-        }
-
         const allRecords = Array.from(recordMap.values()).sort(
           (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         );

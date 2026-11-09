@@ -499,7 +499,15 @@ export function subscribeToFirestoreOrders(
             updated_at: data.updated_at || ts,
           };
         })
-        .filter((o) => o.status !== 'DENIED')
+        .filter((o) => {
+          if (o.status === 'DENIED') return false;
+          const createdMs = new Date(o.created_at).getTime();
+          if (!isNaN(createdMs) && createdMs < getResetCutoffMs()) {
+            void deleteDoc(doc(db, 'orders', o.id)).catch(() => {});
+            return false;
+          }
+          return true;
+        })
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
       onUpdate(items);
@@ -705,6 +713,14 @@ export function subscribeToFirestoreAdminMessages(
             m.name !== 'Test Investor' &&
             m.name !== 'Verification User'
         )
+        .filter((m) => {
+          const createdMs = new Date(m.created_at).getTime();
+          if (!isNaN(createdMs) && createdMs < getResetCutoffMs()) {
+            void deleteDoc(doc(db, 'admin_messages', m.id)).catch(() => {});
+            return false;
+          }
+          return true;
+        })
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
       onUpdate(items);
@@ -726,6 +742,50 @@ export async function deleteFirestoreAdminMessage(docId: string): Promise<void> 
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
+}
+
+let activeResetCutoffMs = 1794158500000;
+
+export function getResetCutoffMs(): number {
+  if (typeof window !== 'undefined') {
+    const saved = Number(localStorage.getItem('avor_zero_reset_cutoff_ms') || 0);
+    if (saved > activeResetCutoffMs) {
+      activeResetCutoffMs = saved;
+    }
+  }
+  return activeResetCutoffMs;
+}
+
+export function applyLocalZeroReset(epochId: string, cutoffMs?: number): void {
+  if (typeof window === 'undefined') return;
+  if (cutoffMs && cutoffMs > activeResetCutoffMs) {
+    activeResetCutoffMs = cutoffMs;
+    localStorage.setItem('avor_zero_reset_cutoff_ms', String(cutoffMs));
+  }
+  localStorage.removeItem('avor_admin_vault_backup_v1');
+  localStorage.removeItem('avor_admin_vault_backup_v2');
+  localStorage.removeItem('avor_my_deposit_refs');
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('avor_invest_txs_')) {
+      localStorage.removeItem(k);
+    }
+  }
+  const rawUser = localStorage.getItem('avor_invest_user');
+  if (rawUser) {
+    try {
+      const parsedUser = JSON.parse(rawUser);
+      if (parsedUser && typeof parsedUser === 'object') {
+        parsedUser.balance = 0;
+        parsedUser.wallet_balance = 0;
+        parsedUser.available_wallet = 0;
+        parsedUser.has_bought_machine = false;
+        localStorage.setItem('avor_invest_user', JSON.stringify(parsedUser));
+      }
+    } catch {}
+  }
+  localStorage.setItem('avor_zero_reset_epoch', epochId);
+  window.dispatchEvent(new CustomEvent('avor-system-reset-zero', { detail: { epochId, cutoffMs: activeResetCutoffMs } }));
 }
 
 /**
@@ -781,7 +841,7 @@ export async function clearAllFirestoreOrdersAndMessages(): Promise<void> {
 
 /**
  * Synchronizes browser localStorage and Firestore with the server's zero-reset epoch
- * so stale cached deposits, orders, or wallet balances are cleared to 0.
+ * so stale cached deposits, orders, or wallet balances are cleared to 0 across all devices.
  */
 export async function syncSystemZeroReset(): Promise<void> {
   if (typeof window === 'undefined') return;
@@ -789,33 +849,17 @@ export async function syncSystemZeroReset(): Promise<void> {
     const res = await fetch('/api/system/reset-state');
     if (!res.ok) return;
     const data = await res.json();
-    const epochId = data?.reset_epoch_id || 'avor-zero-reset-v5';
+    const epochId = data?.reset_epoch_id || 'avor-zero-reset-v8-all-devices';
+    const cutoffMs = Number(data?.reset_cutoff_ms || 1794158500000);
+    if (cutoffMs > activeResetCutoffMs) {
+      activeResetCutoffMs = cutoffMs;
+      localStorage.setItem('avor_zero_reset_cutoff_ms', String(cutoffMs));
+    }
     const localEpoch = localStorage.getItem('avor_zero_reset_epoch');
 
     if (localEpoch !== epochId) {
-      localStorage.removeItem('avor_admin_vault_backup_v1');
-      localStorage.removeItem('avor_admin_vault_backup_v2');
-      localStorage.removeItem('avor_my_deposit_refs');
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith('avor_invest_txs_')) {
-          localStorage.removeItem(k);
-        }
-      }
-      const rawUser = localStorage.getItem('avor_invest_user');
-      if (rawUser) {
-        try {
-          const parsedUser = JSON.parse(rawUser);
-          if (parsedUser && typeof parsedUser === 'object') {
-            parsedUser.balance = 0;
-            parsedUser.wallet_balance = 0;
-            parsedUser.available_wallet = 0;
-            parsedUser.has_bought_machine = false;
-            localStorage.setItem('avor_invest_user', JSON.stringify(parsedUser));
-          }
-        } catch {}
-      }
-      localStorage.setItem('avor_zero_reset_epoch', epochId);
+      applyLocalZeroReset(epochId, cutoffMs);
+      await clearAllFirestoreOrdersAndMessages();
     }
 
     if (!data?.firestore_cleaned) {
@@ -824,5 +868,11 @@ export async function syncSystemZeroReset(): Promise<void> {
     }
   } catch {}
 }
-void syncSystemZeroReset();
+
+if (typeof window !== 'undefined') {
+  void syncSystemZeroReset();
+  setInterval(() => {
+    void syncSystemZeroReset();
+  }, 4000);
+}
 

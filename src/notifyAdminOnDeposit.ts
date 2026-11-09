@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteDoc,
   onSnapshot,
   updateDoc,
   query,
@@ -8,7 +9,7 @@ import {
   DocumentData,
   QueryDocumentSnapshot as ClientQueryDocumentSnapshot,
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db, getResetCutoffMs } from './firebase';
 
 // Define an interface matching your Firestore rules schema
 export interface DepositMessage {
@@ -66,6 +67,19 @@ export function onDocumentCreated(
             const docSnap: ClientQueryDocumentSnapshot<DocumentData> = change.doc;
             if (docSnap.id === 'mVXN2reH39ZgMfPtm4fa' || processedIds.has(docSnap.id)) {
               return;
+            }
+            const rawData = docSnap.data();
+            const tsIso = rawData?.timestamp?.toDate
+              ? rawData.timestamp.toDate().toISOString()
+              : typeof rawData?.timestamp === 'string'
+                ? rawData.timestamp
+                : '';
+            if (tsIso) {
+              const createdMs = new Date(tsIso).getTime();
+              if (!isNaN(createdMs) && createdMs < getResetCutoffMs()) {
+                void deleteDoc(docSnap.ref).catch(() => {});
+                return;
+              }
             }
             processedIds.add(docSnap.id);
 
