@@ -255,15 +255,14 @@ export const Homepage: React.FC<HomepageProps> = ({
     0
   );
 
-  // Item 1: In the "deposit details" icon on the home page, the total amount reflected on the wallet should be displayed
-  // (reflects automatically after deposit order and reduces accordingly when a machine is bought)
-  const totalDeposited =
-    summary?.available_wallet ??
-    summary?.wallet_balance ??
-    user?.available_wallet ??
-    user?.wallet_balance ??
-    summary?.deposit_details?.total_deposited ??
-    0;
+  // When someone deposits money, it immediately appears in Deposit details on the Homepage
+  const totalDeposited = Math.max(
+    Number(summary?.deposit_details?.total_deposited ?? 0),
+    Number(summary?.available_wallet ?? 0),
+    Number(summary?.wallet_balance ?? 0),
+    Number(user?.available_wallet ?? 0),
+    Number(user?.wallet_balance ?? 0)
+  );
   const pendingDeposits = summary?.deposit_details?.pending_deposits || 0;
   const totalWithdrawn = summary?.withdraw_details?.total_withdrawn || 0;
   // Item 6: In the "AI income" icon on the home page, all the total daily yields should be born

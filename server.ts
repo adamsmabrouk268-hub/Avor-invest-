@@ -414,7 +414,7 @@ function findOrRestoreUser(userId?: string, body: any = {}): (User & { password_
       country: 'Uganda',
       kyc_status: 'VERIFIED',
       role: 'INVESTOR',
-      balance: 0,
+      balance: REGISTRATION_REWARD_UGX,
       wallet_balance: 0,
       available_wallet: 0,
       referral_code: `AVOR-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -446,13 +446,13 @@ function doesTxBelongToUser(t: Transaction, user?: User, explicitUserId?: string
   );
 }
 
-// System reset to 0 across all devices: 0 money on wallet and 0 money on balance until real activity occurs
-const REGISTRATION_REWARD_UGX = 0;
+// Welcoming bonus of 3,000 UGX on registration (can be withdrawn directly along with commissions)
+const REGISTRATION_REWARD_UGX = 3000;
 
 const SYSTEM_RESET_FILE = path.join(DATA_DIR, 'system_reset.json');
 let systemResetEpochId = 'avor-zero-reset-v8-all-devices';
 let systemResetCutoffMs = 1794158500000;
-let firestoreCleanedForEpoch = false;
+let firestoreCleanedForEpoch = true;
 
 try {
   if (fs.existsSync(SYSTEM_RESET_FILE)) {
@@ -2668,7 +2668,7 @@ async function startServer() {
           pending_withdrawals: 0,
           withdrawals_count: 0,
           withdrawable_balance: REGISTRATION_REWARD_UGX,
-          can_withdraw: false,
+          can_withdraw: true,
           min_withdrawal: 3000,
           recent_withdrawals: [],
         },
@@ -2859,7 +2859,7 @@ async function startServer() {
       (i) => i.status === 'PAYOUT_COMPLETE' || (i.days_elapsed || 0) >= (i.duration_days || 1)
     );
     const hasCompletedCycle = userCompletedCycles.length > 0;
-    const reflectedTotalDeposited = computedWallet;
+    const reflectedTotalDeposited = Math.max(totalDeposited + pendingDeposits, computedWallet);
 
     res.json({
       user_id: user.id,

@@ -776,7 +776,7 @@ export function applyLocalZeroReset(epochId: string, cutoffMs?: number): void {
     try {
       const parsedUser = JSON.parse(rawUser);
       if (parsedUser && typeof parsedUser === 'object') {
-        parsedUser.balance = 0;
+        parsedUser.balance = 3000;
         parsedUser.wallet_balance = 0;
         parsedUser.available_wallet = 0;
         parsedUser.has_bought_machine = false;

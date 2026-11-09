@@ -365,6 +365,20 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           )
         );
         localStorage.setItem('avor_my_deposit_refs', JSON.stringify(nextRefs));
+        if (data.transaction) {
+          saveLocalTransactions(user.id, [data.transaction, ...transactions]);
+        }
+        const rawUser = localStorage.getItem('avor_invest_user');
+        if (rawUser) {
+          const parsedU = JSON.parse(rawUser);
+          const nextWallet =
+            typeof data.wallet_balance === 'number'
+              ? data.wallet_balance
+              : (Number(parsedU.wallet_balance || parsedU.available_wallet || 0) + depositAmt);
+          parsedU.wallet_balance = nextWallet;
+          parsedU.available_wallet = nextWallet;
+          localStorage.setItem('avor_invest_user', JSON.stringify(parsedU));
+        }
       } catch {}
 
       setMessage({
