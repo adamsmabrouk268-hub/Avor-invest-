@@ -628,11 +628,6 @@ export const Homepage: React.FC<HomepageProps> = ({
             className="card cursor-pointer group relative"
           >
             <div className="value font-mono">{formatVal(totalDeposited)}</div>
-            {pendingDeposits > 0 && (
-              <div className="text-[10px] font-mono font-bold text-amber-300 -mt-0.5 mb-0.5 truncate">
-                Pending: {formatVal(pendingDeposits)}
-              </div>
-            )}
             <div className="label label-blue group-hover:brightness-110 transition-all">Deposit details</div>
           </div>
 
@@ -858,17 +853,11 @@ export const Homepage: React.FC<HomepageProps> = ({
               <span className="text-2xl font-black text-white font-mono block">
                 {formatVal(totalDeposited)}
               </span>
-              <div className="grid grid-cols-3 gap-2 pt-2 text-xs font-mono text-left border-t border-[#0c3a47]">
+              <div className="grid grid-cols-2 gap-2 pt-2 text-xs font-mono text-left border-t border-[#0c3a47]">
                 <div>
                   <span className="text-[10px] text-[#7ba3b0] block">Wallet Reflected:</span>
                   <span className="font-bold text-emerald-400">
                     {formatVal(totalDeposited)}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-[#7ba3b0] block">Pending Admin:</span>
-                  <span className="font-bold text-amber-300">
-                    {formatVal(summary?.deposit_details?.pending_deposits || 0)}
                   </span>
                 </div>
                 <div>
@@ -883,7 +872,7 @@ export const Homepage: React.FC<HomepageProps> = ({
             {/* Recent Submitted & Confirmed Deposits List */}
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
               <span className="text-[11px] font-bold uppercase tracking-wider text-[#80deea] block">
-                Submitted &amp; Confirmed Deposit Records
+                Deposit Records
               </span>
               {!summary?.deposit_details?.recent_deposits ||
               summary.deposit_details.recent_deposits.length === 0 ? (
@@ -892,7 +881,6 @@ export const Homepage: React.FC<HomepageProps> = ({
                 </div>
               ) : (
                 summary.deposit_details.recent_deposits.map((dep) => {
-                  const isConfirmed = dep.status === 'SUCCESS' || dep.status === 'CONFIRMED';
                   return (
                     <div
                       key={dep.id}
@@ -910,14 +898,8 @@ export const Homepage: React.FC<HomepageProps> = ({
                         <span className="font-black text-sm text-[#00e5ff] block">
                           +{formatVal(dep.amount)}
                         </span>
-                        <span
-                          className={`inline-block px-2 py-0.5 rounded text-[9px] font-extrabold uppercase ${
-                            isConfirmed
-                              ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/40'
-                              : 'bg-amber-950/90 text-amber-300 border border-amber-500/40'
-                          }`}
-                        >
-                          {isConfirmed ? 'CONFIRMED' : dep.status}
+                        <span className="inline-block px-2 py-0.5 rounded text-[9px] font-extrabold uppercase bg-emerald-950/90 text-emerald-300 border border-emerald-500/40">
+                          REFLECTED
                         </span>
                       </div>
                     </div>
