@@ -568,6 +568,26 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         }
       );
 
+      try {
+        const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
+        for (const ref of [txId, txRef, custPhone]) {
+          if (ref && !savedRefs.includes(ref)) savedRefs.push(ref);
+        }
+        localStorage.setItem('avor_my_deposit_refs', JSON.stringify(savedRefs.slice(-50)));
+        const bc = new BroadcastChannel('avor_realtime_wallet_sync');
+        bc.postMessage({
+          type: 'WITHDRAWAL_CREATED_PENDING',
+          user_id: user.id,
+          user_phone: user.phone_number,
+          customer_phone: custPhone,
+          transaction_id: txId,
+          payment_reference: txRef,
+          amount: withdrawAmt,
+          balance: typeof data.new_balance === 'number' ? data.new_balance : undefined,
+        });
+        bc.close();
+      } catch {}
+
       setMessage({
         type: 'success',
         text:

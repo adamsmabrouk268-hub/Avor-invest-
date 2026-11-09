@@ -197,6 +197,9 @@ export const Homepage: React.FC<HomepageProps> = ({
             (parsed.type === 'WALLET_CONFIRMED_SYNC' ||
               parsed.type === 'WALLET_DENIED_SYNC' ||
               parsed.type === 'DEPOSIT_CREATED_PENDING' ||
+              parsed.type === 'WITHDRAWAL_CREATED_PENDING' ||
+              parsed.type === 'WITHDRAWAL_APPROVED_SYNC' ||
+              parsed.type === 'WITHDRAWAL_REJECTED_SYNC' ||
               parsed.type === 'MACHINE_ORDER_CREATED_PENDING' ||
               parsed.type === 'ORDER_CONFIRMED_ACTIVE')
           ) {
@@ -264,7 +267,11 @@ export const Homepage: React.FC<HomepageProps> = ({
     Number(user?.wallet_balance ?? 0)
   );
   const pendingDeposits = summary?.deposit_details?.pending_deposits || 0;
-  const totalWithdrawn = summary?.withdraw_details?.total_withdrawn || 0;
+  // When someone makes a withdrawal, the money immediately reflects on withdrawal details
+  const totalWithdrawn = Math.max(
+    Number(summary?.withdraw_details?.total_withdrawn ?? 0),
+    Number(summary?.withdraw_details?.pending_withdrawals ?? 0)
+  );
   // Item 6: In the "AI income" icon on the home page, all the total daily yields should be born
   const aiIncome =
     totalDailyYieldsAll > 0
@@ -930,8 +937,8 @@ export const Homepage: React.FC<HomepageProps> = ({
       {/* Modal 2: Withdraw Details */}
       {activeModal === 'withdraw_details' && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-[#051d24] border border-[#00d2c4]/60 shadow-[0_0_35px_rgba(0,210,200,0.25)] rounded-2xl p-5 max-w-sm w-full space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-[#0c3a47]">
+          <div className="bg-[#051d24] border border-[#00d2c4]/60 shadow-[0_0_35px_rgba(0,210,200,0.25)] rounded-2xl p-5 max-w-sm w-full space-y-4 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-[#0c3a47] shrink-0">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-[#00c853] flex items-center justify-center text-white">
                   <ArrowUpRight className="w-4 h-4 text-white" />
@@ -946,7 +953,7 @@ export const Homepage: React.FC<HomepageProps> = ({
               </button>
             </div>
 
-            <div className="bg-[#031420] border border-[#00d2c4]/30 p-4 rounded-xl space-y-2 text-center">
+            <div className="bg-[#031420] border border-[#00d2c4]/30 p-4 rounded-xl space-y-2 text-center shrink-0">
               <span className="text-xs text-[#7ba3b0]">Total Withdrawn Income</span>
               <span className="text-2xl font-black text-white font-mono block">
                 {formatVal(totalWithdrawn)}
@@ -955,30 +962,69 @@ export const Homepage: React.FC<HomepageProps> = ({
                 <div>
                   <span className="text-[10px] text-[#7ba3b0] block">Withdrawable Income:</span>
                   <span className="font-bold text-emerald-400">
-                    {formatVal(summary?.withdraw_details?.withdrawable_balance || user?.balance || 0)}
+                    {formatVal(summary?.withdraw_details?.withdrawable_balance ?? user?.balance ?? 0)}
                   </span>
                 </div>
                 <div>
-                  <span className="text-[10px] text-[#7ba3b0] block">Min / Max Limit:</span>
-                  <span className="font-bold text-white">3k – 5M UGX</span>
+                  <span className="text-[10px] text-[#7ba3b0] block">Total Records:</span>
+                  <span className="font-bold text-white">
+                    {summary?.withdraw_details?.withdrawals_count || 0} Records (3k – 5M)
+                  </span>
                 </div>
               </div>
             </div>
 
-            <div className="bg-[#031420] border border-[#00d2c4]/30 p-3.5 rounded-xl space-y-1.5 text-left text-xs">
-              <span className="font-black text-[#a3e635] uppercase text-[11px] block">
-                Official Withdraw Rules:
+            {/* Recent Withdrawals List */}
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#80deea] block">
+                Withdrawal Records
               </span>
-              <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-200">
-                <li>Withdraws run from <strong>Mon – Fri</strong></li>
-                <li>Withdraw percentage – <strong>10%</strong></li>
-                <li>Minimum withdraw is <strong>3k</strong> and Maximum withdraw is <strong>5M</strong></li>
-                <li><strong>3000</strong> is eligible for <strong>customers</strong>.</li>
-                <li><strong>* Withdraws take 24-96 hours to process.</strong></li>
-              </ol>
+              {!summary?.withdraw_details?.recent_withdrawals ||
+              summary.withdraw_details.recent_withdrawals.length === 0 ? (
+                <div className="text-center py-4 bg-[#031420]/70 border border-[#0c3a47] rounded-xl text-xs text-slate-400 font-semibold">
+                  No withdrawals yet.
+                </div>
+              ) : (
+                summary.withdraw_details.recent_withdrawals.map((wdr) => (
+                  <div
+                    key={wdr.id}
+                    className="bg-[#031420] border border-[#0c3a47] p-3 rounded-xl flex items-center justify-between text-xs font-mono"
+                  >
+                    <div className="min-w-0 pr-2">
+                      <span className="font-bold text-white block truncate">
+                        {wdr.payment_method || 'Mobile Money Withdrawal'}
+                      </span>
+                      <span className="text-[10px] text-slate-400 block">
+                        {new Date(wdr.created_at).toLocaleString()} • {wdr.payment_reference || wdr.id}
+                      </span>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className="font-black text-sm text-[#00e676] block">
+                        {formatVal(wdr.amount)}
+                      </span>
+                      <span className="inline-block px-2 py-0.5 rounded text-[9px] font-extrabold uppercase bg-emerald-950/90 text-emerald-300 border border-emerald-500/40">
+                        {wdr.status === 'SUCCESS' ? 'APPROVED' : 'REFLECTED'}
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
+
+              <div className="bg-[#031420] border border-[#00d2c4]/30 p-3.5 rounded-xl space-y-1.5 text-left text-xs mt-2">
+                <span className="font-black text-[#a3e635] uppercase text-[11px] block">
+                  Official Withdraw Rules:
+                </span>
+                <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-200">
+                  <li>Withdraws run from <strong>Mon – Fri</strong></li>
+                  <li>Withdraw percentage – <strong>10%</strong></li>
+                  <li>Minimum withdraw is <strong>3k</strong> and Maximum withdraw is <strong>5M</strong></li>
+                  <li><strong>3000</strong> is eligible for <strong>customers</strong>.</li>
+                  <li><strong>* Withdraws take 24-96 hours to process.</strong></li>
+                </ol>
+              </div>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 shrink-0">
               <button
                 onClick={() => {
                   setActiveModal(null);

@@ -491,8 +491,8 @@ function linkKnownDepositRefsToUser(user?: User & { password_hash?: string }, ra
   );
   let changed = false;
   for (const t of transactions) {
-    if (t.type !== 'DEPOSIT') continue;
-    const txCustTail = ((t as any).customer_phone || '').replace(/\D/g, '').slice(-9);
+    if (t.type !== 'DEPOSIT' && t.type !== 'WITHDRAWAL') continue;
+    const txCustTail = ((t as any).customer_phone || (t as any).phone || '').replace(/\D/g, '').slice(-9);
     const txUserTail = ((t as any).user_phone || '').replace(/\D/g, '').slice(-9);
     const matchesRef =
       refSet.has(t.id) ||
@@ -709,12 +709,37 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
   // All non-rejected deposits (both PENDING and CONFIRMED/SUCCESS) immediately reflect on the user's Wallet
   const allWalletDeposits = confirmedDeposits + pendingDeposits;
 
+  // Ensure every registered investor has their 3,000 UGX Gateway Registration Bonus recorded in their statement
+  if (user.id && user.id !== 'usr-admin-owner' && REGISTRATION_REWARD_UGX > 0) {
+    const gatewayRewardRef = `GATEWAY-REWARD-${user.id}`;
+    const hasGatewayRewardTx = transactions.some(
+      (t) =>
+        t.payment_reference === gatewayRewardRef ||
+        (doesTxBelongToUser(t, user, explicitUserId) &&
+          typeof t.payment_reference === 'string' &&
+          t.payment_reference.startsWith('GATEWAY-REWARD-'))
+    );
+    if (!hasGatewayRewardTx) {
+      transactions.push({
+        id: `tx-gw-bonus-${user.id}`,
+        user_id: user.id,
+        amount: REGISTRATION_REWARD_UGX,
+        type: 'REFERRAL_BONUS',
+        status: 'SUCCESS',
+        payment_method: 'Gateway Registration Reward (3,000 UGX Bonus)',
+        payment_reference: gatewayRewardRef,
+        created_at: user.created_at || new Date().toISOString(),
+      });
+    }
+  }
+
   const userYieldsAndBonuses = transactions
     .filter(
       (t) =>
         doesTxBelongToUser(t, user, explicitUserId) &&
         (t.type === 'DAILY_YIELD' || t.type === 'REFERRAL_BONUS' || t.type === 'COMMISSION') &&
-        (t.status === 'SUCCESS' || t.status === 'CONFIRMED')
+        (t.status === 'SUCCESS' || t.status === 'CONFIRMED') &&
+        !(typeof t.payment_reference === 'string' && t.payment_reference.startsWith('GATEWAY-REWARD-'))
     )
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
@@ -1724,10 +1749,25 @@ async function startServer() {
       // 2. Persistent file storage to data/registered_users.json
       saveRegisteredUserToDisk(newUser);
 
+      // Record the 3,000 UGX Gateway Registration Bonus in transactions so it appears in Bill / Statement
+      const gatewayBonusRef = `GATEWAY-REWARD-${newUser.id}`;
+      if (!transactions.some((t) => t.payment_reference === gatewayBonusRef)) {
+        transactions.unshift({
+          id: `tx-gw-bonus-${newUser.id}`,
+          user_id: newUser.id,
+          amount: REGISTRATION_REWARD_UGX,
+          type: 'REFERRAL_BONUS',
+          status: 'SUCCESS',
+          payment_method: 'Gateway Registration Reward (3,000 UGX Bonus)',
+          payment_reference: gatewayBonusRef,
+          created_at: newUser.created_at,
+        });
+      }
+
       pushNotification(
         newUser.id,
-        '🎁 3,000 UGX Registration Reward Credited!',
-        'Welcome to Avor Invest! You have received 3,000 UGX as a reward after registration on your Balance. Deposit money and have it confirmed by Admin to fund your Wallet and buy machines.',
+        '🎁 3,000 UGX Gateway Registration Bonus Credited!',
+        'Welcome to Avor Invest! You have received 3,000 UGX bonus as a gateway reward after registration on your Balance.',
         'YIELD'
       );
 
@@ -2701,13 +2741,14 @@ async function startServer() {
       confirmedWallet,
     } = syncUserConfirmedFinances(user, userId);
 
-    // 2. Withdraw details
-    const totalWithdrawn = userWithdrawals
+    // 2. Withdraw details — When someone makes a withdrawal, the money immediately reflects on withdrawal details
+    const confirmedWithdrawn = userWithdrawals
       .filter((t) => t.status === 'SUCCESS' || t.status === 'CONFIRMED')
-      .reduce((sum, t) => sum + t.amount, 0);
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
     const pendingWithdrawals = userWithdrawals
       .filter((t) => t.status === 'PENDING')
-      .reduce((sum, t) => sum + t.amount, 0);
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    const totalWithdrawn = confirmedWithdrawn + pendingWithdrawals;
 
     // 3. Team size details: "people who joined and bought machine using his link"
     const userRefCode = (user.referral_code || '').toLowerCase();
@@ -2880,13 +2921,14 @@ async function startServer() {
       },
       withdraw_details: {
         total_withdrawn: totalWithdrawn,
+        confirmed_withdrawn: confirmedWithdrawn,
         pending_withdrawals: pendingWithdrawals,
         withdrawals_count: userWithdrawals.length,
         withdrawable_balance: user.balance,
         has_completed_cycle: true,
         can_withdraw: user.balance >= 3000,
         min_withdrawal: 3000,
-        recent_withdrawals: userWithdrawals.slice(0, 5),
+        recent_withdrawals: userWithdrawals.slice(0, 20),
       },
       ai_income: aiIncome,
       today_earnings: todayEarnings,
@@ -6268,7 +6310,7 @@ async function startServer() {
     notifications.length = 0;
 
     for (const u of users.values()) {
-      u.balance = 0;
+      u.balance = u.id === 'usr-admin-owner' ? 0 : REGISTRATION_REWARD_UGX;
       u.wallet_balance = 0;
       u.available_wallet = 0;
       u.has_bought_machine = false;
@@ -6297,7 +6339,7 @@ async function startServer() {
       reset_cutoff_ms: systemResetCutoffMs,
       wallet_balance: 0,
       available_wallet: 0,
-      balance: 0,
+      balance: REGISTRATION_REWARD_UGX,
       timestamp: new Date().toISOString(),
     });
 

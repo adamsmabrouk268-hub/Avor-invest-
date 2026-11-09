@@ -100,7 +100,7 @@ export default function App() {
         if (!prev) return prev;
         const zeroed = {
           ...prev,
-          balance: 0,
+          balance: 3000,
           wallet_balance: 0,
           available_wallet: 0,
           has_bought_machine: false,
@@ -160,11 +160,25 @@ export default function App() {
         setInvitedCount(0);
         syncUserToStorage({
           ...user,
-          balance: 0,
+          balance: 3000,
           wallet_balance: 0,
           available_wallet: 0,
           has_bought_machine: false,
         });
+        return;
+      }
+      if (
+        evData.type === 'WITHDRAWAL_CREATED_PENDING' ||
+        evData.type === 'WITHDRAWAL_APPROVED_SYNC' ||
+        evData.type === 'WITHDRAWAL_REJECTED_SYNC'
+      ) {
+        if (doesEventMatchCurrentUser(evData) && typeof evData.balance === 'number') {
+          syncUserToStorage({
+            ...user,
+            balance: evData.balance,
+          });
+        }
+        fetchUserData();
         return;
       }
       if (evData.type === 'DEPOSIT_CREATED_PENDING') {
@@ -585,7 +599,9 @@ export default function App() {
                 if (mode === 'login') {
                   showNotification(`Welcome back to Avor invest, ${loggedInUser.full_name}!`);
                 } else {
-                  showNotification(`Welcome to Avor invest, ${loggedInUser.full_name}! You received a 3,000 UGX registration reward on your Balance.`);
+                  showNotification(
+                    `Welcome to Avor invest, ${loggedInUser.full_name}! You received 3,000 UGX bonus as a Gateway Reward on your Balance.`
+                  );
                 }
                 setActiveTab('home');
               }}

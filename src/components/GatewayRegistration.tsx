@@ -245,7 +245,13 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
           onCurrencyChange(selectedCountry.defaultCurrency);
         }
 
-        const userObj = data.user || data;
+        const userObj = {
+          ...(data.user || data),
+          balance:
+            typeof (data.user || data)?.balance === 'number' && (data.user || data).balance > 0
+              ? (data.user || data).balance
+              : 3000,
+        };
         try {
           localStorage.setItem('avor_invest_user', JSON.stringify(userObj));
           localStorage.setItem('avor_invest_has_account', 'true');
@@ -364,7 +370,7 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
             </h1>
             <p className="text-xs text-slate-300 mt-1">
               {activeTab === 'register'
-                ? 'Enter your phone number and password to start (3,000 UGX eligible for customers)'
+                ? 'After registration, you get 3,000 UGX bonus as a Gateway Reward'
                 : 'Enter your phone number and password to access your account'}
             </p>
           </div>
@@ -382,7 +388,7 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-200 leading-snug">
-                Register below with your phone number &amp; password (<strong className="text-emerald-400">3,000 UGX</strong> eligible for customers).
+                Register below with your phone number &amp; password to get <strong className="text-emerald-400">3,000 UGX bonus</strong> as a Gateway Reward.
               </p>
             </div>
           )}
