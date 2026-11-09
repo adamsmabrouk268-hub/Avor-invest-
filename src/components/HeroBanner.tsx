@@ -116,28 +116,28 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
                 <div>
                   <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Funded</span>
                   <span className="text-xl sm:text-2xl font-black font-mono tracking-tight text-white block mt-1">
-                    {currencyInfo.format(stats.total_invested || 48500000)}
+                    {currencyInfo.format(stats.total_invested ?? 0)}
                   </span>
                 </div>
 
                 <div>
                   <span className="text-[10px] uppercase font-bold text-slate-400 block">Payouts Delivered</span>
                   <span className="text-xl sm:text-2xl font-black font-mono tracking-tight text-blue-400 block mt-1">
-                    {currencyInfo.format(stats.total_payouts_delivered || 29800000)}
+                    {currencyInfo.format(stats.total_payouts_delivered ?? 0)}
                   </span>
                 </div>
 
                 <div className="pt-2">
                   <span className="text-[10px] uppercase font-bold text-slate-400 block">Live Machines</span>
                   <span className="text-xl sm:text-2xl font-black font-mono tracking-tight text-white block mt-1">
-                    {(stats.active_machines_count || 10).toLocaleString()} Nodes
+                    {(stats.active_machines_count ?? 0).toLocaleString()} Nodes
                   </span>
                 </div>
 
                 <div className="pt-2">
                   <span className="text-[10px] uppercase font-bold text-slate-400 block">Active Investors</span>
                   <span className="text-xl sm:text-2xl font-black font-mono tracking-tight text-blue-400 block mt-1">
-                    {(stats.total_investors_count || 1420).toLocaleString()}+
+                    {(stats.total_investors_count ?? 0).toLocaleString()}
                   </span>
                 </div>
               </div>

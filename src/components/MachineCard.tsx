@@ -104,23 +104,23 @@ export const MachineCard: React.FC<MachineCardProps> = ({
           </span>
         </div>
 
-        {/* Policy Indicator (Max Unit: 1 / Max Unit: 2 / Mon-Mon / Locked Class Requirement) */}
+        {/* Policy Indicator (Max Unit: 1 / Max Unit: 2 / Mon-Fri / Locked Class Requirement) */}
         <div className="absolute bottom-2 left-2 right-2">
           {isLockedPlane ? (
             <span className="text-[8px] font-mono font-extrabold px-1.5 py-0.5 rounded bg-rose-950/95 text-rose-300 border border-rose-500/60 block truncate">
-              🔒 Need {requiredInvites.toLocaleString()} Invites ({invitedCount}/{requiredInvites.toLocaleString()})
+              🔒 Need {requiredInvites.toLocaleString()} Customers ({invitedCount}/{requiredInvites.toLocaleString()})
             </span>
           ) : isAV1 ? (
             <span className="text-[8px] font-mono font-extrabold px-1.5 py-0.5 rounded bg-amber-950/90 text-amber-300 border border-amber-500/40 block truncate">
-              Max Unit: 1 • Wallet
+              Max Unit: 1 • Mon–Fri
             </span>
           ) : isAV2 ? (
             <span className="text-[8px] font-mono font-extrabold px-1.5 py-0.5 rounded bg-blue-950/90 text-blue-300 border border-blue-400/40 block truncate">
-              Max Unit: 2 • Wallet
+              Max Unit: 2 • Mon–Fri
             </span>
           ) : isAvClass ? (
             <span className="text-[8px] font-mono font-extrabold px-1.5 py-0.5 rounded bg-emerald-950/90 text-emerald-300 border border-emerald-500/40 block truncate">
-              Unlocked ({requiredInvites.toLocaleString()}+ Invites) ⚡
+              Unlocked ({requiredInvites.toLocaleString()}+ Customers) ⚡
             </span>
           ) : null}
         </div>
@@ -137,11 +137,15 @@ export const MachineCard: React.FC<MachineCardProps> = ({
             {isLockedPlane ? (
               <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-rose-950/90 text-rose-300 border border-rose-500/50 shrink-0 inline-flex items-center gap-1">
                 <Lock className="w-2.5 h-2.5" />
-                <span>Need {requiredInvites.toLocaleString()} Invites</span>
+                <span>Need {requiredInvites.toLocaleString()} Customers</span>
               </span>
             ) : walletOnly ? (
               <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-950/90 text-sky-300 border border-sky-500/50 shrink-0 inline-block">
-                Wallet Only
+                Mon–Friday
+              </span>
+            ) : isAvClass ? (
+              <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950/90 text-emerald-300 border border-emerald-500/50 shrink-0 inline-block">
+                All Week
               </span>
             ) : null}
           </div>
@@ -149,7 +153,9 @@ export const MachineCard: React.FC<MachineCardProps> = ({
           {/* Line 1: Lock: X Days */}
           <p className="text-xs sm:text-sm text-slate-300 font-medium flex items-center gap-1.5">
             <span className="text-slate-400">Lock:</span>
-            <span className="text-white font-bold font-mono">{duration} Days</span>
+            <span className="text-white font-bold font-mono">
+              {duration} Days {isAvClass ? '(Throughout Week)' : '(Mon–Fri)'}
+            </span>
           </p>
 
           {/* Line 2: Price: X USD / UGX */}
@@ -189,7 +195,7 @@ export const MachineCard: React.FC<MachineCardProps> = ({
             {isLockedPlane ? (
               <>
                 <Lock className="w-3 h-3 text-rose-400" />
-                <span>Locked ({requiredInvites.toLocaleString()} Invites)</span>
+                <span>Locked ({requiredInvites.toLocaleString()} Customers)</span>
               </>
             ) : (
               <>

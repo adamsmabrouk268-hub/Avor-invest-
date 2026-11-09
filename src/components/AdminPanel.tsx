@@ -9,6 +9,7 @@ import {
   subscribeToFirestoreOrders,
   confirmOrderInFirestore,
   denyOrderInFirestore,
+  clearAllFirestoreOrdersAndMessages,
   FirestoreOrderRecord,
   signInAdminWithGoogle,
   deleteFirestoreAdminMessage,
@@ -247,43 +248,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     }
   };
 
-  // Fetch Overview Data (with automatic Vault Backup & Restore across Publishing / GitHub deploys)
+  // Fetch Overview Data directly from server & Firestore without restoring stale localStorage backups
   const fetchAdminData = async () => {
     setIsLoadingData(true);
     try {
+      try {
+        localStorage.removeItem('avor_admin_vault_backup_v1');
+        localStorage.removeItem('avor_admin_vault_backup_v2');
+      } catch {}
+
       const res = await fetch('/api/admin/overview');
       const ct = res.headers.get('content-type') || '';
       if (res.ok && ct.includes('application/json')) {
-        let data = await res.json();
-
-        // Check if browser has a saved Admin Plane backup with records that need to be restored after a fresh container deploy
-        try {
-          localStorage.removeItem('avor_admin_vault_backup_v1');
-          const rawBackup = localStorage.getItem('avor_admin_vault_backup_v2');
-          if (rawBackup) {
-            const backup = JSON.parse(rawBackup);
-            const serverTxIds = new Set((data.deposits || []).map((d: any) => d.id));
-            const serverUserIds = new Set((data.users || []).map((u: any) => u.id));
-            const hasMissingDeposits =
-              Array.isArray(backup.deposits) &&
-              backup.deposits.some((d: any) => d && d.id && !serverTxIds.has(d.id));
-            const hasMissingUsers =
-              Array.isArray(backup.users) &&
-              backup.users.some((u: any) => u && u.id && !serverUserIds.has(u.id));
-
-            if (hasMissingDeposits || hasMissingUsers) {
-              await fetch('/api/admin/sync-vault', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(backup),
-              });
-              const refreshedRes = await fetch('/api/admin/overview');
-              if (refreshedRes.ok) {
-                data = await refreshedRes.json();
-              }
-            }
-          }
-        } catch {}
+        const data = await res.json();
 
         setStats(data);
         setDeposits(data.deposits || []);
@@ -303,24 +280,51 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         if (data.users && data.users.length > 0 && !selectedUserId) {
           setSelectedUserId(data.users[0].id);
         }
-
-        try {
-          localStorage.setItem(
-            'avor_admin_vault_backup_v2',
-            JSON.stringify({
-              deposits: data.deposits || [],
-              withdrawals: data.withdrawals || [],
-              investments: data.investments || [],
-              users: data.users || [],
-              deposit_receiver_numbers: data.deposit_receiver_numbers || [],
-              homepage_config: data.homepage_config || null,
-              updated_at: new Date().toISOString(),
-            })
-          );
-        } catch {}
       }
     } catch {
       // Transient fetch error during background polling or server restart — keep existing state silently
+    } finally {
+      setIsLoadingData(false);
+    }
+  };
+
+  const handleResetAllSystemZero = async () => {
+    setIsLoadingData(true);
+    setStatusMessage(null);
+    try {
+      await clearAllFirestoreOrdersAndMessages();
+      const res = await fetch('/api/admin/reset-all-zero', { method: 'POST' });
+      const data = await res.json();
+      await fetch('/api/system/reset-state', { method: 'POST' });
+
+      try {
+        localStorage.removeItem('avor_admin_vault_backup_v1');
+        localStorage.removeItem('avor_admin_vault_backup_v2');
+        localStorage.removeItem('avor_my_deposit_refs');
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('avor_invest_txs_')) {
+            localStorage.removeItem(k);
+          }
+        }
+      } catch {}
+
+      setFirestoreOrders([]);
+      setFirestoreMessages([]);
+      setServerInvestments([]);
+      setInvestmentsLedger([]);
+      setDeposits([]);
+      setWithdrawals([]);
+      await fetchAdminData();
+      if (onDataChanged) onDataChanged();
+      setStatusMessage({
+        type: 'success',
+        text:
+          data.message ||
+          'System reset to 0: No machines sold, 0 money in total system wallet, 0 active cycles, 0 pending orders.',
+      });
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'Failed to reset system.' });
     } finally {
       setIsLoadingData(false);
     }
@@ -1467,6 +1471,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
               <span>← Exit Admin</span>
             </button>
           )}
+          <button
+            onClick={handleResetAllSystemZero}
+            disabled={isLoadingData}
+            className="px-3.5 py-2 bg-rose-950/60 hover:bg-rose-900/70 text-rose-200 hover:text-white text-xs font-bold rounded-xl border border-rose-500/40 flex items-center gap-1.5 cursor-pointer transition-all shrink-0"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+            <span>Reset System to 0</span>
+          </button>
           <button
             onClick={() => {
               fetchAdminData();

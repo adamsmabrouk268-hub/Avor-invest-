@@ -91,13 +91,13 @@ export const CategoryTabs: React.FC<CategoryTabsProps> = ({
             AV2 series
           </button>
 
-          {/* 4. AV Classes Series (Locked until user buys a machine and invites 4+ people for A class) */}
+          {/* 4. AV Classes Series (Locked until user buys a machine and invites 4+ customers for A class) */}
           <button
             type="button"
             onClick={() => {
               if (!isAClassUnlocked && onLockedPlaneNotify) {
                 onLockedPlaneNotify(
-                  `🔒 Class Requirements Locked: To access A class, you must buy a machine and have invited 4 people who bought a machine (Current invited buyers: ${invitedCount}/4).`
+                  `🔒 Class Requirements Locked: To access A class, you must buy a machine and have 4 customers who bought a machine (Current customers: ${invitedCount}/4).`
                 );
               }
               onSelectCategory('AVCLASSES');
@@ -112,11 +112,6 @@ export const CategoryTabs: React.FC<CategoryTabsProps> = ({
           >
             {!isAClassUnlocked && <Lock className="w-3.5 h-3.5 text-rose-400" />}
             <span>AV Class series</span>
-            {!isAClassUnlocked && (
-              <span className="text-[9px] bg-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded uppercase">
-                🔐 4 Invites
-              </span>
-            )}
           </button>
         </div>
 
@@ -191,7 +186,7 @@ export const CategoryTabs: React.FC<CategoryTabsProps> = ({
                 onClick={() => {
                   if (!unlocked && onLockedPlaneNotify) {
                     onLockedPlaneNotify(
-                      `🔒 ${cls.label} is Locked! To access ${cls.label}, you must buy a machine and have invited ${cls.requiredInvites.toLocaleString()} people who bought a machine (You have ${invitedCount}/${cls.requiredInvites.toLocaleString()} invited people).`
+                      `🔒 ${cls.label} is Locked! To access ${cls.label}, you must buy a machine and have ${cls.requiredInvites.toLocaleString()} customers who bought a machine (You have ${invitedCount}/${cls.requiredInvites.toLocaleString()} customers).`
                     );
                   }
                   onSelectCategory(cls.id);
@@ -207,7 +202,7 @@ export const CategoryTabs: React.FC<CategoryTabsProps> = ({
                 {!unlocked && <span>🔐</span>}
                 <span>{cls.label}</span>
                 <span className="text-[10px] opacity-80 font-mono">
-                  ({cls.requiredInvites.toLocaleString()})
+                  ({cls.requiredInvites.toLocaleString()} customers)
                 </span>
               </button>
             );

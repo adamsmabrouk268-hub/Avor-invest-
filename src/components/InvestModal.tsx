@@ -458,7 +458,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
         amount: totalCost,
         daily_return: dailyYieldVal,
         duration_days: durationVal,
-        total_return: dailyYieldVal * durationVal,
+        total_return: (machine.total_return || dailyYieldVal * durationVal) * units,
         days_elapsed: 0,
         days_left: durationVal,
         units,

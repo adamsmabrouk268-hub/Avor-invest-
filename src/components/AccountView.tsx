@@ -218,7 +218,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
         : Number(user?.available_wallet ?? user?.wallet_balance ?? confirmedTxDeposits);
   const totalDeposited = availableWalletValue;
   const pendingDeposits = Number(dashboardSummary?.deposit_details?.pending_deposits ?? 0);
-  const liveBalanceValue = dashboardSummary?.balance ?? user?.balance ?? 3000;
+  const liveBalanceValue = dashboardSummary?.balance ?? user?.balance ?? 0;
   const displayWallet = totalDeposited.toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -620,78 +620,236 @@ export const AccountView: React.FC<AccountViewProps> = ({
           MODALS FOR THE 9 PROFILE ACTIONS
          ========================================================================= */}
 
-      {/* Modal 1: Bill (Transaction & Statement Records) */}
-      {activeModal === 'bill' && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-[#03081a] border border-[#0091ea]/60 shadow-[0_0_25px_rgba(0,145,234,0.2)] rounded-2xl p-5 max-w-md w-full space-y-4 max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between pb-3 border-b border-[#0e2748]">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-[#0091ea] flex items-center justify-center text-white">
-                  <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="3" y="3" width="18" height="18" rx="2" />
-                    <line x1="7" y1="8" x2="17" y2="8" />
-                    <line x1="7" y1="12" x2="17" y2="12" />
-                  </svg>
+      {/* Modal 1: Bill (Keeps All Statement / Financial Records per Item 13) */}
+      {activeModal === 'bill' && (() => {
+        // Merge and deduplicate all financial & statement records from transactions, dashboardSummary deposits/withdrawals, and machine investments
+        const recordMap = new Map<string, {
+          id: string;
+          type: string;
+          title: string;
+          subtitle: string;
+          amount: number;
+          isDebit: boolean;
+          status: string;
+          created_at: string;
+        }>();
+
+        transactions.forEach((tx) => {
+          const isDebit = tx.type === 'WITHDRAWAL' || tx.type === 'INVESTMENT';
+          recordMap.set(String(tx.id), {
+            id: String(tx.id),
+            type: String(tx.type || 'TRANSACTION').toUpperCase(),
+            title:
+              tx.type === 'DEPOSIT'
+                ? 'Wallet Deposit'
+                : tx.type === 'WITHDRAWAL'
+                  ? 'Income Withdrawal'
+                  : tx.type === 'INVESTMENT'
+                    ? 'Machine Purchase'
+                    : tx.type === 'YIELD'
+                      ? 'Daily Machine Yield'
+                      : tx.type === 'COMMISSION'
+                        ? '8% Referral Commission'
+                        : String(tx.type || 'Statement Entry'),
+            subtitle: [tx.payment_method, tx.payment_reference].filter(Boolean).join(' • ') || 'Official Financial Statement',
+            amount: Math.abs(Number(tx.amount) || 0),
+            isDebit,
+            status: String(tx.status || 'SUCCESS').toUpperCase(),
+            created_at: tx.created_at || new Date().toISOString(),
+          });
+        });
+
+        // Include any recent deposits from dashboardSummary not yet in transactions
+        const summaryDeposits: any[] = dashboardSummary?.deposit_details?.recent_deposits || [];
+        summaryDeposits.forEach((dep) => {
+          const key = String(dep.id || dep.reference || `dep-${dep.created_at}`);
+          if (!recordMap.has(key)) {
+            recordMap.set(key, {
+              id: key,
+              type: 'DEPOSIT',
+              title: 'Wallet Deposit',
+              subtitle: [dep.method, dep.reference].filter(Boolean).join(' • ') || 'Mobile Money Deposit',
+              amount: Math.abs(Number(dep.amount) || 0),
+              isDebit: false,
+              status: String(dep.status || 'SUCCESS').toUpperCase(),
+              created_at: dep.created_at || new Date().toISOString(),
+            });
+          }
+        });
+
+        // Include any recent withdrawals from dashboardSummary not yet in transactions
+        const summaryWithdrawals: any[] = dashboardSummary?.withdraw_details?.recent_withdrawals || [];
+        summaryWithdrawals.forEach((wd) => {
+          const key = String(wd.id || wd.reference || `wd-${wd.created_at}`);
+          if (!recordMap.has(key)) {
+            recordMap.set(key, {
+              id: key,
+              type: 'WITHDRAWAL',
+              title: 'Income Withdrawal',
+              subtitle: [wd.method, wd.reference].filter(Boolean).join(' • ') || 'Mobile Money Payout',
+              amount: Math.abs(Number(wd.amount) || 0),
+              isDebit: true,
+              status: String(wd.status || 'PENDING').toUpperCase(),
+              created_at: wd.created_at || new Date().toISOString(),
+            });
+          }
+        });
+
+        // Include all machine investment orders & accrued yield statements
+        investments.forEach((inv) => {
+          const invKey = `inv-${inv.id}`;
+          if (!recordMap.has(invKey) && !Array.from(recordMap.values()).some((r) => r.type === 'INVESTMENT' && r.subtitle.includes(inv.machine_name))) {
+            recordMap.set(invKey, {
+              id: invKey,
+              type: 'MACHINE ORDER',
+              title: `Machine Order: ${inv.machine_name}`,
+              subtitle: `${inv.units || 1} Unit(s) • Daily Yield ${currencyInfo.format(Number(inv.daily_yield) || 0)}`,
+              amount: Math.abs(Number(inv.invested_amount) || 0),
+              isDebit: true,
+              status: String(inv.status || 'PENDING').toUpperCase(),
+              created_at: inv.start_date || new Date().toISOString(),
+            });
+          }
+        });
+
+        // Include Customer Welcome Eligibility Record (3,000 UGX) if user has balance >= 3000 and no bonus record yet
+        if (liveBalanceValue >= 3000 && !Array.from(recordMap.values()).some((r) => r.amount === 3000 && !r.isDebit)) {
+          recordMap.set('welcome-eligible-3000', {
+            id: 'welcome-eligible-3000',
+            type: 'CUSTOMER BONUS',
+            title: 'Customer Eligible Balance Credit',
+            subtitle: '3,000 UGX Eligible for Customers • Official Account Record',
+            amount: 3000,
+            isDebit: false,
+            status: 'CREDITED',
+            created_at: (user as any)?.created_at || new Date().toISOString(),
+          });
+        }
+
+        const allRecords = Array.from(recordMap.values()).sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+
+        const totalWithdrawnIncome = Number(dashboardSummary?.withdraw_details?.total_withdrawn ?? 0);
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+            <div className="bg-[#03081a] border border-[#0091ea]/60 shadow-[0_0_25px_rgba(0,145,234,0.2)] rounded-2xl p-5 max-w-md w-full space-y-3.5 max-h-[88vh] flex flex-col">
+              <div className="flex items-center justify-between pb-3 border-b border-[#0e2748]">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-[#0091ea] flex items-center justify-center text-white">
+                    <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="3" y="3" width="18" height="18" rx="2" />
+                      <line x1="7" y1="8" x2="17" y2="8" />
+                      <line x1="7" y1="12" x2="17" y2="12" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white leading-tight">Bill &amp; Financial Statements</h3>
+                    <span className="text-[10px] font-mono text-sky-400">
+                      Complete Statement &amp; Financial Records ({allRecords.length})
+                    </span>
+                  </div>
                 </div>
-                <h3 className="text-base font-bold text-white">Bill & Statement Records</h3>
+                <button
+                  onClick={() => setActiveModal(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
+
+              {/* Financial Statement Summary Strip */}
+              <div className="grid grid-cols-3 gap-2 text-center font-mono text-[10px] bg-[#06112a] border border-[#0e2748] p-2.5 rounded-xl">
+                <div>
+                  <span className="text-slate-400 block">Wallet</span>
+                  <span className="text-sky-400 font-black text-xs block mt-0.5">
+                    {currencyInfo.format(totalDeposited)}
+                  </span>
+                </div>
+                <div className="border-x border-[#0e2748] px-1">
+                  <span className="text-slate-400 block">Balance</span>
+                  <span className="text-emerald-400 font-black text-xs block mt-0.5">
+                    {currencyInfo.format(liveBalanceValue)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block">Withdrawn</span>
+                  <span className="text-amber-300 font-black text-xs block mt-0.5">
+                    {currencyInfo.format(totalWithdrawnIncome)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Statement & Financial Records List */}
+              <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+                {allRecords.length === 0 ? (
+                  <div className="text-center py-10 text-slate-400 space-y-2">
+                    <p className="text-sm font-bold text-slate-300">No financial statements recorded yet.</p>
+                    <p className="text-xs text-slate-500">
+                      All your deposits, withdrawals, machine purchases, daily yields, commissions, and balance statements are permanently kept here.
+                    </p>
+                  </div>
+                ) : (
+                  allRecords.map((rec) => (
+                    <div
+                      key={rec.id}
+                      className="bg-[#08132c] border border-[#0e2748] p-3 rounded-xl flex items-center justify-between text-xs font-mono"
+                    >
+                      <div className="min-w-0 pr-2 space-y-0.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-white uppercase">{rec.title}</span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-950/80 border border-blue-700/40 text-sky-300 font-bold">
+                            {rec.type}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-300 block truncate">{rec.subtitle}</span>
+                        <span className="text-[10px] text-slate-400 block">
+                          {new Date(rec.created_at).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span
+                          className={`font-black text-sm block ${
+                            rec.isDebit ? 'text-rose-400' : 'text-emerald-400'
+                          }`}
+                        >
+                          {rec.isDebit ? '-' : '+'}
+                          {currencyInfo.format(rec.amount)}
+                        </span>
+                        <span
+                          className={`text-[10px] font-bold uppercase ${
+                            rec.status === 'SUCCESS' ||
+                            rec.status === 'CONFIRMED' ||
+                            rec.status === 'ACTIVE' ||
+                            rec.status === 'CREDITED' ||
+                            rec.status === 'PAYOUT_COMPLETE'
+                              ? 'text-emerald-400'
+                              : rec.status.includes('PENDING')
+                                ? 'text-amber-300'
+                                : 'text-rose-400'
+                          }`}
+                        >
+                          {rec.status === 'SUCCESS' || rec.status === 'CONFIRMED'
+                            ? 'CONFIRMED'
+                            : rec.status}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
               <button
                 onClick={() => setActiveModal(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+                className="w-full py-2.5 bg-[#0091ea] hover:bg-[#0081d6] text-white rounded-xl text-xs font-bold cursor-pointer"
               >
-                <X className="w-5 h-5" />
+                Close Statement Records
               </button>
             </div>
-
-            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
-              {transactions.length === 0 ? (
-                <div className="text-center py-10 text-slate-400 space-y-2">
-                  <p className="text-sm font-bold text-slate-300">No payments yet.</p>
-                  <p className="text-xs text-slate-500">Your deposit, withdrawal, bonus, and machine bills will display here.</p>
-                </div>
-              ) : (
-                transactions.map((tx) => (
-                  <div key={tx.id} className="bg-[#08132c] border border-[#0e2748] p-3 rounded-xl flex items-center justify-between text-xs font-mono">
-                    <div className="min-w-0 pr-2">
-                      <span className="font-bold text-white block uppercase">{tx.type}</span>
-                      {tx.payment_method && (
-                        <span className="text-[10px] text-slate-300 block truncate">{tx.payment_method}</span>
-                      )}
-                      <span className="text-[10px] text-slate-400">
-                        {new Date(tx.created_at).toLocaleString()} {tx.payment_reference ? `• ${tx.payment_reference}` : ''}
-                      </span>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <span className={`font-black text-sm block ${tx.type === 'WITHDRAWAL' || tx.type === 'INVESTMENT' ? 'text-rose-400' : 'text-emerald-400'}`}>
-                        {tx.type === 'WITHDRAWAL' || tx.type === 'INVESTMENT' ? '-' : '+'}
-                        {currencyInfo.format(Math.abs(tx.amount))}
-                      </span>
-                      <span
-                        className={`text-[10px] font-bold uppercase ${
-                          tx.status === 'SUCCESS' || tx.status === 'CONFIRMED'
-                            ? 'text-emerald-400'
-                            : tx.status === 'PENDING'
-                              ? 'text-amber-300'
-                              : 'text-rose-400'
-                        }`}
-                      >
-                        {tx.status === 'SUCCESS' || tx.status === 'CONFIRMED' ? 'SUCCESSFUL' : tx.status}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <button
-              onClick={() => setActiveModal(null)}
-              className="w-full py-2.5 bg-[#0091ea] hover:bg-[#0081d6] text-white rounded-xl text-xs font-bold cursor-pointer"
-            >
-              Close
-            </button>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Modal 2: Invite (Locked until user buys a machine; opens automatically once user buys a machine) */}
       {activeModal === 'invite' && (

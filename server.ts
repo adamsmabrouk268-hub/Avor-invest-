@@ -183,9 +183,31 @@ function loadAppStateFromDisk() {
     if (fs.existsSync(MACHINES_FILE)) {
       const loadedMachines = JSON.parse(fs.readFileSync(MACHINES_FILE, 'utf-8'));
       if (Array.isArray(loadedMachines) && loadedMachines.length > 0) {
-        machines.splice(0, machines.length, ...loadedMachines);
+        // Sync schedule & descriptions with DEFAULT_MACHINES (Item 10, 11, 12)
+        const syncedMachines = loadedMachines.map((m: any) => {
+          const def = DEFAULT_MACHINES.find((d) => d.id === m.id || d.title === m.title);
+          if (def) {
+            return {
+              ...m,
+              description: def.description,
+              total_return: def.total_return,
+              runs_everyday: def.runs_everyday,
+              runs_on_weekends: def.runs_on_weekends,
+              running_schedule_text: def.running_schedule_text,
+            };
+          }
+          return m;
+        });
+        machines.splice(0, machines.length, ...syncedMachines);
       }
     }
+    // Also normalize any investment with 50004 total_return to 50000 * units (Item 11)
+    investments.forEach((inv) => {
+      const unitsCount = Math.max(1, Number(inv.units) || 1);
+      if (inv.total_return === 50004 * unitsCount || (inv.daily_yield === 2778 * unitsCount && inv.duration_days === 18)) {
+        inv.total_return = 50000 * unitsCount;
+      }
+    });
     saveAppStateToDisk();
   } catch (err) {
     console.error('Error loading app state from disk:', err);
@@ -392,7 +414,7 @@ function findOrRestoreUser(userId?: string, body: any = {}): (User & { password_
       country: 'Uganda',
       kyc_status: 'VERIFIED',
       role: 'INVESTOR',
-      balance: 3000,
+      balance: 0,
       wallet_balance: 0,
       available_wallet: 0,
       referral_code: `AVOR-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -424,6 +446,7 @@ function doesTxBelongToUser(t: Transaction, user?: User, explicitUserId?: string
   );
 }
 
+// Item 4: 3,000 UGX should be eligible for customers (credited to customer balance; Total System Wallet remains 0 until real deposits)
 const REGISTRATION_REWARD_UGX = 3000;
 
 function linkKnownDepositRefsToUser(user?: User & { password_hash?: string }, rawRefs?: any) {
@@ -622,7 +645,16 @@ function loadDepositNumbersFromDisk() {
       const raw = fs.readFileSync(DEPOSIT_NUMBERS_FILE, 'utf-8');
       const loaded: DepositReceiverNumber[] = JSON.parse(raw);
       if (Array.isArray(loaded)) {
-        depositReceiverNumbers = loaded;
+        depositReceiverNumbers = loaded.map((n) =>
+          transactions.length === 0
+            ? {
+                ...n,
+                amount_received_today: 0,
+                total_received_ugx: 0,
+                total_transactions_count: 0,
+              }
+            : n
+        );
         console.log(`[Storage] Preloaded ${loaded.length} deposit receiver numbers from ${DEPOSIT_NUMBERS_FILE}`);
         return;
       }
@@ -2012,7 +2044,7 @@ async function startServer() {
 
       if (!hasBoughtAnyMachine) {
         return res.status(400).json({
-          error: `🔒 ${classLabel} is Locked! You must first buy an AV1 or AV2 machine and invite ${requiredInvites.toLocaleString()} people who buy a machine to access ${classLabel}.`,
+          error: `🔒 ${classLabel} is Locked! You must first buy an AV1 or AV2 machine and invite ${requiredInvites.toLocaleString()} customers who buy a machine to access ${classLabel}.`,
         });
       }
 
@@ -2031,7 +2063,7 @@ async function startServer() {
 
       if (activeBuyers.length < requiredInvites) {
         return res.status(400).json({
-          error: `🔒 ${classLabel} is Locked! To access ${classLabel}, you must have invited ${requiredInvites.toLocaleString()} people who bought a machine (You currently have ${activeBuyers.length}/${requiredInvites.toLocaleString()} invited people).`,
+          error: `🔒 ${classLabel} is Locked! To access ${classLabel}, you must have invited ${requiredInvites.toLocaleString()} customers who bought a machine (Invited customers : ${activeBuyers.length} / Need ${Math.max(0, requiredInvites - activeBuyers.length)} more).`,
         });
       }
     }
@@ -2657,11 +2689,15 @@ async function startServer() {
     const totalInvitedMachinesPrice = activeBuyers.reduce((sum, m) => sum + m.total_invested, 0);
     const lastMonthReward5Pct = Math.round(totalInvitedMachinesPrice * 0.05);
 
-    // Calculate AI Income (claimed returns from hardware rigs), Today's earnings, and Total Returns
+    // Calculate AI Income (all total daily yields per Item 6), Today's earnings (daily yield per Item 5), and Total Returns
     const totalClaimedYield = confirmedUserInvestments.reduce((sum, i) => sum + (i.total_claimed || 0), 0);
+    const totalDailyYieldsAll = confirmedUserInvestments.reduce(
+      (sum, i) => sum + (Number(i.daily_yield) || 0) * Math.max(1, Number(i.days_elapsed) || 1),
+      0
+    );
     const totalMachineReturns = confirmedUserInvestments.reduce((sum, i) => sum + (i.total_return || 0), 0);
-    const aiIncome = totalClaimedYield > 0 ? totalClaimedYield : 0;
-    const todayEarnings = userInvestments.reduce((sum, i) => {
+    const aiIncome = Math.max(totalClaimedYield, totalDailyYieldsAll);
+    const todayEarnings = confirmedUserInvestments.reduce((sum, i) => {
       if (i.status === 'ACTIVE') {
         return sum + (i.daily_yield || 0);
       }
@@ -2728,15 +2764,15 @@ async function startServer() {
     if (!user) return res.status(404).json({ error: 'User not found.' });
 
     const TIER_REWARDS: Record<string, { required: number; reward: number; name: string }> = {
-      A: { required: 4, reward: 25000, name: 'A class (4 People)' },
-      B: { required: 9, reward: 60000, name: 'B class (9 People)' },
-      C: { required: 20, reward: 110000, name: 'C class (20 People)' },
-      D: { required: 35, reward: 220000, name: 'D class (35 People)' },
-      E: { required: 70, reward: 450000, name: 'E class (70 People)' },
-      F: { required: 120, reward: 850000, name: 'F class (120 People)' },
-      G: { required: 300, reward: 1200000, name: 'G class (300 People)' },
-      H: { required: 5000, reward: 3000000, name: 'H class (5000 People)' },
-      I: { required: 10000, reward: 8500000, name: 'I class (10000 People)' },
+      A: { required: 4, reward: 25000, name: 'A class (4 Customers)' },
+      B: { required: 9, reward: 60000, name: 'B class (9 Customers)' },
+      C: { required: 20, reward: 110000, name: 'C class (20 Customers)' },
+      D: { required: 35, reward: 220000, name: 'D class (35 Customers)' },
+      E: { required: 70, reward: 450000, name: 'E class (70 Customers)' },
+      F: { required: 120, reward: 850000, name: 'F class (120 Customers)' },
+      G: { required: 300, reward: 1200000, name: 'G class (300 Customers)' },
+      H: { required: 5000, reward: 3000000, name: 'H class (5000 Customers)' },
+      I: { required: 10000, reward: 8500000, name: 'I class (10000 Customers)' },
     };
 
     const tierKey = (tier || '').toString().toUpperCase();
@@ -4734,7 +4770,7 @@ async function startServer() {
     const effectiveCreatedAt = createdAt || new Date().toISOString();
     const effectiveRef = paymentReference || `FB-${(firebase_doc_id || Date.now().toString()).slice(0, 8)}`;
 
-    // Ensure there is also a corresponding DEPOSIT transaction in the Admin Plane for every order in Firebase
+    // Link to an existing DEPOSIT transaction if present (do not synthesize phantom deposits from historical Firestore messages)
     let linkedTxId: string | undefined;
     if (numAmt > 0 && !isWalletPurchaseMsg) {
       const explicitUserId = (payload as any)?.userId || (payload as any)?.user_id || '';
@@ -4742,15 +4778,14 @@ async function startServer() {
       const existingByExplicitTx = explicitTxId ? transactions.find((t) => t.id === explicitTxId) : undefined;
       const targetMatchTx = existingMatchingTx || existingByExplicitTx;
 
-      const user = findOrRestoreUser(explicitUserId || customerPhone || customerName, {
-        user_id: explicitUserId || undefined,
-        phone_number: customerPhone,
-        user_phone: customerPhone,
-        full_name: customerName,
-        user_name: customerName,
-      });
-
       if (targetMatchTx) {
+        const user = findOrRestoreUser(explicitUserId || customerPhone || customerName, {
+          user_id: explicitUserId || undefined,
+          phone_number: customerPhone,
+          user_phone: customerPhone,
+          full_name: customerName,
+          user_name: customerName,
+        });
         linkedTxId = targetMatchTx.id;
         if (firebase_doc_id && !(targetMatchTx as any).firebase_doc_id) {
           (targetMatchTx as any).firebase_doc_id = firebase_doc_id;
@@ -4764,34 +4799,6 @@ async function startServer() {
           (targetMatchTx as any).wallet_credited = true;
           (targetMatchTx as any).approved_permanent = true;
           if (user) syncUserConfirmedFinances(user, user.id);
-        }
-      } else {
-        const depositTx: Transaction = {
-          id: explicitTxId || `tx-fb-${firebase_doc_id || Date.now()}-${Math.floor(100 + Math.random() * 899)}`,
-          user_id: explicitUserId || (user ? user.id : `usr-fb-${Date.now()}`),
-          amount: numAmt,
-          type: 'DEPOSIT',
-          status: incomingIsConfirmed ? 'SUCCESS' : 'PENDING',
-          payment_method: `${paymentMethod || 'Mobile Money'} • Sender: ${customerPhone || customerName} -> Receiver: ${targetReceiverPhone} (${targetReceiverName})`,
-          payment_reference: effectiveRef,
-          machine_title: machineTitle || item || undefined,
-          created_at: effectiveCreatedAt,
-        };
-        (depositTx as any).status_label = incomingIsConfirmed ? 'Successful' : 'Pending';
-        (depositTx as any).firebase_doc_id = firebase_doc_id;
-        (depositTx as any).wallet_credited = incomingIsConfirmed;
-        (depositTx as any).receiver_credited = incomingIsConfirmed;
-        (depositTx as any).approved_permanent = incomingIsConfirmed;
-        (depositTx as any).receiver_phone = targetReceiverPhone;
-        (depositTx as any).receiver_name = targetReceiverName;
-        (depositTx as any).customer_name = customerName;
-        (depositTx as any).customer_phone = customerPhone;
-        (depositTx as any).user_phone = user?.phone_number || customerPhone;
-        transactions.unshift(depositTx);
-        linkedTxId = depositTx.id;
-
-        if (user) {
-          syncUserConfirmedFinances(user, user.id);
         }
       }
     }
@@ -5124,7 +5131,7 @@ async function startServer() {
         }
       }
 
-      const fin = user ? syncUserConfirmedFinances(user, user.id) : { computedWallet: 0, computedBalance: 3000 };
+      const fin = user ? syncUserConfirmedFinances(user, user.id) : { computedWallet: 0, computedBalance: 0 };
       if (user) {
         pushNotification(
           user.id,
@@ -5189,7 +5196,7 @@ async function startServer() {
           n.read = true;
         }
       }
-      const fin = user ? syncUserConfirmedFinances(user, user.id) : { computedWallet: 0, computedBalance: 3000 };
+      const fin = user ? syncUserConfirmedFinances(user, user.id) : { computedWallet: 0, computedBalance: 0 };
       if (user) {
         pushNotification(
           user.id,
@@ -5916,76 +5923,83 @@ async function startServer() {
     });
   });
 
-  // Admin Vault Sync Endpoint: Restores/merges Admin Plane backup from browser localStorage after publishing or GitHub deploys so zero Admin Plane data is ever lost
+  // System Zero-Reset State Tracking
+  let systemResetEpochId = 'avor-zero-reset-v5';
+  let firestoreCleanedForEpoch = false;
+
+  app.get('/api/system/reset-state', (_req, res) => {
+    res.json({
+      reset_epoch_id: systemResetEpochId,
+      firestore_cleaned: firestoreCleanedForEpoch,
+    });
+  });
+
+  app.post('/api/system/reset-state', (_req, res) => {
+    firestoreCleanedForEpoch = true;
+    res.json({
+      reset_epoch_id: systemResetEpochId,
+      firestore_cleaned: firestoreCleanedForEpoch,
+    });
+  });
+
+  // Admin Endpoint to Reset Entire System to 0 (0 money in system wallet, 0 machines sold, 0 active cycles, 0 pending orders)
+  app.post('/api/admin/reset-all-zero', (_req, res) => {
+    transactions.length = 0;
+    investments.length = 0;
+    notifications.length = 0;
+
+    for (const u of users.values()) {
+      u.balance = 0;
+      u.wallet_balance = 0;
+      u.available_wallet = 0;
+      u.has_bought_machine = false;
+      if (u.id && u.id !== 'usr-admin-owner') {
+        saveRegisteredUserToDisk(u);
+      }
+    }
+
+    for (const n of depositReceiverNumbers) {
+      n.amount_received_today = 0;
+      n.total_received_ugx = 0;
+      n.total_transactions_count = 0;
+    }
+    saveDepositNumbersToDisk();
+    saveAppStateToDisk();
+
+    systemResetEpochId = `avor-zero-reset-${Date.now()}`;
+    firestoreCleanedForEpoch = false;
+
+    broadcastRealtimeEvent({
+      type: 'WALLET_DENIED_SYNC',
+      order_type: 'SYSTEM_RESET_ZERO',
+      wallet_balance: 0,
+      available_wallet: 0,
+      balance: 0,
+      timestamp: new Date().toISOString(),
+    });
+
+    return res.json({
+      message: 'System reset to 0: No machines sold, 0 money in total system wallet, 0 active cycles, 0 pending orders.',
+      reset_epoch_id: systemResetEpochId,
+    });
+  });
+
+  // Admin Vault Sync Endpoint: Only restores receiver numbers or homepage config if needed; never restores old deposits/investments
   app.post('/api/admin/sync-vault', (req, res) => {
     const {
-      deposits: incomingDeposits,
-      withdrawals: incomingWithdrawals,
-      investments: incomingInvestments,
-      users: incomingUsers,
       deposit_receiver_numbers: incomingNumbers,
       homepage_config: incomingHomepage,
     } = req.body || {};
 
     let restoredCount = 0;
 
-    if (Array.isArray(incomingUsers)) {
-      for (const u of incomingUsers) {
-        if (!u || !u.id || u.id === 'usr-admin-owner') continue;
-        if (!users.has(u.id)) {
-          const restoredUser = { ...u, password_hash: u.password_hash || 'restored' };
-          users.set(restoredUser.id, restoredUser);
-          if (restoredUser.phone_number) users.set(restoredUser.phone_number, restoredUser);
-          saveRegisteredUserToDisk(restoredUser);
-          restoredCount++;
-        }
-      }
-    }
-
-    const incomingTxs = [
-      ...(Array.isArray(incomingDeposits) ? incomingDeposits : []),
-      ...(Array.isArray(incomingWithdrawals) ? incomingWithdrawals : []),
-    ];
-    for (const tx of incomingTxs) {
-      if (!tx || !tx.id || isDemoRecord(tx)) continue;
-      const existing = transactions.find(
-        (t) =>
-          t.id === tx.id ||
-          (tx.payment_reference && t.payment_reference === tx.payment_reference && t.type === tx.type)
-      );
-      if (!existing) {
-        if (tx.status !== 'PENDING' || !DELETED_DEMO_IDS.has(String(tx.payment_reference || ''))) {
-          transactions.push(tx);
-          restoredCount++;
-        }
-      } else if (
-        (tx.status === 'SUCCESS' || tx.status === 'CONFIRMED') &&
-        existing.status === 'PENDING'
-      ) {
-        existing.status = 'SUCCESS';
-        (existing as any).wallet_credited = true;
-        (existing as any).approved_permanent = true;
-        restoredCount++;
-      } else if (tx.status === 'FAILED' && existing.status === 'PENDING') {
-        existing.status = 'FAILED';
-        (existing as any).status_label = 'Denied (Fake Order)';
-        (existing as any).wallet_credited = false;
-        restoredCount++;
-      }
-    }
-
-    if (Array.isArray(incomingInvestments)) {
-      for (const inv of incomingInvestments) {
-        if (!inv || !inv.id || isDemoRecord(inv)) continue;
-        if (!investments.some((i) => i.id === inv.id)) {
-          investments.push(inv);
-          restoredCount++;
-        }
-      }
-    }
-
     if (Array.isArray(incomingNumbers) && incomingNumbers.length > 0 && depositReceiverNumbers.length === 0) {
-      depositReceiverNumbers = incomingNumbers;
+      depositReceiverNumbers = incomingNumbers.map((n: any) => ({
+        ...n,
+        amount_received_today: 0,
+        total_received_ugx: 0,
+        total_transactions_count: 0,
+      }));
       saveDepositNumbersToDisk();
       restoredCount++;
     }

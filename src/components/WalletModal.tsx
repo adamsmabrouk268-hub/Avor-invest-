@@ -86,7 +86,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [summaryCompletedCycle, setSummaryCompletedCycle] = useState<boolean>(false);
   const [confirmedDepositsTotal, setConfirmedDepositsTotal] = useState<number>(0);
   const [pendingDepositsTotal, setPendingDepositsTotal] = useState<number>(0);
-  const [liveUserBalance, setLiveUserBalance] = useState<number>(user?.balance ?? 3000);
+  const [liveUserBalance, setLiveUserBalance] = useState<number>(user?.balance ?? 0);
 
   const completedCycleInvs = userInvestments.filter(
     (inv) => inv.status === 'PAYOUT_COMPLETE' || (inv.days_elapsed || 0) >= (inv.duration_days || 1)
@@ -1161,13 +1161,16 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     <strong className="text-emerald-300">5M (5,000,000 UGX)</strong>
                   </li>
                   <li>
-                    <strong className="text-cyan-300">3k</strong> is only eligible for{' '}
-                    <strong className="text-white">customers only</strong> (active machine owners).
+                    <strong className="text-cyan-300">3,000 UGX</strong> is eligible for{' '}
+                    <strong className="text-white">customers</strong>.
                   </li>
                   <li>
                     <strong className="text-cyan-300">Total Cycle Duration Rule:</strong> Money in wallet is used to buy machine only. Money on balance is for withdrawal only <strong className="text-emerald-300">after the total cycle duration of days</strong>.
                   </li>
                 </ol>
+                <p className="text-[11px] text-amber-300 font-bold pt-1">
+                  * Withdraws take 24-96 hours to process.
+                </p>
 
                 <div
                   className={`mt-1 pt-2 border-t border-blue-950/80 flex items-center justify-between text-[11px] font-mono ${

@@ -180,11 +180,39 @@ export const Homepage: React.FC<HomepageProps> = ({
     investments.some((i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') ||
     Boolean(summary?.has_bought_machine);
 
-  const totalDeposited = summary?.deposit_details?.total_deposited || 0;
+  const activeInvestments = investments.filter((i) => i.status === 'ACTIVE');
+  const completedOrActiveInvestments = investments.filter(
+    (i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE'
+  );
+  const activeDailyYield = activeInvestments.reduce(
+    (sum, i) => sum + (Number(i.daily_yield) || 0),
+    0
+  );
+  const totalDailyYieldsAll = completedOrActiveInvestments.reduce(
+    (sum, i) => sum + (Number(i.daily_yield) || 0) * Math.max(1, Number(i.days_elapsed) || 1),
+    0
+  );
+
+  // Item 1: In the "deposit details" icon on the home page, the total amount reflected on the wallet should be displayed
+  const totalDeposited =
+    summary?.available_wallet ??
+    summary?.wallet_balance ??
+    user?.available_wallet ??
+    user?.wallet_balance ??
+    summary?.deposit_details?.total_deposited ??
+    0;
   const pendingDeposits = summary?.deposit_details?.pending_deposits || 0;
   const totalWithdrawn = summary?.withdraw_details?.total_withdrawn || 0;
-  const aiIncome = summary?.ai_income || 0;
-  const todayEarnings = summary?.today_earnings || 0;
+  // Item 6: In the "AI income" icon on the home page, all the total daily yields should be born
+  const aiIncome =
+    totalDailyYieldsAll > 0
+      ? totalDailyYieldsAll
+      : activeDailyYield > 0
+        ? activeDailyYield
+        : summary?.ai_income || 0;
+  // Item 5: In the "today's earnings" icon on the home page, the daily yield should be born
+  const todayEarnings =
+    activeDailyYield > 0 ? activeDailyYield : summary?.today_earnings || 0;
   const inviteCount = summary?.team_size_details?.total_joined ?? 0;
   const teamCount = summary?.team_size_details?.team_size ?? 0;
   const teamIncome = summary?.team_size_details?.total_commissions_earned || 0;
@@ -643,11 +671,11 @@ export const Homepage: React.FC<HomepageProps> = ({
             <div className="flex items-center justify-between">
               <span className="font-mono font-black text-sky-300 text-xs">AV1 Series</span>
               <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-950 text-sky-300 border border-sky-500/40">
-                Wallet Only
+                Mon – Friday
               </span>
             </div>
             <p className="text-[11px] text-slate-300 leading-snug">
-              <strong>35,000 – 140,000 UGX</strong> • <strong>16–18 Days Lock</strong> returning up to <strong>220,000 UGX</strong>.
+              <strong>35,000 – 140,000 UGX</strong> • <strong>16–18 Days (Mon – Friday)</strong> returning up to <strong>220,000 UGX</strong>.
             </p>
             <div className="flex items-center justify-between pt-1 text-[10px] font-mono text-amber-300">
               <span>Limit: 1 Unit Only</span>
@@ -657,7 +685,7 @@ export const Homepage: React.FC<HomepageProps> = ({
             </div>
           </div>
 
-          {/* Direction 2: AV2 Series (Accurate AV2 Info per Item 1) */}
+          {/* Direction 2: AV2 Series (Accurate AV2 Info per Item 1 & Item 12) */}
           <div
             onClick={() => onNavigateToMarketplace('AV2')}
             className="bg-[#031420] hover:bg-[#062235] border border-[#00d2c4]/30 hover:border-[#00e5ff]/70 rounded-xl p-3 cursor-pointer transition-all group space-y-1.5"
@@ -665,11 +693,11 @@ export const Homepage: React.FC<HomepageProps> = ({
             <div className="flex items-center justify-between">
               <span className="font-mono font-black text-blue-300 text-xs">AV2 Series</span>
               <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-950 text-sky-300 border border-sky-500/40">
-                Wallet Only
+                Mon – Friday
               </span>
             </div>
             <p className="text-[11px] text-slate-300 leading-snug">
-              <strong>55,000 – 1,000,000 UGX</strong> • <strong>35–60 Days Lock</strong> returning <strong>200,000 – 2,000,000 UGX</strong>.
+              <strong>55,000 – 1,000,000 UGX</strong> • <strong>35–60 Days (Mon – Friday)</strong> returning <strong>200,000 – 2,000,000 UGX</strong>.
             </p>
             <div className="flex items-center justify-between pt-1 text-[10px] font-mono text-blue-300">
               <span>Limit: Max 2 Units</span>
@@ -679,7 +707,7 @@ export const Homepage: React.FC<HomepageProps> = ({
             </div>
           </div>
 
-          {/* Direction 3: AV Classes A–I (Locked until 4 invited people for A class) */}
+          {/* Direction 3: AV Classes A–I (Item 8: eliminate "Need 4 invites", Item 12: counts throughout the week) */}
           <div
             onClick={() => onNavigateToMarketplace('AVCLASSES')}
             className="bg-[#031420] hover:bg-[#062235] border border-[#00d2c4]/30 hover:border-[#00e5ff]/70 rounded-xl p-3 cursor-pointer transition-all group space-y-1.5"
@@ -687,17 +715,16 @@ export const Homepage: React.FC<HomepageProps> = ({
             <div className="flex items-center justify-between">
               <span className="font-mono font-black text-[#a3e635] text-xs flex items-center gap-1">
                 <span>AV Classes A–I</span>
-                {(!hasBoughtMachine || teamCount < 4) && <span>🔐</span>}
               </span>
-              <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500/40">
-                {hasBoughtMachine && teamCount >= 4 ? 'A class Open' : '🔒 Need 4 Invites'}
+              <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40">
+                Throughout Week
               </span>
             </div>
             <p className="text-[11px] text-slate-300 leading-snug">
-              <strong>30,000 – 9,000,000 UGX</strong> • Locked to access <strong>A class</strong> until user has invited <strong>4 people</strong>.
+              <strong>30,000 – 9,000,000 UGX</strong> • <strong>21 Days</strong> • Counts throughout the week returning up to <strong>25,000,000 UGX</strong>.
             </p>
             <div className="flex items-center justify-between pt-1 text-[10px] font-mono text-emerald-300">
-              <span>A class: 4 Invites (25k)</span>
+              <span>Counts Throughout Week</span>
               <span className="text-[#00e5ff] group-hover:translate-x-0.5 transition-transform flex items-center gap-0.5 font-bold">
                 Open Classes <ArrowRight className="w-3 h-3" />
               </span>
@@ -763,15 +790,15 @@ export const Homepage: React.FC<HomepageProps> = ({
             </div>
 
             <div className="bg-[#031420] border border-[#00d2c4]/30 p-4 rounded-xl space-y-2 text-center shrink-0">
-              <span className="text-xs text-[#7ba3b0]">Total Confirmed Deposited Capital</span>
+              <span className="text-xs text-[#7ba3b0]">Total Amount Reflected on Wallet</span>
               <span className="text-2xl font-black text-white font-mono block">
                 {formatVal(totalDeposited)}
               </span>
               <div className="grid grid-cols-3 gap-2 pt-2 text-xs font-mono text-left border-t border-[#0c3a47]">
                 <div>
-                  <span className="text-[10px] text-[#7ba3b0] block">Wallet Balance:</span>
+                  <span className="text-[10px] text-[#7ba3b0] block">Wallet Reflected:</span>
                   <span className="font-bold text-emerald-400">
-                    {formatVal(summary?.balance ?? user?.balance ?? 0)}
+                    {formatVal(totalDeposited)}
                   </span>
                 </div>
                 <div>
@@ -876,13 +903,13 @@ export const Homepage: React.FC<HomepageProps> = ({
             </div>
 
             <div className="bg-[#031420] border border-[#00d2c4]/30 p-4 rounded-xl space-y-2 text-center">
-              <span className="text-xs text-[#7ba3b0]">Total Withdrawn Capital</span>
+              <span className="text-xs text-[#7ba3b0]">Total Withdrawn Income</span>
               <span className="text-2xl font-black text-white font-mono block">
                 {formatVal(totalWithdrawn)}
               </span>
               <div className="grid grid-cols-2 gap-2 pt-2 text-xs font-mono text-left border-t border-[#0c3a47]">
                 <div>
-                  <span className="text-[10px] text-[#7ba3b0] block">Withdrawable Balance:</span>
+                  <span className="text-[10px] text-[#7ba3b0] block">Withdrawable Income:</span>
                   <span className="font-bold text-emerald-400">
                     {formatVal(summary?.withdraw_details?.withdrawable_balance || user?.balance || 0)}
                   </span>
@@ -902,7 +929,8 @@ export const Homepage: React.FC<HomepageProps> = ({
                 <li>Withdraws run from <strong>Mon – Fri</strong></li>
                 <li>Withdraw percentage – <strong>10%</strong></li>
                 <li>Minimum withdraw is <strong>3k</strong> and Maximum withdraw is <strong>5M</strong></li>
-                <li><strong>3k</strong> is only eligible for <strong>customers only</strong>.</li>
+                <li><strong>3000</strong> is eligible for <strong>customers</strong>.</li>
+                <li><strong>* Withdraws take 24-96 hours to process.</strong></li>
               </ol>
             </div>
 
@@ -927,7 +955,7 @@ export const Homepage: React.FC<HomepageProps> = ({
         </div>
       )}
 
-      {/* Modal 3: AI Income */}
+      {/* Modal 3: AI Income (Item 6: eliminate the word "Hub" and show all the total daily yields) */}
       {activeModal === 'ai_income' && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-[#051d24] border border-[#00d2c4]/60 shadow-[0_0_35px_rgba(0,210,200,0.25)] rounded-2xl p-5 max-w-sm w-full space-y-4">
@@ -936,7 +964,7 @@ export const Homepage: React.FC<HomepageProps> = ({
                 <div className="w-8 h-8 rounded-lg bg-[#00b4d8] flex items-center justify-center text-white">
                   <TrendingUp className="w-4 h-4 text-white" />
                 </div>
-                <h3 className="text-base font-bold text-white">AI Income Hub</h3>
+                <h3 className="text-base font-bold text-white">AI Income</h3>
               </div>
               <button
                 onClick={() => setActiveModal(null)}
@@ -947,13 +975,29 @@ export const Homepage: React.FC<HomepageProps> = ({
             </div>
 
             <div className="bg-[#031420] border border-[#00d2c4]/30 p-4 rounded-xl space-y-2 text-center">
-              <span className="text-xs text-[#7ba3b0]">Total AI Returns Generated</span>
+              <span className="text-xs text-[#7ba3b0]">Total Daily Yields</span>
               <span className="text-2xl font-black text-[#00e5ff] font-mono block">
                 {formatVal(aiIncome)}
               </span>
               <p className="text-[11px] text-[#7ba3b0] mt-1 leading-relaxed">
-                Machines in the Machine Plane generate automated daily computing yields throughout your contract lock duration.
+                All total daily yields generated across your active and completed machines.
               </p>
+              {completedOrActiveInvestments.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-[#0c3a47] space-y-1 text-left text-[11px] font-mono">
+                  {completedOrActiveInvestments.map((inv) => {
+                    const machineTotalDailyYield =
+                      (Number(inv.daily_yield) || 0) * Math.max(1, Number(inv.days_elapsed) || 1);
+                    return (
+                      <div key={inv.id} className="flex items-center justify-between text-slate-200">
+                        <span className="truncate pr-2">{inv.machine_title}</span>
+                        <span className="text-[#00e5ff] font-bold shrink-0">
+                          {formatVal(machineTotalDailyYield)} ({formatVal(inv.daily_yield)}/day)
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-2">
@@ -979,7 +1023,7 @@ export const Homepage: React.FC<HomepageProps> = ({
         </div>
       )}
 
-      {/* Modal 4: Today's Earnings */}
+      {/* Modal 4: Today's Earnings (Item 5: the daily yield should be shown) */}
       {activeModal === 'today_earnings' && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-[#051d24] border border-[#00d2c4]/60 shadow-[0_0_35px_rgba(0,210,200,0.25)] rounded-2xl p-5 max-w-sm w-full space-y-4">
@@ -999,13 +1043,25 @@ export const Homepage: React.FC<HomepageProps> = ({
             </div>
 
             <div className="bg-[#031420] border border-[#00d2c4]/30 p-4 rounded-xl space-y-2 text-center">
-              <span className="text-xs text-[#7ba3b0]">Credited Today (24h)</span>
+              <span className="text-xs text-[#7ba3b0]">Daily Yield</span>
               <span className="text-2xl font-black text-emerald-400 font-mono block">
                 {formatVal(todayEarnings)}
               </span>
               <p className="text-[11px] text-[#7ba3b0] mt-1 leading-relaxed">
-                Daily machine dividends and referral activation rewards settle directly into your balance.
+                Daily yield generated by your active running machines.
               </p>
+              {activeInvestments.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-[#0c3a47] space-y-1 text-left text-[11px] font-mono">
+                  {activeInvestments.map((inv) => (
+                    <div key={inv.id} className="flex items-center justify-between text-slate-200">
+                      <span className="truncate pr-2">{inv.machine_title}</span>
+                      <span className="text-emerald-400 font-bold shrink-0">
+                        +{formatVal(inv.daily_yield)} / day
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <button
@@ -1077,10 +1133,10 @@ export const Homepage: React.FC<HomepageProps> = ({
                   <span className="text-xs text-[#7ba3b0]">Your Total Invites</span>
                   <span className="text-3xl font-black text-white font-mono block">{inviteCount}</span>
                   <div className="inline-block bg-[#00b4d8]/20 border border-[#00e5ff]/40 text-[#80deea] text-[11px] font-bold px-3 py-1 rounded-full mt-1">
-                    Invitation Bonus: 8% • A Class: 4 Invites
+                    Invitation Bonus: 8%
                   </div>
                   <p className="text-[11px] text-slate-300 mt-2 leading-relaxed">
-                    Invite <strong>4 people</strong> who buy a machine to unlock <strong>A class (25,000 UGX reward)</strong>. Your invitation bonus is <strong>8%</strong> when an invited customer buys the same machine as you.
+                    Your invitation bonus is <strong>8%</strong> when an invited customer buys a machine.
                   </p>
                 </div>
 
@@ -1309,8 +1365,9 @@ export const Homepage: React.FC<HomepageProps> = ({
                       <li><strong>Rule 1 (Schedule):</strong> Withdraws run from <strong>Mon – Fri</strong>.</li>
                       <li><strong>Rule 2 (Fee):</strong> Withdraw percentage is <strong>10%</strong>.</li>
                       <li><strong>Rule 3 (Limits):</strong> Minimum withdraw is <strong>3k (3,000 UGX)</strong> and Maximum withdraw is <strong>5M (5,000,000 UGX)</strong>.</li>
-                      <li><strong>Rule 4 (Eligibility):</strong> <strong>3k</strong> is only eligible for <strong>customers only</strong> (active machine buyers).</li>
-                      <li><strong>Team Income & Invitation Bonus (8%):</strong> Team income and invitation bonus is <strong>8%</strong> (collected only if an invited customer buys the same machine as the inviter, and credited to the inviter&apos;s balance when the cycle of the invited customer&apos;s machine has ended).</li>
+                      <li><strong>Rule 4 (Eligibility):</strong> <strong>3000</strong> is eligible for <strong>customers</strong>.</li>
+                      <li><strong>Rule 5 (Processing Time):</strong> <strong>* Withdraws take 24-96 hours to process.</strong></li>
+                      <li><strong>Team Income & Invitation Bonus (8%):</strong> Team income and invitation bonus is <strong>8%</strong> (collected onto the inviter&apos;s balance when the cycle of the invited customer&apos;s machine has ended).</li>
                       <li><strong>Last Month&apos;s Reward (5%):</strong> Collected when a customer has invited 4 or more customers (people who have bought machines), equal to <strong>5%</strong> of the total machine price the invited customers have bought. Always collected on every <strong>28th of every month</strong> to the customers&apos; balance for withdraw.</li>
                     </ul>
                   </div>
@@ -1319,12 +1376,12 @@ export const Homepage: React.FC<HomepageProps> = ({
                     <h4 className="font-black text-[#00e5ff] uppercase text-xs">3. Machine Series Specifications</h4>
                     <div className="space-y-1.5 text-[11px] font-mono">
                       <div className="p-2 bg-[#041a29] rounded-lg border border-sky-500/30">
-                        <span className="text-sky-300 font-bold block">AV1 Series (Limit: 1 Unit Only • Wallet Only)</span>
+                        <span className="text-sky-300 font-bold block">AV1 Series (Works Mon – Friday • Limit: 1 Unit Only)</span>
                         <span>• AV1 - Machine 1: 35,000 UGX | 18 Days | Returns 50,000 UGX</span><br />
                         <span>• AV1 - Machine 2: 140,000 UGX | 16 Days | Returns 220,000 UGX</span>
                       </div>
                       <div className="p-2 bg-[#041a29] rounded-lg border border-blue-500/30">
-                        <span className="text-blue-300 font-bold block">AV2 Series (Limit: Max 2 Units • Wallet Only)</span>
+                        <span className="text-blue-300 font-bold block">AV2 Series (Works Mon – Friday • Limit: Max 2 Units)</span>
                         <span>• AV2 - Machine 1: 55,000 UGX | 60 Days | Returns 200,000 UGX</span><br />
                         <span>• AV2 - Machine 2: 110,000 UGX | 55 Days | Returns 350,000 UGX</span><br />
                         <span>• AV2 - Machine 3: 200,000 UGX | 50 Days | Returns 550,000 UGX</span><br />
@@ -1333,16 +1390,16 @@ export const Homepage: React.FC<HomepageProps> = ({
                         <span>• AV2 - Machine 6: 1,000,000 UGX | 35 Days | Returns 2,000,000 UGX</span>
                       </div>
                       <div className="p-2 bg-[#041a29] rounded-lg border border-emerald-500/30">
-                        <span className="text-emerald-300 font-bold block">AV Classes A–I (21 Days Mon–Mon incl. Weekends)</span>
-                        <span>• Class A (4 Invites → 25k Reward): 30,000 UGX → 50,000 UGX</span><br />
-                        <span>• Class B (9 Invites → 60k Reward): 75,000 UGX → 135,000 UGX</span><br />
-                        <span>• Class C (20 Invites → 110k Reward): 120,000 UGX → 250,000 UGX</span><br />
-                        <span>• Class D (35 Invites → 220k Reward): 240,000 UGX → 400,000 UGX</span><br />
-                        <span>• Class E (70 Invites → 450k Reward): 470,000 UGX → 850,000 UGX</span><br />
-                        <span>• Class F (120 Invites → 850k Reward): 900,000 UGX → 1,900,000 UGX</span><br />
-                        <span>• Class G (300 Invites → 1.2M Reward): 1,300,000 UGX → 3,000,000 UGX</span><br />
-                        <span>• Class H (5,000 Invites → 3M Reward): 3,100,000 UGX → 7,000,000 UGX</span><br />
-                        <span>• Class I (10,000 Invites → 8.5M Reward): 9,000,000 UGX → 25,000,000 UGX</span>
+                        <span className="text-emerald-300 font-bold block">AV Classes A–I (21 Days • Counts Throughout the Week)</span>
+                        <span>• Class A (4 Customers → 25k Reward): 30,000 UGX → 50,000 UGX</span><br />
+                        <span>• Class B (9 Customers → 60k Reward): 75,000 UGX → 135,000 UGX</span><br />
+                        <span>• Class C (20 Customers → 110k Reward): 120,000 UGX → 250,000 UGX</span><br />
+                        <span>• Class D (35 Customers → 220k Reward): 240,000 UGX → 400,000 UGX</span><br />
+                        <span>• Class E (70 Customers → 450k Reward): 470,000 UGX → 850,000 UGX</span><br />
+                        <span>• Class F (120 Customers → 850k Reward): 900,000 UGX → 1,900,000 UGX</span><br />
+                        <span>• Class G (300 Customers → 1.2M Reward): 1,300,000 UGX → 3,000,000 UGX</span><br />
+                        <span>• Class H (5,000 Customers → 3M Reward): 3,100,000 UGX → 7,000,000 UGX</span><br />
+                        <span>• Class I (10,000 Customers → 8.5M Reward): 9,000,000 UGX → 25,000,000 UGX</span>
                       </div>
                     </div>
                   </div>

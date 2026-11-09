@@ -122,11 +122,11 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                         </div>
                         <div className="text-[10px] text-slate-400 truncate max-w-[140px]">
                           {isAvClass
-                            ? `Requires ${requiredInvites.toLocaleString()} Invites (${invitedCount}/${requiredInvites.toLocaleString()})`
+                            ? `Requires ${requiredInvites.toLocaleString()} Customers (${invitedCount}/${requiredInvites.toLocaleString()})`
                             : isAV1
-                              ? 'Max 1 Unit per User'
+                              ? 'Max 1 Unit • Mon–Fri'
                               : isAV2
-                                ? 'Max 2 Units per User'
+                                ? 'Max 2 Units • Mon–Fri'
                                 : machine.power_consumption || '650W'}
                         </div>
                       </div>
@@ -158,7 +158,7 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                     <td className="py-3.5 px-3 text-right">
                       <span className="font-bold text-slate-300 font-mono text-xs inline-flex items-center gap-1 justify-end">
                         <Clock className="w-3 h-3 text-sky-400" />
-                        <span>{isAvClass ? 'Mon–Mon (21D)' : `${duration} Days`}</span>
+                        <span>{isAvClass ? 'Throughout Week (21D)' : `Mon–Fri (${duration}D)`}</span>
                       </span>
                     </td>
 
@@ -167,20 +167,20 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                       {isLockedPlane ? (
                         <span className="inline-flex items-center gap-1 bg-rose-950/80 border border-rose-500/50 text-rose-300 font-bold text-[10px] font-mono px-2.5 py-1 rounded-lg">
                           <Lock className="w-3 h-3 text-rose-400" />
-                          <span>Need {requiredInvites.toLocaleString()} Invites ({invitedCount}/{requiredInvites.toLocaleString()})</span>
+                          <span>Need {requiredInvites.toLocaleString()} Customers ({invitedCount}/{requiredInvites.toLocaleString()})</span>
                         </span>
                       ) : isAvClass ? (
                         <span className="inline-flex items-center gap-1 bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 font-bold text-[10px] font-mono px-2.5 py-1 rounded-lg">
                           <Zap className="w-3 h-3 text-emerald-400" />
-                          <span>Mon to Mon (Weekends)</span>
+                          <span>Counts Throughout Week</span>
                         </span>
                       ) : isAV1 ? (
                         <span className="inline-flex items-center gap-1 bg-amber-950/80 border border-amber-500/50 text-amber-300 font-bold text-[10px] font-mono px-2.5 py-1 rounded-lg">
-                          <span>1 Unit Only • {duration}D Lock</span>
+                          <span>1 Unit Only • Mon–Fri ({duration}D)</span>
                         </span>
                       ) : isAV2 ? (
                         <span className="inline-flex items-center gap-1 bg-blue-950/80 border border-blue-400/50 text-blue-300 font-bold text-[10px] font-mono px-2.5 py-1 rounded-lg">
-                          <span>2 Units Max • {duration}D Lock</span>
+                          <span>2 Units Max • Mon–Fri ({duration}D)</span>
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 bg-[#0d1733] border border-blue-900/50 text-sky-300 font-bold text-[10px] font-mono px-2.5 py-1 rounded-lg">
@@ -227,7 +227,7 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                         {isLockedPlane ? (
                           <>
                             <Lock className="w-3.5 h-3.5 text-rose-400" />
-                            <span>Locked ({requiredInvites.toLocaleString()} Invites)</span>
+                            <span>Locked ({requiredInvites.toLocaleString()} Customers)</span>
                           </>
                         ) : (
                           <>
@@ -310,19 +310,19 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                     </span>
                     {isLockedPlane ? (
                       <span className="text-[10px] font-bold text-rose-300 bg-rose-950/80 border border-rose-500/40 px-1.5 py-0.5 rounded font-mono">
-                        🔒 Need {requiredInvites.toLocaleString()} Invites
+                        🔒 Need {requiredInvites.toLocaleString()} Customers
                       </span>
                     ) : isAvClass ? (
                       <span className="text-[10px] font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-500/40 px-1.5 py-0.5 rounded font-mono">
-                        Mon–Mon (Weekends) ⚡
+                        Throughout Week ⚡
                       </span>
                     ) : isAV1 ? (
                       <span className="text-[10px] font-bold text-amber-300 bg-amber-950/80 border border-amber-500/40 px-1.5 py-0.5 rounded font-mono">
-                        Limit: 1 Unit Only
+                        Limit: 1 Unit • Mon–Fri
                       </span>
                     ) : isAV2 ? (
                       <span className="text-[10px] font-bold text-blue-300 bg-blue-950/80 border border-blue-400/40 px-1.5 py-0.5 rounded font-mono">
-                        Limit: 2 Units Max
+                        Limit: 2 Units • Mon–Fri
                       </span>
                     ) : (
                       <span className="text-[10px] font-bold text-blue-300 bg-blue-950/80 border border-blue-500/40 px-1.5 py-0.5 rounded font-mono">
@@ -344,7 +344,7 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                 <div className="flex justify-between items-center">
                   <span className="text-slate-400 text-[11px]">Running Schedule:</span>
                   <span className="font-bold text-white font-mono">
-                    {isAvClass ? 'Monday to Monday (counting weekends)' : `${duration} Days`}
+                    {isAvClass ? 'Counts throughout the week (21 Days)' : `Mon – Friday (${duration} Days)`}
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
@@ -357,7 +357,7 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                   <div className="flex justify-between items-center text-amber-300">
                     <span className="text-slate-400 text-[11px]">Class Requirement:</span>
                     <span className="font-bold font-mono text-[11px]">
-                      {isLockedPlane ? `🔐 Need ${requiredInvites.toLocaleString()} Invited Buyers (${invitedCount}/${requiredInvites.toLocaleString()})` : `✅ ${requiredInvites.toLocaleString()}+ Invites Met`}
+                      {isLockedPlane ? `🔐 Need ${requiredInvites.toLocaleString()} Customers (${invitedCount}/${requiredInvites.toLocaleString()})` : `✅ ${requiredInvites.toLocaleString()}+ Customers Met`}
                     </span>
                   </div>
                 )}
@@ -379,7 +379,7 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                   <span className="text-slate-400 text-[11px]">Access Rule:</span>
                   <span className="font-mono text-xs font-bold text-blue-300">
                     {isLockedPlane
-                      ? `🔒 Locked — Must Invite ${requiredInvites.toLocaleString()} People`
+                      ? `🔒 Locked — Must Have ${requiredInvites.toLocaleString()} Customers`
                       : walletOnly
                         ? 'Wallet Balance Only'
                         : isAV1
@@ -403,7 +403,7 @@ export const MachineTableView: React.FC<MachineTableViewProps> = ({
                 {isLockedPlane ? (
                   <>
                     <Lock className="w-3.5 h-3.5 text-rose-400" />
-                    <span>Locked (Invite {requiredInvites.toLocaleString()} People to Access {series})</span>
+                    <span>Locked (Need {requiredInvites.toLocaleString()} Customers to Access {series})</span>
                   </>
                 ) : (
                   <>

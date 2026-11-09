@@ -12,7 +12,7 @@
     "password": "adams",
     "kyc_status": "VERIFIED",
     "role": "INVESTOR",
-    "balance": 3000,
+    "balance": 0,
     "has_bought_machine": false,
     "referral_code": "AVOR-4243",
     "referred_by": "7799",
