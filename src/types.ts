@@ -33,6 +33,8 @@ export interface User {
   referral_code: string;
   referred_by?: string;
   created_at: string;
+  registered_date?: string;
+  updated_at?: string;
   has_bought_machine?: boolean;
   is_suspended?: boolean;
   // Mongoose schema fields
@@ -40,6 +42,7 @@ export interface User {
   name?: string;
   password?: string;
   registration_data?: Record<string, any>;
+  user_details?: Record<string, any>;
 }
 
 export interface Machine {

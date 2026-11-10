@@ -4056,6 +4056,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                   <tr className="border-b border-blue-950/80 bg-[#050a18] text-slate-400 uppercase text-[10px]">
                     <th className="py-2.5 px-2">Member</th>
                     <th className="py-2.5 px-2">Phone</th>
+                    <th className="py-2.5 px-2">Date Joined</th>
                     <th className="py-2.5 px-2">Active Inv</th>
                     <th className="py-2.5 px-2">Balance</th>
                     <th className="py-2.5 px-2">Status</th>
@@ -4067,6 +4068,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                     const userActiveCount = investmentsLedger.filter(
                       (inv) => inv.user_id === u.id && inv.status === 'ACTIVE'
                     ).length;
+                    const userRegDate = u.registered_date || u.created_at;
                     return (
                       <tr
                         key={u.id}
@@ -4082,6 +4084,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                           </span>
                         </td>
                         <td className="py-2.5 px-2 font-mono text-[11px] text-emerald-400">{u.phone_number}</td>
+                        <td className="py-2.5 px-2 font-mono text-[10px] text-sky-300">
+                          {userRegDate ? new Date(userRegDate).toLocaleString() : 'N/A'}
+                        </td>
                         <td className="py-2.5 px-2 font-mono font-bold text-cyan-300">{userActiveCount}</td>
                         <td className="py-2.5 px-2 font-mono font-bold text-white">
                           UGX {u.balance.toLocaleString()}
@@ -4214,6 +4219,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
                   <div className="space-y-1 text-[11px]">
                     <div className="flex justify-between py-0.5 border-b border-blue-950/40">
+                      <span className="text-slate-400">Name:</span>
+                      <span className="font-bold text-white">{selectedUser.full_name}</span>
+                    </div>
+                    <div className="flex justify-between py-0.5 border-b border-blue-950/40">
                       <span className="text-slate-400">Phone:</span>
                       <span className="font-mono text-emerald-300">{selectedUser.phone_number}</span>
                     </div>
@@ -4222,20 +4231,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                       <span className="text-white">{selectedUser.country || 'Uganda'}</span>
                     </div>
                     <div className="flex justify-between py-0.5 border-b border-blue-950/40">
-                      <span className="text-slate-400">Joined:</span>
-                      <span className="font-mono text-[10px] text-slate-300">
-                        {new Date(selectedUser.created_at).toLocaleDateString()}
+                      <span className="text-slate-400">Registered Date:</span>
+                      <span className="font-mono text-[10px] text-cyan-300 font-bold">
+                        {new Date(selectedUser.registered_date || selectedUser.created_at).toLocaleString()}
                       </span>
                     </div>
+                    {selectedUser.updated_at && (
+                      <div className="flex justify-between py-0.5 border-b border-blue-950/40">
+                        <span className="text-slate-400">Last Updated:</span>
+                        <span className="font-mono text-[10px] text-slate-300">
+                          {new Date(selectedUser.updated_at).toLocaleString()}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
-                  {selectedUser.registration_data && (
+                  {(selectedUser.user_details || selectedUser.registration_data) && (
                     <div className="pt-1">
                       <span className="text-[10px] font-bold text-slate-400 block mb-1">
-                        Registration JSON:
+                        Stored User Details &amp; Date JSON:
                       </span>
                       <pre className="p-2 bg-[#03060f] rounded-lg border border-blue-950/80 text-[9px] font-mono text-emerald-400 overflow-x-auto max-h-32">
-                        {JSON.stringify(selectedUser.registration_data, null, 2)}
+                        {JSON.stringify(
+                          selectedUser.user_details || selectedUser.registration_data,
+                          null,
+                          2
+                        )}
                       </pre>
                     </div>
                   )}

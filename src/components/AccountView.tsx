@@ -54,8 +54,8 @@ export const AccountView: React.FC<AccountViewProps> = ({
     'bill' | 'invite' | 'team' | 'reward' | 'download' | 'manager' | 'settings' | null
   >(initialTab === 'invite' ? 'invite' : null);
 
-  // Chevron dropdown state in Card 1
-  const [showBalanceDetails, setShowBalanceDetails] = useState<boolean>(false);
+  // Chevron dropdown state in Card 1 (Open by default so stored user details & date are visible)
+  const [showBalanceDetails, setShowBalanceDetails] = useState<boolean>(true);
 
   // Dashboard summary data
   const [dashboardSummary, setDashboardSummary] = useState<any>(null);
@@ -298,11 +298,25 @@ export const AccountView: React.FC<AccountViewProps> = ({
       return;
     }
 
+    const nowIso = new Date().toISOString();
+    const regIso = user.registered_date || user.created_at || nowIso;
     const updatedUser: User = {
       ...user,
       full_name: editName.trim() || user.full_name,
       name: editName.trim() || user.name,
       phone_number: editPhone.trim() || user.phone_number,
+      created_at: regIso,
+      registered_date: regIso,
+      updated_at: nowIso,
+      user_details: {
+        ...(user.user_details || {}),
+        full_name: editName.trim() || user.full_name,
+        phone_number: editPhone.trim() || user.phone_number,
+        country: user.country || 'Uganda',
+        registered_date: regIso,
+        date: new Date(regIso).toLocaleString(),
+        updated_at: nowIso,
+      },
     };
 
     try {
@@ -329,7 +343,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
     }
 
     setEditPassword('');
-    setSettingsSavedMsg('Account settings updated and saved successfully!');
+    setSettingsSavedMsg('User details & date saved successfully!');
     setTimeout(() => setSettingsSavedMsg(null), 3500);
   };
 
@@ -394,7 +408,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
           </div>
         </button>
 
-        {/* Collapsible Details Drawer */}
+        {/* Collapsible User Details Drawer (Stores & Displays User Details + Registration Date) */}
         {showBalanceDetails && (
           <div className="mt-3 pt-3 border-t border-[#0091ea]/30 text-xs space-y-2 animate-fade-in">
             <div className="flex justify-between text-slate-300 font-mono">
@@ -402,8 +416,24 @@ export const AccountView: React.FC<AccountViewProps> = ({
               <span className="font-bold text-white">{user?.id?.slice(0, 14) || 'AVOR-INVESTOR'}</span>
             </div>
             <div className="flex justify-between text-slate-300 font-mono">
+              <span className="text-slate-400">Full Name:</span>
+              <span className="font-bold text-white">{user?.full_name || user?.name || 'Avor Investor'}</span>
+            </div>
+            <div className="flex justify-between text-slate-300 font-mono">
               <span className="text-slate-400">Phone Number:</span>
               <span className="font-bold text-sky-400">{user?.phone_number || 'Not Set'}</span>
+            </div>
+            <div className="flex justify-between text-slate-300 font-mono">
+              <span className="text-slate-400">Registration Date:</span>
+              <span className="font-bold text-cyan-300">
+                {user?.registered_date || user?.created_at
+                  ? new Date(user.registered_date || user.created_at).toLocaleString()
+                  : new Date().toLocaleDateString()}
+              </span>
+            </div>
+            <div className="flex justify-between text-slate-300 font-mono">
+              <span className="text-slate-400">Country:</span>
+              <span className="font-bold text-white">{user?.country || 'Uganda'}</span>
             </div>
             <div className="flex justify-between text-slate-300 font-mono">
               <span className="text-slate-400">Customer Status:</span>
@@ -1386,6 +1416,22 @@ export const AccountView: React.FC<AccountViewProps> = ({
               </div>
             )}
 
+            {/* Stored User Details & Registration Date Summary */}
+            <div className="p-3 rounded-xl bg-[#08132c] border border-[#0e2748] text-[11px] font-mono space-y-1.5">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Registered Date:</span>
+                <span className="text-cyan-300 font-bold">
+                  {user?.registered_date || user?.created_at
+                    ? new Date(user.registered_date || user.created_at).toLocaleString()
+                    : new Date().toLocaleString()}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Invite Code:</span>
+                <span className="text-emerald-300 font-bold">{user?.referral_code || 'AVOR-7789'}</span>
+              </div>
+            </div>
+
             <form onSubmit={handleSaveSettings} className="space-y-3 text-xs">
               <div>
                 <label className="text-slate-400 block mb-1 font-semibold">Full Name:</label>
@@ -1443,20 +1489,6 @@ export const AccountView: React.FC<AccountViewProps> = ({
                 <Save className="w-4 h-4" />
                 <span>Save Settings</span>
               </button>
-
-              {onLogout && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveModal(null);
-                    onLogout();
-                  }}
-                  className="w-full py-2.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-800/40 text-rose-300 font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer mt-2"
-                >
-                  <LogOut className="w-4 h-4 text-rose-400" />
-                  <span>Log Out of Account</span>
-                </button>
-              )}
             </form>
           </div>
         </div>

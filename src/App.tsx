@@ -25,8 +25,74 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'home' | 'marketplace' | 'income' | 'profile' | 'account' | 'admin'>('home');
   const [currency, setCurrency] = useState<Currency>('UGX');
 
-  // User State
-  const [user, setUser] = useState<User | null>(null);
+  const getSavedRegisteredUser = (): User | null => {
+    try {
+      const savedUserStr = localStorage.getItem('avor_invest_user');
+      if (savedUserStr) {
+        const parsed = JSON.parse(savedUserStr);
+        if (parsed && (parsed.id || parsed.phone_number || parsed.phoneNumber)) {
+          return {
+            ...parsed,
+            id: parsed.id || `user-${String(parsed.phone_number || parsed.phoneNumber).replace(/\D/g, '')}`,
+            phone_number: parsed.phone_number || parsed.phoneNumber || '',
+            full_name:
+              parsed.full_name ||
+              parsed.name ||
+              `Investor ${String(parsed.phone_number || parsed.phoneNumber || '').slice(-4)}`,
+            balance: typeof parsed.balance === 'number' ? parsed.balance : 3000,
+          };
+        }
+      }
+
+      const savedRegStr = localStorage.getItem('avor_invest_registration_data');
+      const hasAccountFlag = localStorage.getItem('avor_invest_has_account') === 'true';
+      const lastPhone = localStorage.getItem('avor_invest_last_phone') || '';
+
+      if (savedRegStr) {
+        const parsedReg = JSON.parse(savedRegStr);
+        const regPhone = parsedReg?.phone_number || parsedReg?.phoneNumber || lastPhone;
+        if (regPhone) {
+          const restored: User = {
+            id: parsedReg.id || `user-${String(regPhone).replace(/\D/g, '')}`,
+            full_name: parsedReg.name || parsedReg.full_name || `Investor ${String(regPhone).slice(-4)}`,
+            email: parsedReg.email || `${String(regPhone).replace(/\D/g, '')}@avorinvest.com`,
+            phone_number: regPhone,
+            balance: 3000,
+            wallet_balance: 0,
+            available_wallet: 0,
+            referral_code: parsedReg.referral_code || 'AVOR7789',
+            role: 'INVESTOR',
+            kyc_status: 'VERIFIED',
+            created_at: parsedReg.created_at || new Date().toISOString(),
+          };
+          localStorage.setItem('avor_invest_user', JSON.stringify(restored));
+          return restored;
+        }
+      }
+
+      if (hasAccountFlag && lastPhone) {
+        const restored: User = {
+          id: `user-${String(lastPhone).replace(/\D/g, '')}`,
+          full_name: `Investor ${String(lastPhone).slice(-4)}`,
+          email: `${String(lastPhone).replace(/\D/g, '')}@avorinvest.com`,
+          phone_number: lastPhone,
+          balance: 3000,
+          wallet_balance: 0,
+          available_wallet: 0,
+          referral_code: 'AVOR7789',
+          role: 'INVESTOR',
+          kyc_status: 'VERIFIED',
+          created_at: new Date().toISOString(),
+        };
+        localStorage.setItem('avor_invest_user', JSON.stringify(restored));
+        return restored;
+      }
+    } catch {}
+    return null;
+  };
+
+  // User State — Automatically restored from localStorage so after first-time registration the Gateway never appears again
+  const [user, setUser] = useState<User | null>(() => getSavedRegisteredUser());
 
   // Machine Marketplace Data (Categorized into AV1, AV2, All Machines, and AVclasses)
   const [machines, setMachines] = useState<Machine[]>(DEFAULT_MACHINES);
@@ -47,48 +113,57 @@ export default function App() {
   const [walletMode, setWalletMode] = useState<'deposit' | 'withdraw'>('deposit');
   const [referralCodeFromUrl, setReferralCodeFromUrl] = useState<string>('');
 
-  // Gateway Registration is imparted as the entry screen when not logged in
+  // Gateway Registration is imparted as the entry screen only before first-time registration
   const [isGuestPreview, setIsGuestPreview] = useState<boolean>(false);
 
   // Toast Notification State
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
   const syncUserToStorage = (u: User | null) => {
-    setUser(u);
-    try {
-      if (u) {
+    if (u) {
+      setUser(u);
+      try {
         localStorage.setItem('avor_invest_user', JSON.stringify(u));
         localStorage.setItem('avor_invest_has_account', 'true');
         if (u.phone_number) {
           localStorage.setItem('avor_invest_last_phone', u.phone_number);
         }
+      } catch (e) {}
+    } else {
+      const existingRegistered = getSavedRegisteredUser();
+      if (existingRegistered) {
+        setUser(existingRegistered);
+      } else {
+        setUser(null);
       }
-    } catch (e) {}
+    }
   };
 
   useEffect(() => {
     fetchMachines();
 
-    // Always require the user to sign in via the Gateway when opening or reopening the link.
-    // Do not auto-authenticate into the homepage from localStorage.
-    setUser(null);
-    setIsGuestPreview(false);
-
-    // Check for referral code in URL (e.g. /reg?code=thkjve or ?AvorInvest=...)
-    const searchParams = new URLSearchParams(window.location.search);
-    const codeParam =
-      searchParams.get('AvorInvest') ||
-      searchParams.get('MachineInvest') ||
-      searchParams.get('CreativeAssembly') ||
-      searchParams.get('code') ||
-      searchParams.get('ref');
-    const isRegPath = window.location.pathname.startsWith('/reg');
-
-    if (codeParam || isRegPath) {
-      const codeToUse = codeParam || 'thkjve';
-      setReferralCodeFromUrl(codeToUse);
+    // After the first-time registration, restore the user immediately and never show the Gateway again
+    const existingUser = getSavedRegisteredUser();
+    if (existingUser) {
+      setUser(existingUser);
       setIsGuestPreview(false);
-      showNotification(`Invitation code "${codeToUse}" verified! Register below to get started.`, 'info');
+    } else {
+      // Check for referral code in URL only for first-time unregistered visitors
+      const searchParams = new URLSearchParams(window.location.search);
+      const codeParam =
+        searchParams.get('AvorInvest') ||
+        searchParams.get('MachineInvest') ||
+        searchParams.get('CreativeAssembly') ||
+        searchParams.get('code') ||
+        searchParams.get('ref');
+      const isRegPath = window.location.pathname.startsWith('/reg');
+
+      if (codeParam || isRegPath) {
+        const codeToUse = codeParam || 'thkjve';
+        setReferralCodeFromUrl(codeToUse);
+        setIsGuestPreview(false);
+        showNotification(`Invitation code "${codeToUse}" verified! Register below to get started.`, 'info');
+      }
     }
 
     const onSystemZeroReset = () => {
@@ -524,11 +599,10 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    syncUserToStorage(null);
-    setInvestments([]);
+    // Keep registered user session active so the Gateway never appears again after first-time registration
     setActiveTab('home');
     setIsGuestPreview(false);
-    showNotification('Logged out successfully.', 'info');
+    showNotification('Returned to Homepage.', 'info');
   };
 
   // Filtered Machines

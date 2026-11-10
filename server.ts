@@ -264,13 +264,38 @@ function loadRegisteredUsersFromDisk() {
   }
 }
 
-// Function to save registered user data used during registration to disk
+// Function to save registered user data and date on the user's details to disk
 function saveRegisteredUserToDisk(userToSave: User & { password_hash: string }) {
   if (!userToSave || userToSave.id === 'usr-admin-owner') return;
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
+
+    const nowIso = new Date().toISOString();
+    const regIso = (userToSave as any).registered_date || userToSave.created_at || nowIso;
+    userToSave.created_at = userToSave.created_at || regIso;
+    (userToSave as any).registered_date = regIso;
+    (userToSave as any).updated_at = nowIso;
+    (userToSave as any).user_details = {
+      ...((userToSave as any).user_details || {}),
+      id: userToSave.id,
+      full_name: userToSave.full_name || userToSave.name || 'Avor Investor',
+      phone_number: userToSave.phone_number || userToSave.phoneNumber || '',
+      email: userToSave.email || '',
+      country: userToSave.country || 'Uganda',
+      country_code: userToSave.country_code || '+256',
+      referral_code: userToSave.referral_code || '',
+      referred_by: userToSave.referred_by || null,
+      balance: typeof userToSave.balance === 'number' ? userToSave.balance : REGISTRATION_REWARD_UGX,
+      wallet_balance: Number(userToSave.wallet_balance || 0),
+      available_wallet: Number(userToSave.available_wallet || userToSave.wallet_balance || 0),
+      has_bought_machine: Boolean(userToSave.has_bought_machine),
+      created_at: userToSave.created_at,
+      registered_date: regIso,
+      date: new Date(regIso).toLocaleString(),
+      updated_at: nowIso,
+    };
 
     let existingList: any[] = [];
     if (fs.existsSync(USERS_FILE)) {
@@ -294,7 +319,7 @@ function saveRegisteredUserToDisk(userToSave: User & { password_hash: string }) 
     existingList.push(userToSave);
 
     fs.writeFileSync(USERS_FILE, JSON.stringify(existingList, null, 2), 'utf-8');
-    console.log(`[Storage] Saved registration data for ${userToSave.phone_number || userToSave.id} to ${USERS_FILE}`);
+    console.log(`[Storage] Saved user details & date for ${userToSave.phone_number || userToSave.id} to ${USERS_FILE}`);
   } catch (err) {
     console.error('Error saving registered user to disk:', err);
   }
@@ -1697,10 +1722,14 @@ async function startServer() {
       const userCountry = (country || 'Uganda').toString().trim();
       const userCountryCode = (country_code || countryCode || '+256').toString().trim();
 
-      // Explicitly capture and save the full data payload used during registration
+      // Explicitly capture and save the full data payload and registration date on the user's details
+      const nowIso = new Date().toISOString();
+      const formattedDate = new Date(nowIso).toLocaleString();
       const registrationDataPayload: Record<string, any> = {
         ...body,
-        registered_at: new Date().toISOString(),
+        registered_at: nowIso,
+        registered_date: nowIso,
+        date: formattedDate,
         client_ip: req.ip || req.headers['x-forwarded-for'] || 'local',
         user_agent: req.headers['user-agent'] || 'browser',
         source: 'registration_gateway',
@@ -1724,9 +1753,25 @@ async function startServer() {
         available_wallet: 0,
         referral_code: `AVOR-${Math.floor(1000 + Math.random() * 9000)}`,
         referred_by: refCodeUsed || undefined,
-        created_at: new Date().toISOString(),
+        created_at: nowIso,
+        registered_date: nowIso,
+        updated_at: nowIso,
         password_hash: rawPassword,
         registration_data: registrationDataPayload,
+        user_details: {
+          full_name: userName,
+          phone_number: activePhone,
+          email: userEmail,
+          country: userCountry,
+          country_code: userCountryCode,
+          registered_date: nowIso,
+          date: formattedDate,
+          updated_at: nowIso,
+          balance: initialBalance,
+          wallet_balance: 0,
+          available_wallet: 0,
+          has_bought_machine: false,
+        },
       };
 
       // 1. In-memory Map storage across multiple lookup indices
@@ -2708,7 +2753,8 @@ async function startServer() {
           pending_withdrawals: 0,
           withdrawals_count: 0,
           withdrawable_balance: REGISTRATION_REWARD_UGX,
-          can_withdraw: true,
+          has_completed_cycle: false,
+          can_withdraw: false,
           min_withdrawal: 3000,
           recent_withdrawals: [],
         },
@@ -2925,8 +2971,8 @@ async function startServer() {
         pending_withdrawals: pendingWithdrawals,
         withdrawals_count: userWithdrawals.length,
         withdrawable_balance: user.balance,
-        has_completed_cycle: true,
-        can_withdraw: user.balance >= 3000,
+        has_completed_cycle: hasCompletedCycle,
+        can_withdraw: hasCompletedCycle && user.balance >= 3000,
         min_withdrawal: 3000,
         recent_withdrawals: userWithdrawals.slice(0, 20),
       },
@@ -4042,6 +4088,35 @@ async function startServer() {
 
     // Sync user's latest balance (includes 3,000 UGX registration bonus + commissions + yields)
     syncUserConfirmedFinances(user, user.id);
+
+    // Sync active machine cycles and enforce: One can't make a withdrawal before end of his machine cycle
+    const nowDateObj = new Date();
+    investments.forEach((inv) => {
+      if (inv.status !== 'PENDING') {
+        syncSingleActiveMachineAutoRun(inv, nowDateObj);
+      }
+    });
+    const userInvestments = investments.filter(
+      (i) => i.user_id === user.id || doesTxBelongToUser({ user_id: i.user_id } as any, user, user.id)
+    );
+    const confirmedUserInvestments = userInvestments.filter(
+      (i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE'
+    );
+    const completedCycleInvs = confirmedUserInvestments.filter(
+      (i) => i.status === 'PAYOUT_COMPLETE' || (Number(i.days_elapsed) || 0) >= (Number(i.duration_days) || 1)
+    );
+
+    if (completedCycleInvs.length === 0) {
+      if (confirmedUserInvestments.length > 0) {
+        const activeInv = confirmedUserInvestments[0];
+        return res.status(400).json({
+          error: `Withdrawal Locked: You cannot make a withdrawal before the end of your machine cycle (${activeInv.machine_title}: Day ${activeInv.days_elapsed || 1} of ${activeInv.duration_days} days). Withdrawals unlock automatically once your machine cycle finishes.`,
+        });
+      }
+      return res.status(400).json({
+        error: 'Withdrawal Locked: You cannot make a withdrawal before the end of your machine cycle. Please buy a machine and complete its cycle first.',
+      });
+    }
 
     // Rule 3: Minimum withdraw is 3k and Maximum withdraw is 5M
     const numAmt = Number(amount);

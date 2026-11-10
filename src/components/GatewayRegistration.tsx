@@ -135,8 +135,19 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
 
   const [hasInviteFromUrl, setHasInviteFromUrl] = useState<boolean>(Boolean(initialReferralCode));
 
-  // Check URL query parameters for referral code
+  // Check URL query parameters for referral code & auto-bypass Gateway if already registered once
   useEffect(() => {
+    try {
+      const savedUserStr = localStorage.getItem('avor_invest_user');
+      if (savedUserStr && !isModal) {
+        const parsed = JSON.parse(savedUserStr);
+        if (parsed && (parsed.id || parsed.phone_number || parsed.phoneNumber)) {
+          onSuccess(parsed, 'login');
+          return;
+        }
+      }
+    } catch {}
+
     const searchParams = new URLSearchParams(window.location.search);
     const codeFromUrl =
       searchParams.get('ref') ||
@@ -245,23 +256,41 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
           onCurrencyChange(selectedCountry.defaultCurrency);
         }
 
+        const nowIso = new Date().toISOString();
+        const rawUser = data.user || data;
+        const regDate = rawUser?.registered_date || rawUser?.created_at || nowIso;
         const userObj = {
-          ...(data.user || data),
+          ...rawUser,
+          created_at: regDate,
+          registered_date: regDate,
+          updated_at: nowIso,
           balance:
-            typeof (data.user || data)?.balance === 'number' && (data.user || data).balance > 0
-              ? (data.user || data).balance
+            typeof rawUser?.balance === 'number' && rawUser.balance > 0
+              ? rawUser.balance
               : 3000,
+          user_details: {
+            ...(rawUser?.user_details || {}),
+            full_name: rawUser?.full_name || rawUser?.name || `Investor ${cleanDigits.slice(-4)}`,
+            phone_number: rawUser?.phone_number || fullPhoneNumber,
+            country: selectedCountry.name,
+            registered_date: regDate,
+            date: new Date(regDate).toLocaleString(),
+            updated_at: nowIso,
+          },
         };
         try {
           localStorage.setItem('avor_invest_user', JSON.stringify(userObj));
           localStorage.setItem('avor_invest_has_account', 'true');
           localStorage.setItem('avor_invest_last_phone', userObj.phone_number || fullPhoneNumber);
-          if (data.saved_registration_data || data.registration_data) {
-            localStorage.setItem(
-              'avor_invest_registration_data',
-              JSON.stringify(data.saved_registration_data || data.registration_data)
-            );
-          }
+          const regPayload = {
+            ...(data.saved_registration_data || data.registration_data || {}),
+            phone_number: userObj.phone_number || fullPhoneNumber,
+            name: userObj.full_name,
+            country: selectedCountry.name,
+            registered_date: regDate,
+            date: new Date(regDate).toLocaleString(),
+          };
+          localStorage.setItem('avor_invest_registration_data', JSON.stringify(regPayload));
         } catch (e) {}
 
         onSuccess(userObj, 'register');

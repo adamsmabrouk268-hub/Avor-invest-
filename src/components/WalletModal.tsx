@@ -144,9 +144,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
             if (d.has_bought_machine) {
               setSummaryHasMachine(true);
             }
-            if (d.withdraw_details?.has_completed_cycle) {
-              setSummaryCompletedCycle(true);
-            }
+            setSummaryCompletedCycle(Boolean(d.withdraw_details?.has_completed_cycle));
           }
         })
         .catch(() => {});
@@ -470,7 +468,20 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       return;
     }
 
-    // Rule 3: Minimum withdraw is 3k and Maximum withdraw is 5M (3,000 registration bonus and commission can be withdrawn directly without end-of-cycle wait)
+    // Rule: One can't make a withdrawal before end of his machine cycle
+    if (!hasCompletedCycle) {
+      const activeInfo =
+        runningInvs.length > 0
+          ? ` (${runningInvs[0].machine_title}: Day ${runningInvs[0].days_elapsed || 1} of ${runningInvs[0].duration_days} days)`
+          : '';
+      setMessage({
+        type: 'error',
+        text: `Withdrawal Locked: You cannot make a withdrawal before the end of your machine cycle${activeInfo}. Withdrawals unlock once your machine cycle finishes.`,
+      });
+      return;
+    }
+
+    // Rule 3: Minimum withdraw is 3k and Maximum withdraw is 5M
     if (withdrawAmt < 3000) {
       setMessage({ type: 'error', text: 'Withdraw Rule 3: Minimum withdraw is 3,000 UGX (3k).' });
       return;
@@ -514,6 +525,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           fee_amount: withdrawFeeAmt,
           net_amount: withdrawNetAmt,
           has_bought_machine: isEligibleCustomer,
+          has_completed_cycle: hasCompletedCycle,
           payment_method: withdrawMethod,
           phone_number: withdrawPhone,
           account_number: withdrawPhone,
@@ -1201,7 +1213,10 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     <strong className="text-emerald-300">5M (5,000,000 UGX)</strong>
                   </li>
                   <li>
-                    <strong className="text-cyan-300">3,000 UGX</strong> registration bonus and <strong className="text-emerald-300">commission</strong> are eligible for withdrawal.
+                    One cannot make a withdrawal before the <strong className="text-cyan-300">end of his machine cycle</strong>.
+                  </li>
+                  <li>
+                    <strong className="text-cyan-300">3,000 UGX</strong> registration bonus and <strong className="text-emerald-300">commission</strong> are eligible for withdrawal at the end of your machine cycle.
                   </li>
                 </ol>
                 <p className="text-[11px] text-amber-300 font-bold pt-1">
@@ -1210,7 +1225,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
                 <div
                   className={`mt-1 pt-2 border-t border-blue-950/80 flex items-center justify-between text-[11px] font-mono ${
-                    Math.max(liveUserBalance, user?.balance || 0) >= 3000
+                    hasCompletedCycle && Math.max(liveUserBalance, user?.balance || 0) >= 3000
                       ? 'text-emerald-300'
                       : 'text-amber-300'
                   }`}
@@ -1218,9 +1233,13 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                   <span>
                     Status:{' '}
                     <strong>
-                      {Math.max(liveUserBalance, user?.balance || 0) >= 3000
-                        ? 'Withdrawal Ready (Bonus & Commission Eligible)'
-                        : 'Minimum 3,000 UGX Required'}
+                      {!hasCompletedCycle
+                        ? runningInvs.length > 0
+                          ? `Cycle Running (Day ${runningInvs[0].days_elapsed || 1}/${runningInvs[0].duration_days})`
+                          : 'Locked Until End of Machine Cycle'
+                        : Math.max(liveUserBalance, user?.balance || 0) >= 3000
+                          ? 'Machine Cycle Complete — Withdrawal Ready'
+                          : 'Minimum 3,000 UGX Required'}
                     </strong>
                   </span>
                   <span>
@@ -1228,6 +1247,30 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                   </span>
                 </div>
               </div>
+
+              {!hasCompletedCycle && (
+                <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs space-y-1.5">
+                  <div className="font-black uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>Machine Cycle Requirement</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-amber-100/90">
+                    {runningInvs.length > 0 ? (
+                      <>
+                        Your machine <strong className="text-white">{runningInvs[0].machine_title}</strong> is currently on{' '}
+                        <strong className="text-amber-300">
+                          Day {runningInvs[0].days_elapsed || 1} of {runningInvs[0].duration_days}
+                        </strong>
+                        . One cannot make a withdrawal before the end of his machine cycle.
+                      </>
+                    ) : (
+                      <>
+                        One cannot make a withdrawal before the end of his machine cycle. Please buy a machine and complete its cycle to unlock withdrawals.
+                      </>
+                    )}
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1 uppercase tracking-wider flex justify-between">
@@ -1354,6 +1397,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 type="submit"
                 disabled={
                   isLoading ||
+                  !hasCompletedCycle ||
                   !isWeekdayMonToFri ||
                   Math.max(liveUserBalance, user?.balance || 0) < 3000 ||
                   withdrawAmt < 3000 ||
@@ -1364,6 +1408,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               >
                 {isLoading
                   ? 'Submitting Request to Admin...'
+                  : !hasCompletedCycle
+                  ? 'Locked — Wait Until End of Your Machine Cycle'
                   : !isWeekdayMonToFri
                   ? 'Withdrawals Run Monday – Friday Only'
                   : Math.max(liveUserBalance, user?.balance || 0) < 3000
