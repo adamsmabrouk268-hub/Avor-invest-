@@ -468,15 +468,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       return;
     }
 
-    // Rule: One can't make a withdrawal before end of his machine cycle
-    if (!hasCompletedCycle) {
-      const activeInfo =
-        runningInvs.length > 0
-          ? ` (${runningInvs[0].machine_title}: Day ${runningInvs[0].days_elapsed || 1} of ${runningInvs[0].duration_days} days)`
-          : '';
+    // Rule: The 3,000 UGX registration bonus is only withdrawn after buying machines
+    if (!isEligibleCustomer) {
       setMessage({
         type: 'error',
-        text: `Withdrawal Locked: You cannot make a withdrawal before the end of your machine cycle${activeInfo}. Withdrawals unlock once your machine cycle finishes.`,
+        text: 'The 3,000 UGX registration bonus is only withdrawn after buying machines. Please buy a machine first to unlock withdrawal.',
       });
       return;
     }
@@ -1213,10 +1209,10 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     <strong className="text-emerald-300">5M (5,000,000 UGX)</strong>
                   </li>
                   <li>
-                    One cannot make a withdrawal before the <strong className="text-cyan-300">end of his machine cycle</strong>.
+                    The <strong className="text-cyan-300">3,000 UGX</strong> registration bonus is <strong className="text-emerald-300">only withdrawn after buying machines</strong>.
                   </li>
                   <li>
-                    <strong className="text-cyan-300">3,000 UGX</strong> registration bonus and <strong className="text-emerald-300">commission</strong> are eligible for withdrawal at the end of your machine cycle.
+                    Machine returns cannot be withdrawn before the <strong className="text-cyan-300">end of your machine cycle</strong>.
                   </li>
                 </ol>
                 <p className="text-[11px] text-amber-300 font-bold pt-1">
@@ -1225,7 +1221,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
                 <div
                   className={`mt-1 pt-2 border-t border-blue-950/80 flex items-center justify-between text-[11px] font-mono ${
-                    hasCompletedCycle && Math.max(liveUserBalance, user?.balance || 0) >= 3000
+                    isEligibleCustomer && Math.max(liveUserBalance, user?.balance || 0) >= 3000
                       ? 'text-emerald-300'
                       : 'text-amber-300'
                   }`}
@@ -1233,12 +1229,12 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                   <span>
                     Status:{' '}
                     <strong>
-                      {!hasCompletedCycle
-                        ? runningInvs.length > 0
-                          ? `Cycle Running (Day ${runningInvs[0].days_elapsed || 1}/${runningInvs[0].duration_days})`
-                          : 'Locked Until End of Machine Cycle'
+                      {!isEligibleCustomer
+                        ? 'Locked — Buy a Machine First to Withdraw 3,000 UGX Bonus'
                         : Math.max(liveUserBalance, user?.balance || 0) >= 3000
-                          ? 'Machine Cycle Complete — Withdrawal Ready'
+                          ? hasCompletedCycle
+                            ? 'Machine Cycle Complete — Full Withdrawal Ready'
+                            : 'Active Customer — 3,000 UGX Bonus & Commission Ready'
                           : 'Minimum 3,000 UGX Required'}
                     </strong>
                   </span>
@@ -1248,26 +1244,28 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 </div>
               </div>
 
-              {!hasCompletedCycle && (
+              {!isEligibleCustomer && (
                 <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs space-y-1.5">
                   <div className="font-black uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
                     <Clock className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Machine Cycle Requirement</span>
+                    <span>Buy a Machine to Unlock 3,000 UGX Bonus Withdrawal</span>
                   </div>
                   <p className="text-[11px] leading-relaxed text-amber-100/90">
-                    {runningInvs.length > 0 ? (
-                      <>
-                        Your machine <strong className="text-white">{runningInvs[0].machine_title}</strong> is currently on{' '}
-                        <strong className="text-amber-300">
-                          Day {runningInvs[0].days_elapsed || 1} of {runningInvs[0].duration_days}
-                        </strong>
-                        . One cannot make a withdrawal before the end of his machine cycle.
-                      </>
-                    ) : (
-                      <>
-                        One cannot make a withdrawal before the end of his machine cycle. Please buy a machine and complete its cycle to unlock withdrawals.
-                      </>
-                    )}
+                    The <strong className="text-white">3,000 UGX registration bonus</strong> is only withdrawn after buying machines. Please buy a machine first to withdraw your registration bonus.
+                  </p>
+                </div>
+              )}
+
+              {isEligibleCustomer && !hasCompletedCycle && runningInvs.length > 0 && (
+                <div className="p-3.5 rounded-xl bg-blue-950/40 border border-cyan-500/40 text-cyan-200 text-xs space-y-1">
+                  <div className="font-black uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-cyan-400 shrink-0" />
+                    <span>
+                      Active Machine Cycle ({runningInvs[0].machine_title}: Day {runningInvs[0].days_elapsed || 1}/{runningInvs[0].duration_days})
+                    </span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-slate-200">
+                    Since you have bought a machine, you can withdraw your <strong className="text-emerald-300">3,000 UGX registration bonus</strong> and <strong className="text-emerald-300">commissions</strong> now. Machine cycle returns unlock at the end of your machine cycle.
                   </p>
                 </div>
               )}
@@ -1397,7 +1395,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 type="submit"
                 disabled={
                   isLoading ||
-                  !hasCompletedCycle ||
+                  !isEligibleCustomer ||
                   !isWeekdayMonToFri ||
                   Math.max(liveUserBalance, user?.balance || 0) < 3000 ||
                   withdrawAmt < 3000 ||
@@ -1408,8 +1406,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               >
                 {isLoading
                   ? 'Submitting Request to Admin...'
-                  : !hasCompletedCycle
-                  ? 'Locked — Wait Until End of Your Machine Cycle'
+                  : !isEligibleCustomer
+                  ? 'Locked — Buy a Machine First to Withdraw 3,000 UGX Bonus'
                   : !isWeekdayMonToFri
                   ? 'Withdrawals Run Monday – Friday Only'
                   : Math.max(liveUserBalance, user?.balance || 0) < 3000

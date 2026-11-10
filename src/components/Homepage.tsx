@@ -1018,8 +1018,8 @@ export const Homepage: React.FC<HomepageProps> = ({
                   <li>Withdraws run from <strong>Mon – Fri</strong></li>
                   <li>Withdraw percentage – <strong>10%</strong></li>
                   <li>Minimum withdraw is <strong>3k</strong> and Maximum withdraw is <strong>5M</strong></li>
-                  <li>One cannot make a withdrawal before the <strong>end of his machine cycle</strong>.</li>
-                  <li><strong>3000</strong> is eligible for <strong>customers</strong> at the end of their machine cycle.</li>
+                  <li>The <strong>3,000 UGX</strong> registration bonus is <strong>only withdrawn after buying machines</strong>.</li>
+                  <li>One cannot make a withdrawal of machine returns before the <strong>end of his machine cycle</strong>.</li>
                   <li><strong>* Withdraws take 24-96 hours to process.</strong></li>
                 </ol>
               </div>
@@ -1451,7 +1451,7 @@ export const Homepage: React.FC<HomepageProps> = ({
                       <li><strong>Rule 1 (Schedule):</strong> Withdraws run from <strong>Mon – Fri</strong>.</li>
                       <li><strong>Rule 2 (Fee):</strong> Withdraw percentage is <strong>10%</strong>.</li>
                       <li><strong>Rule 3 (Limits):</strong> Minimum withdraw is <strong>3k (3,000 UGX)</strong> and Maximum withdraw is <strong>5M (5,000,000 UGX)</strong>.</li>
-                      <li><strong>Rule 4 (Machine Cycle):</strong> One cannot make a withdrawal before the <strong>end of his machine cycle</strong> (<strong>3000</strong> registration bonus is eligible for customers at the end of their machine cycle).</li>
+                      <li><strong>Rule 4 (Eligibility):</strong> The <strong>3,000 UGX</strong> registration bonus is <strong>only withdrawn after buying machines</strong>, and machine returns are withdrawn at the <strong>end of the machine cycle</strong>.</li>
                       <li><strong>Rule 5 (Processing Time):</strong> <strong>* Withdraws take 24-96 hours to process.</strong></li>
                       <li><strong>Team Income & Invitation Bonus (8%):</strong> Team income and invitation bonus is <strong>8%</strong> (collected onto the inviter&apos;s balance when the cycle of the invited customer&apos;s machine has ended).</li>
                       <li><strong>Last Month&apos;s Reward (5%):</strong> Collected when a customer has invited 4 or more customers (people who have bought machines), equal to <strong>5%</strong> of the total machine price the invited customers have bought. Always collected on every <strong>28th of every month</strong> to the customers&apos; balance for withdraw.</li>

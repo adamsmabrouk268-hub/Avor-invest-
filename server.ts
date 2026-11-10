@@ -2971,8 +2971,9 @@ async function startServer() {
         pending_withdrawals: pendingWithdrawals,
         withdrawals_count: userWithdrawals.length,
         withdrawable_balance: user.balance,
+        has_bought_machine: hasBoughtMachine,
         has_completed_cycle: hasCompletedCycle,
-        can_withdraw: hasCompletedCycle && user.balance >= 3000,
+        can_withdraw: hasBoughtMachine && user.balance >= 3000,
         min_withdrawal: 3000,
         recent_withdrawals: userWithdrawals.slice(0, 20),
       },
@@ -4089,7 +4090,9 @@ async function startServer() {
     // Sync user's latest balance (includes 3,000 UGX registration bonus + commissions + yields)
     syncUserConfirmedFinances(user, user.id);
 
-    // Sync active machine cycles and enforce: One can't make a withdrawal before end of his machine cycle
+    // Sync active machine cycles and enforce:
+    // 1. The 3,000 UGX registration bonus is only withdrawn after buying machines.
+    // 2. Machine cycle returns cannot be withdrawn before the end of the machine cycle.
     const nowDateObj = new Date();
     investments.forEach((inv) => {
       if (inv.status !== 'PENDING') {
@@ -4105,16 +4108,13 @@ async function startServer() {
     const completedCycleInvs = confirmedUserInvestments.filter(
       (i) => i.status === 'PAYOUT_COMPLETE' || (Number(i.days_elapsed) || 0) >= (Number(i.duration_days) || 1)
     );
+    const customerHasBoughtMachine =
+      confirmedUserInvestments.length > 0 || Boolean(user.has_bought_machine) || Boolean(has_bought_machine);
 
-    if (completedCycleInvs.length === 0) {
-      if (confirmedUserInvestments.length > 0) {
-        const activeInv = confirmedUserInvestments[0];
-        return res.status(400).json({
-          error: `Withdrawal Locked: You cannot make a withdrawal before the end of your machine cycle (${activeInv.machine_title}: Day ${activeInv.days_elapsed || 1} of ${activeInv.duration_days} days). Withdrawals unlock automatically once your machine cycle finishes.`,
-        });
-      }
+    if (!customerHasBoughtMachine) {
       return res.status(400).json({
-        error: 'Withdrawal Locked: You cannot make a withdrawal before the end of your machine cycle. Please buy a machine and complete its cycle first.',
+        error:
+          'The 3,000 UGX registration bonus can only be withdrawn after buying machines. Please buy a machine first to unlock withdrawal.',
       });
     }
 
@@ -4129,6 +4129,41 @@ async function startServer() {
       return res.status(400).json({
         error: 'Withdraw Rule 3: Maximum withdraw is 5,000,000 UGX (5M).',
       });
+    }
+
+    // Before the end of the machine cycle, only the 3,000 UGX registration bonus + commissions can be withdrawn after buying a machine
+    if (completedCycleInvs.length === 0) {
+      const userCommissions = transactions
+        .filter(
+          (t) =>
+            doesTxBelongToUser(t, user, user.id) &&
+            (t.type === 'COMMISSION' || t.type === 'REFERRAL_BONUS') &&
+            (t.status === 'SUCCESS' || t.status === 'CONFIRMED') &&
+            !(typeof t.payment_reference === 'string' && t.payment_reference.startsWith('GATEWAY-REWARD-'))
+        )
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      const deductedWithdrawals = transactions
+        .filter(
+          (t) =>
+            doesTxBelongToUser(t, user, user.id) &&
+            t.type === 'WITHDRAWAL' &&
+            (t.status === 'SUCCESS' || t.status === 'CONFIRMED' || t.status === 'PENDING')
+        )
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      const bonusAndCommissionsAvailable = Math.max(
+        0,
+        REGISTRATION_REWARD_UGX + userCommissions - deductedWithdrawals
+      );
+
+      if (numAmt > bonusAndCommissionsAvailable) {
+        const activeInv = confirmedUserInvestments[0];
+        const cycleNote = activeInv
+          ? ` (${activeInv.machine_title}: Day ${activeInv.days_elapsed || 1} of ${activeInv.duration_days} days)`
+          : '';
+        return res.status(400).json({
+          error: `You cannot make a withdrawal of machine returns before the end of your machine cycle${cycleNote}. Before the end of your machine cycle, only your 3,000 UGX registration bonus and commissions (${bonusAndCommissionsAvailable.toLocaleString()} UGX available) can be withdrawn after buying a machine.`,
+        });
+      }
     }
 
     if (user.balance < 3000) {
