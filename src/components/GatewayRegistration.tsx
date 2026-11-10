@@ -206,126 +206,85 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
 
     const fullPhoneNumber = `${selectedCountry.dialCode}${normalizedLocal}`;
 
-    // 2. Password & Confirmation validation
-    if (activeTab === 'register') {
-      if (password.length < 4) {
-        setError('Password must be at least 4 characters long.');
-        return;
-      }
-      if (!confirmPassword) {
-        setError('Please confirm your password.');
-        return;
-      }
-      if (password !== confirmPassword) {
-        setError('Passwords do not match. Please check your password confirmation.');
-        return;
-      }
-    } else {
-      if (!password) {
-        setError('Please enter your password.');
-        return;
-      }
+    // 2. Simplified Password check (only 1 password field required — no Confirm Password friction)
+    if (!password || password.trim().length < 4) {
+      setError('Please enter a password (at least 4 characters).');
+      return;
     }
 
     setIsLoading(true);
 
     try {
-      if (activeTab === 'register') {
-        const res = await fetch('/api/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            phoneNumber: fullPhoneNumber,
-            phone_number: fullPhoneNumber,
-            password,
-            age: 21,
-            country: selectedCountry.name,
-            country_code: selectedCountry.code,
-            referral_code: referralCode.trim() || undefined,
-            name: `Investor ${cleanDigits.slice(-4)}`,
-            email: `${cleanDigits}@avorinvest.com`,
-          }),
-        });
+      const endpoint = activeTab === 'register' ? '/api/register' : '/api/login';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: fullPhoneNumber,
+          phone_number: fullPhoneNumber,
+          password: password.trim(),
+          age: 21,
+          country: selectedCountry.name,
+          country_code: selectedCountry.code,
+          referral_code: referralCode.trim() || undefined,
+          name: `Investor ${cleanDigits.slice(-4)}`,
+          email: `${cleanDigits}@avorinvest.com`,
+        }),
+      });
 
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || 'Gateway registration failed.');
-        }
-
-        if (onCurrencyChange) {
-          onCurrencyChange(selectedCountry.defaultCurrency);
-        }
-
-        const nowIso = new Date().toISOString();
-        const rawUser = data.user || data;
-        const regDate = rawUser?.registered_date || rawUser?.created_at || nowIso;
-        const userObj = {
-          ...rawUser,
-          created_at: regDate,
-          registered_date: regDate,
-          updated_at: nowIso,
-          balance:
-            typeof rawUser?.balance === 'number' && rawUser.balance > 0
-              ? rawUser.balance
-              : 3000,
-          user_details: {
-            ...(rawUser?.user_details || {}),
-            full_name: rawUser?.full_name || rawUser?.name || `Investor ${cleanDigits.slice(-4)}`,
-            phone_number: rawUser?.phone_number || fullPhoneNumber,
-            country: selectedCountry.name,
-            registered_date: regDate,
-            date: new Date(regDate).toLocaleString(),
-            updated_at: nowIso,
-          },
-        };
-        try {
-          localStorage.setItem('avor_invest_user', JSON.stringify(userObj));
-          localStorage.setItem('avor_invest_has_account', 'true');
-          localStorage.setItem('avor_invest_last_phone', userObj.phone_number || fullPhoneNumber);
-          const regPayload = {
-            ...(data.saved_registration_data || data.registration_data || {}),
-            phone_number: userObj.phone_number || fullPhoneNumber,
-            name: userObj.full_name,
-            country: selectedCountry.name,
-            registered_date: regDate,
-            date: new Date(regDate).toLocaleString(),
-          };
-          localStorage.setItem('avor_invest_registration_data', JSON.stringify(regPayload));
-        } catch (e) {}
-
-        onSuccess(userObj, 'register');
-      } else {
-        const res = await fetch('/api/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            phone_number: fullPhoneNumber,
-            phoneNumber: fullPhoneNumber,
-            password,
-          }),
-        });
-
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || 'Invalid phone number or password.');
-        }
-
-        if (data.country) {
-          const matchCountry = SUPPORTED_COUNTRIES.find((c) => c.name === data.country);
-          if (matchCountry && onCurrencyChange) {
-            onCurrencyChange(matchCountry.defaultCurrency);
-          }
-        }
-
-        const userObj = data.user || data;
-        try {
-          localStorage.setItem('avor_invest_user', JSON.stringify(userObj));
-          localStorage.setItem('avor_invest_has_account', 'true');
-          localStorage.setItem('avor_invest_last_phone', userObj.phone_number || fullPhoneNumber);
-        } catch (e) {}
-
-        onSuccess(userObj, 'login');
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Unable to access account. Please check your phone number.');
       }
+
+      if (onCurrencyChange) {
+        onCurrencyChange(selectedCountry.defaultCurrency);
+      }
+
+      const nowIso = new Date().toISOString();
+      const rawUser = data.user || data;
+      const regDate = rawUser?.registered_date || rawUser?.created_at || nowIso;
+      const userObj = {
+        ...rawUser,
+        id: rawUser?.id || `user-${cleanDigits}`,
+        phone_number: rawUser?.phone_number || fullPhoneNumber,
+        full_name: rawUser?.full_name || rawUser?.name || `Investor ${cleanDigits.slice(-4)}`,
+        country: rawUser?.country || selectedCountry.name,
+        created_at: regDate,
+        registered_date: regDate,
+        updated_at: nowIso,
+        balance:
+          typeof rawUser?.balance === 'number' && rawUser.balance >= 0
+            ? rawUser.balance
+            : 3000,
+        user_details: {
+          ...(rawUser?.user_details || {}),
+          full_name: rawUser?.full_name || rawUser?.name || `Investor ${cleanDigits.slice(-4)}`,
+          phone_number: rawUser?.phone_number || fullPhoneNumber,
+          country: rawUser?.country || selectedCountry.name,
+          registered_date: regDate,
+          date: new Date(regDate).toLocaleString(),
+          updated_at: nowIso,
+        },
+      };
+
+      try {
+        localStorage.setItem('avor_invest_user', JSON.stringify(userObj));
+        localStorage.setItem('avor_invest_has_account', 'true');
+        localStorage.setItem('avor_invest_last_phone', userObj.phone_number || fullPhoneNumber);
+        const regPayload = {
+          ...(data.saved_registration_data || data.registration_data || {}),
+          id: userObj.id,
+          phone_number: userObj.phone_number || fullPhoneNumber,
+          name: userObj.full_name,
+          country: userObj.country,
+          registered_date: regDate,
+          date: new Date(regDate).toLocaleString(),
+        };
+        localStorage.setItem('avor_invest_registration_data', JSON.stringify(regPayload));
+      } catch (e) {}
+
+      onSuccess(userObj, activeTab);
     } catch (err: any) {
       setError(err.message || 'Connection failed. Please check network connectivity.');
     } finally {
@@ -336,7 +295,7 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
   return (
     <div className={`w-full ${isModal ? 'max-w-md mx-auto' : 'max-w-md sm:max-w-lg mx-auto my-3 sm:my-6 px-3 sm:px-4'}`}>
       {/* Outer Luxury Deep Blue Glass Card */}
-      <div className="relative rounded-3xl bg-gradient-to-b from-[#05112e] via-[#030a1c] to-[#01040f] border border-blue-900/60 shadow-[0_25px_80px_rgba(2,8,28,0.95),0_0_40px_rgba(37,99,235,0.18)] overflow-hidden text-white pt-8 pb-7 px-6 sm:px-8 select-none backdrop-blur-2xl">
+      <div className="relative rounded-3xl bg-gradient-to-b from-[#05112e] via-[#030a1c] to-[#01040f] border border-blue-900/60 shadow-[0_25px_80px_rgba(2,8,28,0.95),0_0_40px_rgba(37,99,235,0.18)] overflow-hidden text-white pt-7 pb-6 px-5 sm:px-8 select-none backdrop-blur-2xl">
         {/* Subtle Curved Electric Blue & Cyan Particle Arc at bottom */}
         <div className="absolute inset-x-0 bottom-0 h-56 pointer-events-none overflow-hidden z-0 opacity-85">
           <svg
@@ -386,91 +345,49 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
 
         {/* Foreground Form Content */}
         <div className="relative z-10 flex flex-col items-center">
-          {/* 1. Header: AVOR Brand & Simplified Gateway Title */}
-          <div className="text-center mb-4 sm:mb-5">
+          {/* 1. Header: AVOR Brand & Simplified 1-Step Gateway Title */}
+          <div className="text-center mb-4">
             <h2 className="text-xs sm:text-sm font-serif font-bold tracking-[0.4em] text-cyan-400 uppercase mb-1 drop-shadow-[0_0_12px_rgba(0,240,255,0.45)]">
               AVOR INVEST
             </h2>
-            <span className="text-[11px] font-mono text-sky-300/90 font-semibold block mb-1">
-              Quick Gateway • avorinvest.com
-            </span>
-            <h1 className="text-3xl sm:text-4xl font-serif font-bold text-white tracking-tight leading-tight">
-              {activeTab === 'register' ? 'Create Account' : 'Welcome Back'}
+            <h1 className="text-2xl sm:text-3xl font-serif font-bold text-white tracking-tight leading-tight">
+              Quick Access Gateway
             </h1>
             <p className="text-xs text-slate-300 mt-1">
-              {activeTab === 'register'
-                ? 'After registration, you get 3,000 UGX bonus as a Gateway Reward'
-                : 'Enter your phone number and password to access your account'}
+              Enter your phone number &amp; password — <strong className="text-emerald-400">3,000 UGX Gateway Bonus</strong> on registration
             </p>
           </div>
 
           {/* Official Invitation Banner when accessed via Shared Invite Link */}
           {hasInviteFromUrl && (
-            <div className="w-full mb-4 bg-gradient-to-r from-blue-950/90 via-[#071a3e] to-cyan-950/80 border border-cyan-400/50 rounded-2xl p-3 text-left space-y-1 shadow-lg">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-mono font-black uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Official Invite Access</span>
-                </span>
-                <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[10px] font-mono font-bold">
-                  Code: {referralCode}
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-200 leading-snug">
-                Register below with your phone number &amp; password to get <strong className="text-emerald-400">3,000 UGX bonus</strong> as a Gateway Reward.
-              </p>
+            <div className="w-full mb-3.5 bg-gradient-to-r from-blue-950/90 via-[#071a3e] to-cyan-950/80 border border-cyan-400/50 rounded-2xl p-2.5 text-left flex items-center justify-between shadow-lg">
+              <span className="text-[10px] font-mono font-black uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Invite Linked</span>
+              </span>
+              <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[10px] font-mono font-bold">
+                Code: {referralCode}
+              </span>
             </div>
           )}
 
-          {/* Quick Tab Switcher: Register / Sign In */}
-          <div className="flex items-center gap-2 mb-5 w-full bg-[#040b1e]/90 p-1 rounded-2xl border border-blue-900/70 text-xs">
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('register');
-                setError(null);
-              }}
-              className={`flex-1 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all cursor-pointer ${
-                activeTab === 'register'
-                  ? 'bg-[#0091ea] text-white shadow-md shadow-[#0091ea]/40'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Register
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('login');
-                setError(null);
-              }}
-              className={`flex-1 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all cursor-pointer ${
-                activeTab === 'login'
-                  ? 'bg-[#0091ea] text-white shadow-md shadow-[#0091ea]/40'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Sign In
-            </button>
-          </div>
-
           {/* Error Notice */}
           {error && (
-            <div className="w-full mb-4 bg-rose-950/85 border border-rose-500/60 text-rose-300 text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-2 animate-shake">
+            <div className="w-full mb-3.5 bg-rose-950/85 border border-rose-500/60 text-rose-300 text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-2 animate-shake">
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
-          {/* Simplified Registration / Login Form (Phone + Password + Optional Invite Code) */}
+          {/* Ultra-Simple 2-Field Gateway Form (Phone + Password) */}
           <form onSubmit={handleSubmit} className="w-full space-y-3.5">
             {/* Field 1: Phone Number */}
             <div className="w-full">
               <label className="text-[11px] font-bold text-slate-300 block mb-1 pl-1">
-                Mobile Phone Number
+                Phone Number
               </label>
-              <div className="relative flex items-center bg-[#030919] border border-blue-900/80 hover:border-blue-500/80 focus-within:border-cyan-400 focus-within:ring-1 focus-within:ring-cyan-400/40 rounded-2xl px-4 py-3 sm:py-3.5 transition-all shadow-inner">
-                <Smartphone className="w-5 h-5 text-cyan-400 shrink-0 mr-2.5 stroke-[1.6]" />
+              <div className="relative flex items-center bg-[#030919] border border-blue-900/80 hover:border-blue-500/80 focus-within:border-cyan-400 focus-within:ring-1 focus-within:ring-cyan-400/40 rounded-2xl px-3.5 py-3 transition-all shadow-inner">
+                <Smartphone className="w-5 h-5 text-cyan-400 shrink-0 mr-2 stroke-[1.6]" />
 
                 <select
                   value={selectedCountry.code}
@@ -496,19 +413,19 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
               </div>
             </div>
 
-            {/* Field 2: Password */}
+            {/* Field 2: Password (Single field — no Confirm Password friction) */}
             <div className="w-full">
               <label className="text-[11px] font-bold text-slate-300 block mb-1 pl-1">
-                {activeTab === 'register' ? 'Password (4+ characters)' : 'Password'}
+                Password
               </label>
-              <div className="relative flex items-center bg-[#030919] border border-blue-900/80 hover:border-blue-500/80 focus-within:border-cyan-400 focus-within:ring-1 focus-within:ring-cyan-400/40 rounded-2xl px-4 py-3 sm:py-3.5 transition-all shadow-inner">
-                <KeyRound className="w-5 h-5 text-cyan-400 shrink-0 mr-3 stroke-[1.6]" />
+              <div className="relative flex items-center bg-[#030919] border border-blue-900/80 hover:border-blue-500/80 focus-within:border-cyan-400 focus-within:ring-1 focus-within:ring-cyan-400/40 rounded-2xl px-3.5 py-3 transition-all shadow-inner">
+                <KeyRound className="w-5 h-5 text-cyan-400 shrink-0 mr-2.5 stroke-[1.6]" />
 
                 <input
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={activeTab === 'register' ? 'Create your password' : 'Enter your password'}
+                  placeholder="Enter password (4+ characters)"
                   className="w-full bg-transparent text-white placeholder-slate-500 text-sm sm:text-base outline-none font-sans pr-8"
                   required
                 />
@@ -516,7 +433,7 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 text-slate-400 hover:text-white cursor-pointer"
+                  className="absolute right-3.5 text-slate-400 hover:text-white cursor-pointer"
                   tabIndex={-1}
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -524,94 +441,8 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
               </div>
             </div>
 
-            {/* Field 2b: Confirm Password (Only in Register mode) */}
-            {activeTab === 'register' && (
-              <div className="w-full animate-fade-in">
-                <div className="flex items-center justify-between mb-1 pl-1 pr-1">
-                  <label className="text-[11px] font-bold text-slate-300">
-                    Confirm Password
-                  </label>
-                  {confirmPassword.length > 0 && (
-                    <span
-                      className={`text-[10px] font-mono font-bold flex items-center gap-1 ${
-                        password === confirmPassword ? 'text-emerald-400' : 'text-rose-400'
-                      }`}
-                    >
-                      {password === confirmPassword ? (
-                        <>
-                          <Check className="w-3 h-3" />
-                          <span>Confirmed</span>
-                        </>
-                      ) : (
-                        <span>Passwords do not match</span>
-                      )}
-                    </span>
-                  )}
-                </div>
-                <div
-                  className={`relative flex items-center bg-[#030919] border ${
-                    confirmPassword.length > 0
-                      ? password === confirmPassword
-                        ? 'border-emerald-500/70 focus-within:border-emerald-400'
-                        : 'border-rose-500/70 focus-within:border-rose-400'
-                      : 'border-blue-900/80 hover:border-blue-500/80 focus-within:border-cyan-400'
-                  } focus-within:ring-1 focus-within:ring-cyan-400/40 rounded-2xl px-4 py-3 sm:py-3.5 transition-all shadow-inner`}
-                >
-                  <KeyRound className="w-5 h-5 text-cyan-400 shrink-0 mr-3 stroke-[1.6]" />
-
-                  <input
-                    type={showConfirmPassword ? 'text' : 'password'}
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Confirm your password"
-                    className="w-full bg-transparent text-white placeholder-slate-500 text-sm sm:text-base outline-none font-sans pr-8"
-                    required
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    className="absolute right-4 text-slate-400 hover:text-white cursor-pointer"
-                    tabIndex={-1}
-                  >
-                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Field 3: Optional Referral / Invite Code (Only in Register mode) */}
-            {activeTab === 'register' && (
-              <div className="w-full animate-fade-in">
-                <label className="text-[11px] font-bold text-slate-300 block mb-1 pl-1">
-                  Invite / Referral Code <span className="text-slate-500 font-normal">(Optional)</span>
-                </label>
-                <div className="relative flex items-center justify-between bg-[#030919] border border-blue-900/80 hover:border-blue-500/80 focus-within:border-cyan-400 focus-within:ring-1 focus-within:ring-cyan-400/40 rounded-2xl px-4 py-2.5 sm:py-3 transition-all shadow-inner">
-                  <Share2 className="w-4 h-4 text-cyan-400 shrink-0 mr-3 stroke-[1.6]" />
-
-                  <input
-                    type="text"
-                    value={referralCode}
-                    onChange={(e) => setReferralCode(e.target.value)}
-                    placeholder="Referral Code (Optional)"
-                    className="w-full bg-transparent text-white placeholder-slate-500 text-sm outline-none font-mono"
-                  />
-
-                  <button
-                    type="button"
-                    onClick={handleCopyCode}
-                    title="Copy Referral Code"
-                    className="bg-[#081533] hover:bg-[#0c1f4a] text-cyan-300 border border-blue-800/80 px-2 py-1 rounded-lg text-xs font-mono font-bold flex items-center gap-1 cursor-pointer transition-all shrink-0"
-                  >
-                    {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-cyan-400" />}
-                    <span className="text-[10px] hidden sm:inline">{copiedCode ? 'Copied' : 'Copy'}</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* Submit Button */}
-            <div className="pt-2">
+            <div className="pt-1.5">
               <button
                 type="submit"
                 disabled={isLoading}
@@ -620,12 +451,10 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
                 {isLoading ? (
                   <div className="flex items-center gap-2 text-base font-sans text-white">
                     <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    <span>Connecting...</span>
+                    <span>Entering Account...</span>
                   </div>
-                ) : activeTab === 'register' ? (
-                  <span>Register &amp; Enter Avor Invest</span>
                 ) : (
-                  <span>Sign In to Avor Invest</span>
+                  <span>Continue to Avor Invest</span>
                 )}
               </button>
             </div>

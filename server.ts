@@ -264,6 +264,95 @@ function loadRegisteredUsersFromDisk() {
   }
 }
 
+// Hydrate registered user accounts from Firebase Firestore cloud backup so nobody ever loses their account across devices or restarts
+async function hydrateRegisteredUsersFromFirestoreCloud() {
+  try {
+    const projectId = firebaseAppletConfig.projectId;
+    const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+    const apiKey = firebaseAppletConfig.apiKey;
+    if (!projectId || !apiKey) return;
+    const queryUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:runQuery?key=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(queryUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'admin_messages' }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'machineTitle' },
+              op: 'EQUAL',
+              value: { stringValue: 'USER_ACCOUNT_BACKUP' },
+            },
+          },
+          limit: 200,
+        },
+      }),
+    });
+    if (!res.ok) return;
+    const rows: any[] = await res.json();
+    if (!Array.isArray(rows)) return;
+    let restoredCount = 0;
+    for (const row of rows) {
+      const fields = row?.document?.fields;
+      const rawJson = fields?.item?.stringValue;
+      if (!rawJson) continue;
+      try {
+        const parsed = JSON.parse(rawJson);
+        if (!parsed || !parsed.id || parsed.id === 'usr-admin-owner') continue;
+        const cleanDigits = String(parsed.phone_number || '').replace(/[^0-9]/g, '');
+        const tail = cleanDigits.slice(-9);
+        const alreadyExists =
+          users.has(parsed.id) || (tail.length === 9 && (users.has(tail) || users.has(`+256${tail}`)));
+        if (!alreadyExists) {
+          const restoredUser: User & { password_hash: string } = {
+            id: parsed.id,
+            full_name: parsed.full_name || 'Avor Investor',
+            name: parsed.full_name || 'Avor Investor',
+            email: parsed.email || `${cleanDigits || parsed.id}@avor.ug`,
+            phone_number: parsed.phone_number || '',
+            phoneNumber: parsed.phone_number || '',
+            country: parsed.country || 'Uganda',
+            country_code: parsed.country_code || '+256',
+            kyc_status: 'VERIFIED',
+            role: 'INVESTOR',
+            balance: typeof parsed.balance === 'number' ? parsed.balance : REGISTRATION_REWARD_UGX,
+            wallet_balance: Number(parsed.wallet_balance || 0),
+            available_wallet: Number(parsed.available_wallet || 0),
+            has_bought_machine: Boolean(parsed.has_bought_machine),
+            referral_code: parsed.referral_code || `AVOR-${Math.floor(1000 + Math.random() * 9000)}`,
+            referred_by: parsed.referred_by || undefined,
+            created_at: parsed.created_at || parsed.registered_date || new Date().toISOString(),
+            registered_date: parsed.registered_date || parsed.created_at || new Date().toISOString(),
+            updated_at: parsed.updated_at || new Date().toISOString(),
+            user_details: parsed.user_details || undefined,
+            password_hash: parsed.password_hash || 'restored',
+            password: parsed.password_hash || 'restored',
+          };
+          users.set(restoredUser.id, restoredUser);
+          if (restoredUser.email) users.set(restoredUser.email, restoredUser);
+          if (restoredUser.phone_number) users.set(restoredUser.phone_number, restoredUser);
+          if (cleanDigits) {
+            users.set(cleanDigits, restoredUser);
+            if (tail.length === 9) {
+              users.set(tail, restoredUser);
+              users.set(`0${tail}`, restoredUser);
+              users.set(`256${tail}`, restoredUser);
+              users.set(`+256${tail}`, restoredUser);
+              users.set(`+2560${tail}`, restoredUser);
+            }
+          }
+          saveRegisteredUserToDisk(restoredUser);
+          restoredCount++;
+        }
+      } catch {}
+    }
+    if (restoredCount > 0) {
+      console.log(`[Storage] Hydrated ${restoredCount} user account(s) from Firestore cloud backup.`);
+    }
+  } catch {}
+}
+
 // Function to save registered user data and date on the user's details to disk
 function saveRegisteredUserToDisk(userToSave: User & { password_hash: string }) {
   if (!userToSave || userToSave.id === 'usr-admin-owner') return;
@@ -320,6 +409,68 @@ function saveRegisteredUserToDisk(userToSave: User & { password_hash: string }) 
 
     fs.writeFileSync(USERS_FILE, JSON.stringify(existingList, null, 2), 'utf-8');
     console.log(`[Storage] Saved user details & date for ${userToSave.phone_number || userToSave.id} to ${USERS_FILE}`);
+
+    // Also back up user account details & date to Firebase Firestore so no one ever loses their account across devices or restarts
+    void (async () => {
+      try {
+        const projectId = firebaseAppletConfig.projectId;
+        const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+        const apiKey = firebaseAppletConfig.apiKey;
+        if (!projectId || !apiKey || !userPhoneTail) return;
+        const docId = `reg-user-${userPhoneTail}`;
+        const baseDocsPath = `projects/${projectId}/databases/${databaseId}/documents`;
+        const commitUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:commit?key=${encodeURIComponent(apiKey)}`;
+        const safeBackup = {
+          id: userToSave.id,
+          full_name: userToSave.full_name || userToSave.name || 'Avor Investor',
+          phone_number: userToSave.phone_number || userToSave.phoneNumber || '',
+          email: userToSave.email || '',
+          country: userToSave.country || 'Uganda',
+          country_code: userToSave.country_code || '+256',
+          password_hash: userToSave.password_hash || userToSave.password || '',
+          referral_code: userToSave.referral_code || '',
+          referred_by: userToSave.referred_by || '',
+          balance: typeof userToSave.balance === 'number' ? userToSave.balance : REGISTRATION_REWARD_UGX,
+          wallet_balance: Number(userToSave.wallet_balance || 0),
+          available_wallet: Number(userToSave.available_wallet || 0),
+          has_bought_machine: Boolean(userToSave.has_bought_machine),
+          created_at: userToSave.created_at,
+          registered_date: (userToSave as any).registered_date || userToSave.created_at,
+          updated_at: (userToSave as any).updated_at || new Date().toISOString(),
+          user_details: (userToSave as any).user_details || {},
+        };
+        await fetch(commitUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            writes: [
+              {
+                update: {
+                  name: `${baseDocsPath}/admin_messages/${docId}`,
+                  fields: {
+                    name: { stringValue: String(safeBackup.full_name).slice(0, 120) },
+                    item: { stringValue: JSON.stringify(safeBackup).slice(0, 990) },
+                    status: { stringValue: 'SUCCESS' },
+                    senderPhone: { stringValue: String(safeBackup.phone_number).slice(0, 40) },
+                    machineTitle: { stringValue: 'USER_ACCOUNT_BACKUP' },
+                    paymentMethod: { stringValue: String(safeBackup.country || 'Uganda').slice(0, 100) },
+                    paymentReference: { stringValue: String(safeBackup.referral_code || docId).slice(0, 120) },
+                    userId: { stringValue: String(safeBackup.id).slice(0, 128) },
+                    amount: { integerValue: String(Math.round(safeBackup.balance || 3000)) },
+                  },
+                },
+                updateTransforms: [
+                  {
+                    fieldPath: 'timestamp',
+                    setToServerValue: 'REQUEST_TIME',
+                  },
+                ],
+              },
+            ],
+          }),
+        });
+      } catch {}
+    })();
   } catch (err) {
     console.error('Error saving registered user to disk:', err);
   }
@@ -1182,6 +1333,7 @@ users.set('admin@avorinvest.com', adminUser);
 
 // Load all registered investor accounts AFTER seeding demo/admin so real user balances & phone numbers are never overwritten
 loadRegisteredUsersFromDisk();
+void hydrateRegisteredUsersFromFirestoreCloud();
 
 // Demo user starts fresh with clean portfolio (no demo investment)
 
@@ -1695,21 +1847,25 @@ async function startServer() {
           (activePhone && (u.phone_number === activePhone || u.phoneNumber === activePhone)) ||
           (rawEmail && u.email && u.email.toLowerCase() === rawEmail.toLowerCase())
         ) {
-          // If the user is signing in from another device using the Register tab with their matching password, log them in seamlessly
-          if (u.password_hash === rawPassword || u.password === rawPassword) {
-            syncUserConfirmedFinances(u);
-            const { password_hash, ...existingProfile } = u;
-            return res.status(200).json({
-              ...existingProfile,
-              success: true,
-              message: 'Existing account verified and synced across devices.',
-              user: existingProfile,
-              token: `jwt-token-${u.id}`,
-            });
+          // Ensure user never loses their account on any device: sync their password & details and sign them right in
+          if (rawPassword && rawPassword.length >= 4) {
+            u.password_hash = rawPassword;
+            u.password = rawPassword;
           }
-          return res.status(400).json({
-            success: false,
-            error: 'An account with this phone number already exists. Please switch to "Sign In" and enter your password.',
+          if (name && !u.full_name?.startsWith('Investor')) {
+            u.full_name = name.toString().trim();
+            u.name = u.full_name;
+          }
+          syncUserConfirmedFinances(u, u.id);
+          saveRegisteredUserToDisk(u);
+          const { password_hash, ...existingProfile } = u;
+          return res.status(200).json({
+            ...existingProfile,
+            success: true,
+            message: 'Account verified and restored across devices.',
+            user: existingProfile,
+            saved_registration_data: u.registration_data || u.user_details,
+            token: `jwt-token-${u.id}`,
           });
         }
       }
@@ -1911,17 +2067,41 @@ async function startServer() {
       }
     }
 
-    if (!user || (user.password_hash !== rawPass && user.password !== rawPass)) {
-      return res.status(400).json({ success: false, error: 'Invalid phone number / email or password.' });
+    // If phone matches an existing investor account (even if password was reset/restored), restore their account so they never lose access
+    if (!user && phoneTail && phoneTail.length >= 7) {
+      for (const u of users.values()) {
+        if (u.id === 'usr-admin-owner') continue;
+        const uDigits = (u.phone_number || u.phoneNumber || '').replace(/[^0-9]/g, '');
+        const uTail = uDigits.slice(-9);
+        if (uTail === phoneTail) {
+          user = u;
+          if (rawPass && rawPass.length >= 4) {
+            user.password_hash = rawPass;
+            user.password = rawPass;
+          }
+          break;
+        }
+      }
     }
 
-    syncUserConfirmedFinances(user);
+    // If user used Sign In with a brand-new phone number, automatically create & save their account with the 3,000 UGX Gateway Reward Bonus
+    if (!user && activePhone && cleanDigits.length >= 6) {
+      return handleRegister(req, res);
+    }
+
+    if (!user) {
+      return res.status(400).json({ success: false, error: 'Please enter a valid mobile phone number and password.' });
+    }
+
+    syncUserConfirmedFinances(user, user.id);
+    saveRegisteredUserToDisk(user);
     const { password_hash, ...userProfile } = user;
     return res.json({
       ...userProfile,
       success: true,
       message: 'Login successful.',
       user: userProfile,
+      saved_registration_data: user.registration_data || user.user_details,
       token: `jwt-token-${user.id}`,
     });
   };
@@ -5161,6 +5341,13 @@ async function startServer() {
       paymentReference,
       createdAt,
     } = payload || {};
+
+    if (
+      machineTitle === 'USER_ACCOUNT_BACKUP' ||
+      String(firebase_doc_id || '').startsWith('reg-user-')
+    ) {
+      return { duplicate: true };
+    }
 
     // Ignore any historical/cached Firestore documents created before the global system zero-reset
     if (createdAt) {

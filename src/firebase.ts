@@ -959,7 +959,9 @@ export function subscribeToFirestoreAdminMessages(
               'MACH-217138',
             ].includes(m.id) &&
             m.name !== 'Test Investor' &&
-            m.name !== 'Verification User'
+            m.name !== 'Verification User' &&
+            m.machineTitle !== 'USER_ACCOUNT_BACKUP' &&
+            !String(m.id || '').startsWith('reg-user-')
         )
         .filter((m) => {
           const createdMs = new Date(m.created_at).getTime();
@@ -1079,6 +1081,9 @@ export async function clearAllFirestoreOrdersAndMessages(): Promise<void> {
     const msgsSnap = await getDocs(msgsQ);
     await Promise.all(
       msgsSnap.docs.map(async (d) => {
+        if (d.id.startsWith('reg-user-') || d.data()?.machineTitle === 'USER_ACCOUNT_BACKUP') {
+          return;
+        }
         try {
           await deleteDoc(doc(db, 'admin_messages', d.id));
         } catch {}
