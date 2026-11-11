@@ -1,5 +1,308 @@
 {
   "entities": {
+    "Machine": {
+      "title": "Machine",
+      "description": "Agricultural investment machine stored permanently in the 'machines' Firestore collection.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique machine identifier",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "description": "Machine name / title",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "title": {
+          "type": "string",
+          "description": "Machine display title",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "price": {
+          "type": "number",
+          "description": "Unit investment price in UGX"
+        },
+        "daily_income": {
+          "type": "number",
+          "description": "Daily income return in UGX"
+        },
+        "daily_return": {
+          "type": "number",
+          "description": "Daily return in UGX"
+        },
+        "duration_days": {
+          "type": "number",
+          "description": "Cycle duration in days"
+        },
+        "total_return": {
+          "type": "number",
+          "description": "Total cycle return in UGX"
+        },
+        "net_profit": {
+          "type": "number",
+          "description": "Net profit in UGX"
+        },
+        "roi_percentage": {
+          "type": "number",
+          "description": "ROI percentage"
+        },
+        "category": {
+          "type": "string",
+          "description": "Machine category",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "status": {
+          "type": "string",
+          "enum": ["AVAILABLE", "SOLD_OUT", "MAINTENANCE", "ACTIVE"],
+          "description": "Machine availability status"
+        },
+        "image_url": {
+          "type": "string",
+          "description": "Machine image URL or path",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "description": {
+          "type": "string",
+          "description": "Machine description",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "specs": {
+          "type": "string",
+          "description": "Machine technical specifications",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "location": {
+          "type": "string",
+          "description": "Deployment farm location",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "total_units": {
+          "type": "number",
+          "description": "Total available units"
+        },
+        "available_units": {
+          "type": "number",
+          "description": "Remaining available units"
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Last updated ISO string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when saved"
+        }
+      },
+      "required": ["id", "name", "price", "daily_return", "duration_days", "status", "timestamp"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Registered customer account stored permanently in the 'users' Firestore collection.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique user ID",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "description": "User full name or display label",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "phone": {
+          "type": "string",
+          "description": "User phone number",
+          "minLength": 3,
+          "maxLength": 40
+        },
+        "email": {
+          "type": "string",
+          "description": "User email or phone login identifier",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "password": {
+          "type": "string",
+          "description": "User password for phone login",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "balance": {
+          "type": "number",
+          "description": "Total account balance in UGX (includes 3,000 UGX registration bonus)"
+        },
+        "wallet_balance": {
+          "type": "number",
+          "description": "Deposited wallet balance in UGX"
+        },
+        "available_wallet": {
+          "type": "number",
+          "description": "Available withdrawable wallet in UGX"
+        },
+        "registration_bonus": {
+          "type": "number",
+          "description": "Gateway registration bonus in UGX (3,000 UGX)"
+        },
+        "has_bought_machine": {
+          "type": "boolean",
+          "description": "Whether the user has purchased at least one machine"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["INVESTOR", "ADMIN"],
+          "description": "User role"
+        },
+        "referral_code": {
+          "type": "string",
+          "description": "User referral code",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "registered_date": {
+          "type": "string",
+          "description": "Registration date string stored on user details",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "date": {
+          "type": "string",
+          "description": "Date string stored on user details",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Account creation ISO timestamp",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Last update ISO timestamp",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "VERIFIED"],
+          "description": "Account status"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp"
+        }
+      },
+      "required": ["id", "name", "phone", "balance", "status", "timestamp"]
+    },
+    "Deposit": {
+      "title": "Deposit",
+      "description": "Customer Mobile Money deposit record stored permanently in the 'deposits' Firestore collection.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Deposit document ID",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "user_id": {
+          "type": "string",
+          "description": "Customer user ID",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "description": "Customer name",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "phone": {
+          "type": "string",
+          "description": "Customer sender phone number",
+          "minLength": 3,
+          "maxLength": 40
+        },
+        "amount": {
+          "type": "number",
+          "description": "Deposit amount in UGX"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "approved",
+            "confirmed",
+            "rejected",
+            "PENDING",
+            "SUCCESS",
+            "CONFIRMED",
+            "FAILED",
+            "DENIED"
+          ],
+          "description": "Deposit confirmation status"
+        },
+        "payment_method": {
+          "type": "string",
+          "description": "Mobile Money channel (MTN Mobile Money, Airtel Money)",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "payment_reference": {
+          "type": "string",
+          "description": "Deposit reference or transaction ID",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "machine_id": {
+          "type": "string",
+          "description": "Optional target machine ID",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "machine_title": {
+          "type": "string",
+          "description": "Optional target machine title",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Creation ISO timestamp",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Last status update ISO timestamp",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when deposit was created"
+        }
+      },
+      "required": ["id", "user_id", "name", "phone", "amount", "status", "timestamp"]
+    },
     "Order": {
       "title": "Order",
       "description": "Real-time machine order document stored in the 'orders' Firestore collection.",
@@ -351,6 +654,18 @@
     }
   },
   "firestore": {
+    "/machines/{machineId}": {
+      "schema": { "$ref": "#/entities/Machine" },
+      "description": "Permanent collection of agricultural investment machines."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Permanent collection of registered user accounts and balances."
+    },
+    "/deposits/{depositId}": {
+      "schema": { "$ref": "#/entities/Deposit" },
+      "description": "Permanent collection of customer Mobile Money deposits."
+    },
     "/orders/{orderId}": {
       "schema": { "$ref": "#/entities/Order" },
       "description": "Collection of real-time customer machine orders (pending -> confirmed -> ACTIVE & DELIVERED, or denied)."

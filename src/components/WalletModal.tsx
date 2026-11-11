@@ -21,7 +21,14 @@ import {
   PhoneCall,
   Cpu,
 } from 'lucide-react';
-import { sendMessageToAdmin, createWithdrawalInFirestore } from '../firebase';
+import {
+  sendMessageToAdmin,
+  createWithdrawalInFirestore,
+  createDepositInFirestore,
+  loadDepositsFromFirestore,
+  loadWithdrawalsFromFirestore,
+  saveUserToFirestore,
+} from '../firebase';
 
 interface WalletModalProps {
   user: User | null;
@@ -259,6 +266,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
   const fetchTransactions = async () => {
     if (!user) return;
+    const myTail = (user.phone_number || '').replace(/\D/g, '').slice(-9);
+    let serverList: Transaction[] = [];
     try {
       let refsParam = '';
       try {
@@ -277,14 +286,63 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       if (res.ok && ct.includes('application/json')) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          setTransactions(data);
-          saveLocalTransactions(user.id, data);
-          return;
+          serverList = data;
         }
       }
-    } catch {
-      // Soft fallback to locally cached transactions if server is momentarily unreachable
-    }
+    } catch {}
+
+    try {
+      const [fbDeps, fbWdrs] = await Promise.all([
+        loadDepositsFromFirestore(),
+        loadWithdrawalsFromFirestore(),
+      ]);
+      const mergedTxMap = new Map<string, Transaction>();
+      for (const tx of serverList) {
+        if (tx && tx.id) mergedTxMap.set(tx.id, tx);
+      }
+      for (const d of fbDeps) {
+        const dTail = String(d.customer_phone || '').replace(/\D/g, '').slice(-9);
+        if (d.user_id === user.id || (myTail && myTail.length >= 7 && dTail === myTail)) {
+          if (!mergedTxMap.has(d.id)) {
+            mergedTxMap.set(d.id, {
+              id: d.id,
+              user_id: d.user_id || user.id,
+              amount: d.amount,
+              type: 'DEPOSIT',
+              status: d.status,
+              payment_method: d.payment_method,
+              payment_reference: d.payment_reference,
+              created_at: d.created_at,
+            });
+          }
+        }
+      }
+      for (const w of fbWdrs) {
+        const wTail = String(w.phone || '').replace(/\D/g, '').slice(-9);
+        if (w.user_id === user.id || w.userId === user.id || (myTail && myTail.length >= 7 && wTail === myTail)) {
+          if (!mergedTxMap.has(w.id)) {
+            mergedTxMap.set(w.id, {
+              id: w.id,
+              user_id: w.user_id || user.id,
+              amount: w.amount,
+              type: 'WITHDRAWAL',
+              status: w.status,
+              payment_method: w.payment_method || 'Mobile Money',
+              payment_reference: w.payment_reference || w.id,
+              created_at: w.created_at,
+            });
+          }
+        }
+      }
+      const combined = Array.from(mergedTxMap.values()).sort(
+        (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+      );
+      if (combined.length > 0 || serverList.length > 0) {
+        setTransactions(combined);
+        saveLocalTransactions(user.id, combined);
+        return;
+      }
+    } catch {}
     setTransactions((prev) => (prev.length > 0 ? prev : getLocalTransactions(user.id)));
   };
 
@@ -349,6 +407,23 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       const data = ct.includes('application/json') ? await res.json() : {};
       if (!res.ok) throw new Error(data.error || 'Deposit processing failed.');
 
+      const depTxId = data.transaction?.id || `tx-dep-${Date.now()}`;
+      const depRef = depositRefInput || data.transaction?.payment_reference || `DEP-${Date.now()}`;
+
+      // Save deposit immediately to Firebase Firestore 'deposits' collection using setDoc
+      await createDepositInFirestore({
+        id: depTxId,
+        user_id: user.id,
+        customer_name: user.full_name || depositPhone || user.phone_number || 'Avor Investor',
+        customer_phone: depositPhone || user.phone_number || '',
+        amount: depositAmt,
+        status: 'PENDING',
+        payment_method: depositMethod,
+        payment_reference: depRef,
+        receiver_phone: targetPhone,
+        receiver_name: targetName,
+      });
+
       try {
         const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
         const nextRefs = Array.from(
@@ -376,6 +451,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           parsedU.wallet_balance = nextWallet;
           parsedU.available_wallet = nextWallet;
           localStorage.setItem('avor_invest_user', JSON.stringify(parsedU));
+          void saveUserToFirestore(parsedU);
         }
       } catch {}
 
@@ -390,14 +466,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         `Deposited UGX ${depositAmt.toLocaleString()} via ${depositMethod} from ${depositPhone} to ${targetPhone} (${targetName}) (Pending Admin Confirmation)`,
         {
           userId: user.id,
-          transactionId: data.transaction?.id,
+          transactionId: depTxId,
           senderPhone: depositPhone || user.phone_number,
           receiverPhone: targetPhone,
           receiverName: targetName,
           amount: depositAmt,
           machineTitle: 'Wallet Deposit Order (Pending Admin Confirmation)',
           paymentMethod: depositMethod,
-          paymentReference: depositRefInput || data.transaction?.payment_reference || `DEP-${Date.now()}`,
+          paymentReference: depRef,
           status: 'PENDING',
         }
       );
@@ -424,6 +500,18 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           payment_reference: fallbackRef,
           created_at: new Date().toISOString(),
         };
+        await createDepositInFirestore({
+          id: fallbackTx.id,
+          user_id: user.id,
+          customer_name: user.full_name || depositPhone || user.phone_number || 'Avor Investor',
+          customer_phone: depositPhone || user.phone_number || '',
+          amount: depositAmt,
+          status: 'PENDING',
+          payment_method: depositMethod,
+          payment_reference: fallbackRef,
+          receiver_phone: targetPhone,
+          receiver_name: targetName,
+        });
         await sendMessageToAdmin(
           user.full_name || depositPhone || user.phone_number || 'Avor Investor',
           `Deposited UGX ${depositAmt.toLocaleString()} via ${depositMethod} from ${depositPhone} to ${targetPhone} (${targetName})`,
@@ -556,6 +644,12 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         payment_method: methodLabel,
         payment_reference: txRef,
         account_name: custName,
+      });
+
+      // Also persist updated user balance to Firestore 'users' collection
+      void saveUserToFirestore({
+        ...user,
+        balance: typeof data.new_balance === 'number' ? data.new_balance : Math.max(0, (user.balance || 0) - withdrawAmt),
       });
 
       // Also send real-time message to Admin so Admin receives notification immediately

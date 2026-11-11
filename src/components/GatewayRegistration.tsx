@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, Currency } from '../types';
+import { saveUserToFirestore, loadUserFromFirestore } from '../firebase';
 import {
   Smartphone,
   KeyRound,
@@ -142,7 +143,18 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
       if (savedUserStr && !isModal) {
         const parsed = JSON.parse(savedUserStr);
         if (parsed && (parsed.id || parsed.phone_number || parsed.phoneNumber)) {
-          onSuccess(parsed, 'login');
+          void loadUserFromFirestore(parsed.id || '', parsed.phone_number || parsed.phoneNumber || '').then((fbUser) => {
+            if (fbUser) {
+              const merged = { ...parsed, ...fbUser };
+              try {
+                localStorage.setItem('avor_invest_user', JSON.stringify(merged));
+              } catch {}
+              onSuccess(merged as User, 'login');
+            } else {
+              void saveUserToFirestore(parsed);
+              onSuccess(parsed, 'login');
+            }
+          });
           return;
         }
       }
@@ -250,6 +262,7 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
         phone_number: rawUser?.phone_number || fullPhoneNumber,
         full_name: rawUser?.full_name || rawUser?.name || `Investor ${cleanDigits.slice(-4)}`,
         country: rawUser?.country || selectedCountry.name,
+        password: password.trim(),
         created_at: regDate,
         registered_date: regDate,
         updated_at: nowIso,
@@ -267,6 +280,9 @@ export const GatewayRegistration: React.FC<GatewayRegistrationProps> = ({
           updated_at: nowIso,
         },
       };
+
+      // Save user permanently to Firestore 'users' collection immediately using setDoc
+      await saveUserToFirestore(userObj);
 
       try {
         localStorage.setItem('avor_invest_user', JSON.stringify(userObj));

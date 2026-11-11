@@ -8,6 +8,14 @@ import {
   subscribeToFirestoreAdminMessages,
   subscribeToFirestoreOrders,
   subscribeToFirestoreWithdrawals,
+  subscribeToFirestoreMachines,
+  subscribeToFirestoreUsers,
+  subscribeToFirestoreDeposits,
+  loadMachinesFromFirestore,
+  saveMachineToFirestore,
+  deleteMachineFromFirestore,
+  approveDepositInFirestore,
+  denyDepositInFirestore,
   confirmOrderInFirestore,
   denyOrderInFirestore,
   approveWithdrawalInFirestore,
@@ -15,6 +23,7 @@ import {
   clearAllFirestoreOrdersAndMessages,
   FirestoreOrderRecord,
   FirestoreWithdrawalRecord,
+  FirestoreDepositRecord,
   signInAdminWithGoogle,
   deleteFirestoreAdminMessage,
 } from '../firebase';
@@ -340,11 +349,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
 
   const fetchMachines = async () => {
     try {
+      const fbMachines = await loadMachinesFromFirestore();
+      if (fbMachines.length > 0) {
+        setMachineList(fbMachines as unknown as Machine[]);
+      }
+    } catch {}
+    try {
       const res = await fetch('/api/machines');
       const ct = res.headers.get('content-type') || '';
       if (res.ok && ct.includes('application/json')) {
         const data = await res.json();
-        if (Array.isArray(data)) {
+        if (Array.isArray(data) && data.length > 0) {
           setMachineList(data);
         }
       }
@@ -429,6 +444,51 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     const unsubWithdrawals = subscribeToFirestoreWithdrawals((wdrs) => {
       setFirestoreWithdrawals(wdrs);
     });
+    const unsubMachines = subscribeToFirestoreMachines((fbMachines) => {
+      if (fbMachines.length > 0) {
+        setMachineList((prev) => {
+          const map = new Map<string, Machine>();
+          for (const m of prev) map.set(m.id, m);
+          for (const fm of fbMachines) map.set(fm.id, { ...(map.get(fm.id) || {}), ...(fm as unknown as Machine) });
+          return Array.from(map.values());
+        });
+      }
+    });
+    const unsubUsers = subscribeToFirestoreUsers((fbUsers) => {
+      if (fbUsers.length > 0) {
+        setUserList((prev) => {
+          const map = new Map<string, User>();
+          for (const u of prev) map.set(u.id, u);
+          for (const fu of fbUsers) map.set(fu.id, { ...(map.get(fu.id) || {}), ...(fu as unknown as User) });
+          return Array.from(map.values());
+        });
+      }
+    });
+    const unsubDeposits = subscribeToFirestoreDeposits((fbDeposits: FirestoreDepositRecord[]) => {
+      if (fbDeposits.length > 0) {
+        setDeposits((prev) => {
+          const map = new Map<string, Transaction>();
+          for (const d of prev) map.set(d.id, d);
+          for (const fd of fbDeposits) {
+            const existing = map.get(fd.id);
+            map.set(fd.id, {
+              ...(existing || {}),
+              id: fd.id,
+              user_id: fd.user_id || existing?.user_id || '',
+              amount: fd.amount || existing?.amount || 0,
+              type: 'DEPOSIT',
+              status: existing?.status === 'SUCCESS' ? 'SUCCESS' : fd.status,
+              payment_method: fd.payment_method || existing?.payment_method || 'MTN Mobile Money',
+              payment_reference: fd.payment_reference || existing?.payment_reference || fd.id,
+              created_at: fd.created_at || existing?.created_at || new Date().toISOString(),
+            } as Transaction);
+          }
+          return Array.from(map.values()).sort(
+            (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+          );
+        });
+      }
+    });
     const unsubTrigger = notifyAdminOnDeposit.startListener();
 
     const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
@@ -443,6 +503,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       unsubFirestore();
       unsubOrders();
       unsubWithdrawals();
+      unsubMachines();
+      unsubUsers();
+      unsubDeposits();
       unsubTrigger();
     };
   }, [isAdminAuthenticated]);
@@ -509,18 +572,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       });
     }
 
-    // 2. Merge with backend server investments
+    // 2. Merge with backend server investments (never downgrade an ACTIVE order back to PENDING)
     for (const srvInv of serverInvestments) {
       const existingFb = mergedMap.get(srvInv.id);
       if (existingFb) {
-        // Firestore `orders` status is authoritative for real-time order state
+        if (existingFb.status === 'DENIED' || existingFb.raw_firestore_status === 'denied') {
+          mergedMap.set(srvInv.id, {
+            ...srvInv,
+            ...existingFb,
+            status: 'DENIED',
+            raw_firestore_status: 'denied',
+          });
+          continue;
+        }
+        const resolvedStatus =
+          existingFb.status === 'PAYOUT_COMPLETE' || srvInv.status === 'PAYOUT_COMPLETE'
+            ? 'PAYOUT_COMPLETE'
+            : existingFb.status === 'ACTIVE' || srvInv.status === 'ACTIVE'
+              ? 'ACTIVE'
+              : existingFb.status || srvInv.status;
         mergedMap.set(srvInv.id, {
           ...srvInv,
           ...existingFb,
-          status: existingFb.status || srvInv.status,
+          status: resolvedStatus,
           raw_firestore_status:
-            existingFb.raw_firestore_status ||
-            (srvInv.status === 'ACTIVE' ? 'ACTIVE & DELIVERED' : srvInv.status === 'PENDING' ? 'pending' : srvInv.status),
+            resolvedStatus === 'ACTIVE'
+              ? 'ACTIVE & DELIVERED'
+              : existingFb.raw_firestore_status || (srvInv.status === 'PENDING' ? 'pending' : srvInv.status),
         });
       } else {
         mergedMap.set(srvInv.id, {
@@ -551,6 +629,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
   ) => {
     setStatusMessage(null);
     try {
+      // Update Firestore 'deposits' collection immediately
+      if (action === 'APPROVE') {
+        void approveDepositInFirestore(transactionId);
+      } else {
+        void denyDepositInFirestore(transactionId);
+      }
       const res = await fetch('/api/admin/deposits/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -967,6 +1051,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to save machine.');
 
+      const savedMachine = data.machine || data;
+      // Save machine permanently to Firebase Firestore 'machines' collection immediately using setDoc
+      await saveMachineToFirestore({
+        id: String(savedMachine?.id || editingMachineId || `mach-${Date.now()}`),
+        title: savedMachine?.title || title,
+        category: savedMachine?.category || category,
+        series_tag: savedMachine?.series_tag || seriesTag,
+        description: savedMachine?.description || description,
+        total_cost: Number(savedMachine?.total_cost ?? totalCost),
+        price: Number(savedMachine?.price ?? totalCost),
+        duration_days: Number(savedMachine?.duration_days ?? durationDays),
+        daily_yield: Number(savedMachine?.daily_yield ?? dailyYield),
+        total_return: Number(savedMachine?.total_return ?? dailyYield * durationDays),
+        hashrate_or_capacity: savedMachine?.hashrate_or_capacity || hashrate,
+        power_consumption: savedMachine?.power_consumption || powerConsumption,
+        available_units: Number(savedMachine?.available_units ?? availableUnits),
+        vip_level_required: Number(savedMachine?.vip_level_required ?? vipLevel),
+        image_url: savedMachine?.image_url || imageUrl,
+      });
+
       setStatusMessage({
         type: 'success',
         text: editingMachineId
@@ -1051,6 +1155,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to update machine.');
 
+      const updatedM = data.machine || quickEditMachine;
+      // Save updated machine permanently to Firebase Firestore 'machines' collection immediately using setDoc
+      await saveMachineToFirestore({
+        ...quickEditMachine,
+        ...updatedM,
+        id: String(quickEditMachine.id),
+        total_cost: quickPrice,
+        price: quickPrice,
+        duration_days: quickDuration,
+        daily_yield: quickYield,
+        total_return: quickYield * quickDuration,
+      });
+
       setStatusMessage({
         type: 'success',
         text: `Machine "${quickEditMachine.title}" price and duration updated!`,
@@ -1071,6 +1188,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     setStatusMessage(null);
 
     try {
+      await deleteMachineFromFirestore(mId);
       const res = await fetch(`/api/admin/machines/${mId}`, {
         method: 'DELETE',
       });

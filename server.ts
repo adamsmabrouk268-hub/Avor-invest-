@@ -264,7 +264,138 @@ function loadRegisteredUsersFromDisk() {
   }
 }
 
-// Hydrate registered user accounts from Firebase Firestore cloud backup so nobody ever loses their account across devices or restarts
+// Helper to save a machine document to the Firestore `machines` collection
+async function saveMachineToFirestoreCollection(m: any) {
+  try {
+    const projectId = firebaseAppletConfig.projectId;
+    const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+    const apiKey = firebaseAppletConfig.apiKey;
+    if (!projectId || !apiKey || !m) return;
+    const cleanId = String(m.id || `mch-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+    if (!cleanId) return;
+    const baseDocsPath = `projects/${projectId}/databases/${databaseId}/documents`;
+    const commitUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:commit?key=${encodeURIComponent(apiKey)}`;
+    const price = Math.max(0, Math.round(Number(m.price ?? m.total_cost ?? 0)));
+    const dailyReturn = Math.max(0, Math.round(Number(m.daily_yield ?? m.daily_return ?? m.rewardAmount ?? 0)));
+    const durationDays = Math.max(1, Math.round(Number(m.duration_days || 45)));
+    const totalReturn = Math.max(0, Math.round(Number(m.total_return || dailyReturn * durationDays)));
+    const netProfit = Math.max(0, totalReturn - price);
+    const roiPct = price > 0 ? Math.round((netProfit / price) * 100) : 100;
+    const safeName = String(m.title || m.name || 'Avor Industrial Unit').slice(0, 200);
+
+    const fields: Record<string, any> = {
+      id: { stringValue: cleanId },
+      name: { stringValue: safeName },
+      title: { stringValue: safeName },
+      price: { integerValue: String(price) },
+      daily_income: { integerValue: String(dailyReturn) },
+      daily_return: { integerValue: String(dailyReturn) },
+      duration_days: { integerValue: String(durationDays) },
+      total_return: { integerValue: String(totalReturn) },
+      net_profit: { integerValue: String(netProfit) },
+      roi_percentage: { integerValue: String(roiPct) },
+      category: { stringValue: String(m.category || m.series_tag || 'AV1').slice(0, 120) },
+      status: { stringValue: m.isActive === false ? 'MAINTENANCE' : 'AVAILABLE' },
+      image_url: { stringValue: String(m.image_url || m.imageUrl || '/assets/machines/coffee-huller.jpg').slice(0, 1000) },
+      description: { stringValue: String(m.description || 'High efficiency industrial machine unit.').slice(0, 1500) },
+      available_units: { integerValue: String(Math.max(0, Number(m.available_units ?? 50))) },
+      updated_at: { stringValue: new Date().toISOString().slice(0, 40) },
+    };
+
+    await fetch(commitUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        writes: [
+          {
+            update: {
+              name: `${baseDocsPath}/machines/${cleanId}`,
+              fields,
+            },
+            updateTransforms: [
+              {
+                fieldPath: 'timestamp',
+                setToServerValue: 'REQUEST_TIME',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+  } catch {}
+}
+
+async function deleteMachineFromFirestoreCollection(machineId: string) {
+  try {
+    const projectId = firebaseAppletConfig.projectId;
+    const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+    const apiKey = firebaseAppletConfig.apiKey;
+    if (!projectId || !apiKey || !machineId) return;
+    const cleanId = String(machineId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+    if (!cleanId) return;
+    const deleteUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/machines/${encodeURIComponent(cleanId)}?key=${encodeURIComponent(apiKey)}`;
+    await fetch(deleteUrl, { method: 'DELETE' });
+  } catch {}
+}
+
+// Helper to save a deposit document to the Firestore `deposits` collection
+async function saveDepositToFirestoreCollection(
+  tx: any,
+  statusOverride?: 'pending' | 'approved' | 'confirmed' | 'rejected'
+) {
+  try {
+    const projectId = firebaseAppletConfig.projectId;
+    const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+    const apiKey = firebaseAppletConfig.apiKey;
+    if (!projectId || !apiKey || !tx) return;
+    const cleanId = String(tx.id || tx.payment_reference || `dep-${Date.now()}`)
+      .replace(/[^a-zA-Z0-9_-]/g, '')
+      .slice(0, 120);
+    if (!cleanId) return;
+    const baseDocsPath = `projects/${projectId}/databases/${databaseId}/documents`;
+    const commitUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:commit?key=${encodeURIComponent(apiKey)}`;
+    const nowIso = new Date().toISOString().slice(0, 40);
+    const rawStatus = statusOverride || (tx.status === 'SUCCESS' || tx.status === 'CONFIRMED' ? 'approved' : tx.status === 'FAILED' ? 'rejected' : 'pending');
+
+    const fields: Record<string, any> = {
+      id: { stringValue: cleanId },
+      user_id: { stringValue: String(tx.user_id || tx.customer_phone || 'usr-investor').slice(0, 128) },
+      name: { stringValue: String(tx.customer_name || tx.name || 'Avor Investor').slice(0, 160) },
+      phone: { stringValue: String(tx.customer_phone || tx.user_phone || '+256700000000').slice(0, 40) },
+      amount: { integerValue: String(Math.max(0, Math.round(Number(tx.amount || 0)))) },
+      status: { stringValue: rawStatus },
+      payment_method: { stringValue: String(tx.payment_method || 'Mobile Money').slice(0, 160) },
+      payment_reference: { stringValue: String(tx.payment_reference || cleanId).slice(0, 120) },
+      created_at: { stringValue: String(tx.created_at || nowIso).slice(0, 60) },
+      updated_at: { stringValue: nowIso },
+    };
+    if (tx.machine_id) fields.machine_id = { stringValue: String(tx.machine_id).slice(0, 128) };
+    if (tx.machine_title) fields.machine_title = { stringValue: String(tx.machine_title).slice(0, 200) };
+
+    await fetch(commitUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        writes: [
+          {
+            update: {
+              name: `${baseDocsPath}/deposits/${cleanId}`,
+              fields,
+            },
+            updateTransforms: [
+              {
+                fieldPath: 'timestamp',
+                setToServerValue: 'REQUEST_TIME',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+  } catch {}
+}
+
+// Hydrate all 5 collections ("users", "machines", "orders", "withdrawals", "deposits") from Firebase Firestore on startup
 async function hydrateRegisteredUsersFromFirestoreCloud() {
   try {
     const projectId = firebaseAppletConfig.projectId;
@@ -272,88 +403,387 @@ async function hydrateRegisteredUsersFromFirestoreCloud() {
     const apiKey = firebaseAppletConfig.apiKey;
     if (!projectId || !apiKey) return;
     const queryUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:runQuery?key=${encodeURIComponent(apiKey)}`;
-    const res = await fetch(queryUrl, {
+
+    const parseDocFields = (fields: Record<string, any> | undefined): Record<string, any> => {
+      const out: Record<string, any> = {};
+      if (!fields) return out;
+      for (const [k, v] of Object.entries(fields)) {
+        if (!v || typeof v !== 'object') continue;
+        if ('stringValue' in v) out[k] = v.stringValue;
+        else if ('integerValue' in v) out[k] = Number(v.integerValue);
+        else if ('doubleValue' in v) out[k] = Number(v.doubleValue);
+        else if ('booleanValue' in v) out[k] = Boolean(v.booleanValue);
+        else if ('timestampValue' in v) out[k] = v.timestampValue;
+      }
+      return out;
+    };
+
+    // 1. Hydrate "users" collection from Firestore
+    const usersRes = await fetch(queryUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         structuredQuery: {
-          from: [{ collectionId: 'admin_messages' }],
+          from: [{ collectionId: 'users' }],
           where: {
             fieldFilter: {
-              field: { fieldPath: 'machineTitle' },
-              op: 'EQUAL',
-              value: { stringValue: 'USER_ACCOUNT_BACKUP' },
+              field: { fieldPath: 'status' },
+              op: 'IN',
+              value: {
+                arrayValue: {
+                  values: [{ stringValue: 'ACTIVE' }, { stringValue: 'VERIFIED' }],
+                },
+              },
             },
           },
           limit: 200,
         },
       }),
     });
-    if (!res.ok) return;
-    const rows: any[] = await res.json();
-    if (!Array.isArray(rows)) return;
-    let restoredCount = 0;
-    for (const row of rows) {
-      const fields = row?.document?.fields;
-      const rawJson = fields?.item?.stringValue;
-      if (!rawJson) continue;
-      try {
-        const parsed = JSON.parse(rawJson);
-        if (!parsed || !parsed.id || parsed.id === 'usr-admin-owner') continue;
-        const cleanDigits = String(parsed.phone_number || '').replace(/[^0-9]/g, '');
-        const tail = cleanDigits.slice(-9);
-        const alreadyExists =
-          users.has(parsed.id) || (tail.length === 9 && (users.has(tail) || users.has(`+256${tail}`)));
-        if (!alreadyExists) {
-          const restoredUser: User & { password_hash: string } = {
-            id: parsed.id,
-            full_name: parsed.full_name || 'Avor Investor',
-            name: parsed.full_name || 'Avor Investor',
-            email: parsed.email || `${cleanDigits || parsed.id}@avor.ug`,
-            phone_number: parsed.phone_number || '',
-            phoneNumber: parsed.phone_number || '',
-            country: parsed.country || 'Uganda',
-            country_code: parsed.country_code || '+256',
-            kyc_status: 'VERIFIED',
-            role: 'INVESTOR',
-            balance: typeof parsed.balance === 'number' ? parsed.balance : REGISTRATION_REWARD_UGX,
-            wallet_balance: Number(parsed.wallet_balance || 0),
-            available_wallet: Number(parsed.available_wallet || 0),
-            has_bought_machine: Boolean(parsed.has_bought_machine),
-            referral_code: parsed.referral_code || `AVOR-${Math.floor(1000 + Math.random() * 9000)}`,
-            referred_by: parsed.referred_by || undefined,
-            created_at: parsed.created_at || parsed.registered_date || new Date().toISOString(),
-            registered_date: parsed.registered_date || parsed.created_at || new Date().toISOString(),
-            updated_at: parsed.updated_at || new Date().toISOString(),
-            user_details: parsed.user_details || undefined,
-            password_hash: parsed.password_hash || 'restored',
-            password: parsed.password_hash || 'restored',
-          };
-          users.set(restoredUser.id, restoredUser);
-          if (restoredUser.email) users.set(restoredUser.email, restoredUser);
-          if (restoredUser.phone_number) users.set(restoredUser.phone_number, restoredUser);
-          if (cleanDigits) {
-            users.set(cleanDigits, restoredUser);
-            if (tail.length === 9) {
-              users.set(tail, restoredUser);
-              users.set(`0${tail}`, restoredUser);
-              users.set(`256${tail}`, restoredUser);
-              users.set(`+256${tail}`, restoredUser);
-              users.set(`+2560${tail}`, restoredUser);
+    if (usersRes.ok) {
+      const userRows: any[] = await usersRes.json();
+      if (Array.isArray(userRows)) {
+        for (const row of userRows) {
+          const docObj = row?.document;
+          if (!docObj?.fields) continue;
+          const parsed = parseDocFields(docObj.fields);
+          const docId = String(parsed.id || docObj.name?.split('/').pop() || '');
+          if (!docId || docId === 'usr-admin-owner') continue;
+          const cleanDigits = String(parsed.phone || '').replace(/[^0-9]/g, '');
+          const tail = cleanDigits.slice(-9);
+          const alreadyExists =
+            users.has(docId) || (tail.length === 9 && (users.has(tail) || users.has(`+256${tail}`)));
+          if (!alreadyExists) {
+            const restoredUser: User & { password_hash: string } = {
+              id: docId,
+              full_name: parsed.name || 'Avor Investor',
+              name: parsed.name || 'Avor Investor',
+              email: parsed.email || parsed.phone || `${cleanDigits || docId}@avor.ug`,
+              phone_number: parsed.phone || '',
+              phoneNumber: parsed.phone || '',
+              country: 'Uganda',
+              country_code: '+256',
+              kyc_status: 'VERIFIED',
+              role: parsed.role === 'ADMIN' ? 'ADMIN' : 'INVESTOR',
+              balance: typeof parsed.balance === 'number' ? parsed.balance : REGISTRATION_REWARD_UGX,
+              wallet_balance: Number(parsed.wallet_balance || 0),
+              available_wallet: Number(parsed.available_wallet || parsed.wallet_balance || 0),
+              has_bought_machine: Boolean(parsed.has_bought_machine),
+              referral_code: parsed.referral_code || `AVOR-${Math.floor(1000 + Math.random() * 9000)}`,
+              created_at: parsed.created_at || parsed.registered_date || new Date().toISOString(),
+              registered_date: parsed.registered_date || parsed.date || new Date().toISOString(),
+              updated_at: parsed.updated_at || new Date().toISOString(),
+              password_hash: parsed.password || 'restored',
+              password: parsed.password || 'restored',
+            };
+            users.set(restoredUser.id, restoredUser);
+            if (restoredUser.email) users.set(restoredUser.email, restoredUser);
+            if (restoredUser.phone_number) users.set(restoredUser.phone_number, restoredUser);
+            if (cleanDigits) {
+              users.set(cleanDigits, restoredUser);
+              if (tail.length === 9) {
+                users.set(tail, restoredUser);
+                users.set(`0${tail}`, restoredUser);
+                users.set(`256${tail}`, restoredUser);
+                users.set(`+256${tail}`, restoredUser);
+                users.set(`+2560${tail}`, restoredUser);
+              }
             }
           }
-          saveRegisteredUserToDisk(restoredUser);
-          restoredCount++;
         }
-      } catch {}
+      }
     }
-    if (restoredCount > 0) {
-      console.log(`[Storage] Hydrated ${restoredCount} user account(s) from Firestore cloud backup.`);
+
+    // 2. Hydrate "machines" collection from Firestore (and seed default machines into Firestore if not present)
+    const machinesRes = await fetch(queryUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'machines' }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'status' },
+              op: 'IN',
+              value: {
+                arrayValue: {
+                  values: [
+                    { stringValue: 'AVAILABLE' },
+                    { stringValue: 'SOLD_OUT' },
+                    { stringValue: 'MAINTENANCE' },
+                    { stringValue: 'ACTIVE' },
+                  ],
+                },
+              },
+            },
+          },
+          limit: 100,
+        },
+      }),
+    });
+    if (machinesRes.ok) {
+      const mRows: any[] = await machinesRes.json();
+      const foundFirestoreMachines: any[] = [];
+      if (Array.isArray(mRows)) {
+        for (const row of mRows) {
+          const docObj = row?.document;
+          if (!docObj?.fields) continue;
+          const p = parseDocFields(docObj.fields);
+          const mId = String(p.id || docObj.name?.split('/').pop() || '');
+          if (!mId) continue;
+          foundFirestoreMachines.push(p);
+          const existingM = machines.find((m) => String(m.id) === mId);
+          if (!existingM) {
+            const cost = Number(p.price || 15000);
+            const daily = Number(p.daily_return || p.daily_income || 1000);
+            const dur = Number(p.duration_days || 45);
+            machines.push({
+              id: mId,
+              title: p.title || p.name || 'Avor Machine',
+              name: p.name || p.title || 'Avor Machine',
+              category: p.category || 'AV1',
+              series_tag: p.category || 'AV1',
+              series: p.category || 'AV1',
+              description: p.description || 'Industrial processing machine.',
+              total_cost: cost,
+              price: cost,
+              funded_amount: 0,
+              estimated_return_pct: Number(p.roi_percentage || Math.round(((daily * dur) / cost) * 100)),
+              daily_yield: daily,
+              rewardAmount: daily,
+              duration_days: dur,
+              lockDurationMinutes: dur * 1440,
+              total_return: Number(p.total_return || daily * dur),
+              status: p.status === 'MAINTENANCE' ? 'COMPLETED' : 'FUNDING',
+              isActive: p.status !== 'MAINTENANCE',
+              available_units: Number(p.available_units ?? 50),
+              vip_level_required: 0,
+              hashrate_or_capacity: '250 TH/s Series P',
+              power_consumption: '950W Smart Air-Cooled',
+              image_url: p.image_url || '/assets/machines/coffee-huller.jpg',
+              imageUrl: p.image_url || '/assets/machines/coffee-huller.jpg',
+              created_at: p.updated_at || new Date().toISOString(),
+            } as any);
+          }
+        }
+      }
+      if (foundFirestoreMachines.length === 0 && machines.length > 0) {
+        for (const m of machines) {
+          void saveMachineToFirestoreCollection(m);
+        }
+      }
     }
+
+    // 3. Hydrate "orders" collection from Firestore
+    const ordersRes = await fetch(queryUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'orders' }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'status' },
+              op: 'IN',
+              value: {
+                arrayValue: {
+                  values: [
+                    { stringValue: 'pending' },
+                    { stringValue: 'confirmed' },
+                    { stringValue: 'ACTIVE & DELIVERED' },
+                    { stringValue: 'PENDING' },
+                    { stringValue: 'ACTIVE' },
+                    { stringValue: 'COMPLETED' },
+                    { stringValue: 'PAYOUT_COMPLETE' },
+                  ],
+                },
+              },
+            },
+          },
+          limit: 200,
+        },
+      }),
+    });
+    if (ordersRes.ok) {
+      const oRows: any[] = await ordersRes.json();
+      if (Array.isArray(oRows)) {
+        for (const row of oRows) {
+          const docObj = row?.document;
+          if (!docObj?.fields) continue;
+          const p = parseDocFields(docObj.fields);
+          const oId = String(p.id || docObj.name?.split('/').pop() || '');
+          if (!oId || investments.some((i) => i.id === oId)) continue;
+          const rawSt = String(p.status || 'pending');
+          const normStatus =
+            rawSt === 'confirmed' || rawSt === 'ACTIVE & DELIVERED' || rawSt === 'ACTIVE'
+              ? 'ACTIVE'
+              : rawSt === 'COMPLETED' || rawSt === 'PAYOUT_COMPLETE'
+                ? 'PAYOUT_COMPLETE'
+                : 'PENDING';
+          const amt = Number(p.amount_invested ?? p.amount ?? 15000);
+          const daily = Number(p.daily_return || 1000);
+          const dur = Number(p.duration_days || 45);
+          const startIso = p.start_date || p.timestamp || new Date().toISOString();
+          const newInv: Investment = {
+            id: oId,
+            user_id: String(p.user_id || p.customer_phone || 'usr-investor'),
+            machine_id: String(p.machine_id || 'mch-av1-1'),
+            machine_title: String(p.machine_title || p.name || 'Machine Order'),
+            series_tag: 'AV1',
+            units: Number(p.units || 1),
+            amount_invested: amt,
+            daily_yield: daily,
+            total_return: Number(p.total_return || daily * dur),
+            duration_days: dur,
+            days_elapsed: normStatus === 'PENDING' ? 0 : Math.max(1, Number(p.days_elapsed || 1)),
+            last_claim_at: startIso,
+            unclaimed_earnings: normStatus === 'PENDING' ? 0 : daily,
+            total_claimed: 0,
+            status: normStatus as any,
+            start_date: startIso,
+            end_date: p.end_date || new Date(new Date(startIso).getTime() + dur * 86400000).toISOString(),
+            wallet_deducted: true,
+            payment_method: p.payment_method || 'Wallet Balance',
+          };
+          (newInv as any).customer_name = p.customer_name || p.customername || 'Avor Investor';
+          (newInv as any).customer_phone = p.customer_phone || '';
+          investments.push(newInv);
+        }
+      }
+    }
+
+    // 4. Hydrate "deposits" collection from Firestore
+    const depositsRes = await fetch(queryUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'deposits' }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'status' },
+              op: 'IN',
+              value: {
+                arrayValue: {
+                  values: [
+                    { stringValue: 'pending' },
+                    { stringValue: 'approved' },
+                    { stringValue: 'confirmed' },
+                    { stringValue: 'PENDING' },
+                    { stringValue: 'SUCCESS' },
+                    { stringValue: 'CONFIRMED' },
+                  ],
+                },
+              },
+            },
+          },
+          limit: 200,
+        },
+      }),
+    });
+    if (depositsRes.ok) {
+      const dRows: any[] = await depositsRes.json();
+      if (Array.isArray(dRows)) {
+        for (const row of dRows) {
+          const docObj = row?.document;
+          if (!docObj?.fields) continue;
+          const p = parseDocFields(docObj.fields);
+          const dId = String(p.id || docObj.name?.split('/').pop() || '');
+          if (!dId || transactions.some((t) => t.id === dId || t.payment_reference === p.payment_reference)) continue;
+          const rawSt = String(p.status || 'pending').toUpperCase();
+          const normSt = rawSt === 'APPROVED' || rawSt === 'CONFIRMED' || rawSt === 'SUCCESS' ? 'SUCCESS' : 'PENDING';
+          const newTx: Transaction = {
+            id: dId,
+            user_id: String(p.user_id || p.phone || 'usr-investor'),
+            amount: Number(p.amount || 0),
+            type: 'DEPOSIT',
+            status: normSt,
+            payment_method: String(p.payment_method || 'Mobile Money'),
+            payment_reference: String(p.payment_reference || dId),
+            machine_title: p.machine_title ? String(p.machine_title) : undefined,
+            created_at: String(p.created_at || p.timestamp || new Date().toISOString()),
+          };
+          (newTx as any).customer_name = p.name || 'Avor Investor';
+          (newTx as any).customer_phone = p.phone || '';
+          (newTx as any).user_phone = p.phone || '';
+          (newTx as any).wallet_credited = normSt === 'SUCCESS';
+          (newTx as any).approved_permanent = normSt === 'SUCCESS';
+          transactions.push(newTx);
+        }
+      }
+    }
+
+    // 5. Hydrate "withdrawals" collection from Firestore
+    const withdrawalsRes = await fetch(queryUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'withdrawals' }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'status' },
+              op: 'IN',
+              value: {
+                arrayValue: {
+                  values: [
+                    { stringValue: 'pending' },
+                    { stringValue: 'approved' },
+                    { stringValue: 'PENDING' },
+                    { stringValue: 'SUCCESS' },
+                    { stringValue: 'CONFIRMED' },
+                  ],
+                },
+              },
+            },
+          },
+          limit: 200,
+        },
+      }),
+    });
+    if (withdrawalsRes.ok) {
+      const wRows: any[] = await withdrawalsRes.json();
+      if (Array.isArray(wRows)) {
+        for (const row of wRows) {
+          const docObj = row?.document;
+          if (!docObj?.fields) continue;
+          const p = parseDocFields(docObj.fields);
+          const wId = String(p.id || docObj.name?.split('/').pop() || '');
+          if (!wId || transactions.some((t) => t.id === wId || t.payment_reference === p.payment_reference)) continue;
+          const rawSt = String(p.status || 'pending').toUpperCase();
+          const normSt = rawSt === 'APPROVED' || rawSt === 'CONFIRMED' || rawSt === 'SUCCESS' ? 'SUCCESS' : 'PENDING';
+          const amt = Number(p.amount || 0);
+          const feeAmt = typeof p.fee_amount === 'number' ? p.fee_amount : Math.round(amt * 0.1);
+          const netAmt = typeof p.net_amount === 'number' ? p.net_amount : Math.max(0, amt - feeAmt);
+          const newTx: Transaction = {
+            id: wId,
+            user_id: String(p.userId || p.phone || 'usr-investor'),
+            amount: amt,
+            type: 'WITHDRAWAL',
+            status: normSt,
+            payment_method: String(
+              p.payment_method || `Mobile Money (${p.phone || ''}) • Net Payout: ${netAmt.toLocaleString()} UGX`
+            ),
+            payment_reference: String(p.payment_reference || wId),
+            created_at: String(p.createdAt || new Date().toISOString()),
+          };
+          (newTx as any).userId = newTx.user_id;
+          (newTx as any).name = p.name || 'Avor Investor';
+          (newTx as any).phone = p.phone || '';
+          (newTx as any).customer_name = p.name || 'Avor Investor';
+          (newTx as any).customer_phone = p.phone || '';
+          (newTx as any).fee_amount = feeAmt;
+          (newTx as any).net_amount = netAmt;
+          transactions.push(newTx);
+        }
+      }
+    }
+
+    saveAppStateToDisk();
   } catch {}
 }
 
-// Function to save registered user data and date on the user's details to disk
+// Function to save registered user data and date on the user's details to disk AND permanently to Firestore "users" collection
 function saveRegisteredUserToDisk(userToSave: User & { password_hash: string }) {
   if (!userToSave || userToSave.id === 'usr-admin-owner') return;
   try {
@@ -410,35 +840,48 @@ function saveRegisteredUserToDisk(userToSave: User & { password_hash: string }) 
     fs.writeFileSync(USERS_FILE, JSON.stringify(existingList, null, 2), 'utf-8');
     console.log(`[Storage] Saved user details & date for ${userToSave.phone_number || userToSave.id} to ${USERS_FILE}`);
 
-    // Also back up user account details & date to Firebase Firestore so no one ever loses their account across devices or restarts
+    // Permanently save user account details & date to Firebase Firestore "users" collection
     void (async () => {
       try {
         const projectId = firebaseAppletConfig.projectId;
         const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
         const apiKey = firebaseAppletConfig.apiKey;
-        if (!projectId || !apiKey || !userPhoneTail) return;
-        const docId = `reg-user-${userPhoneTail}`;
+        if (!projectId || !apiKey) return;
+        const cleanDocId = userPhoneTail
+          ? `usr-${userPhoneTail}`
+          : String(userToSave.id || `usr-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
         const baseDocsPath = `projects/${projectId}/databases/${databaseId}/documents`;
         const commitUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:commit?key=${encodeURIComponent(apiKey)}`;
-        const safeBackup = {
-          id: userToSave.id,
-          full_name: userToSave.full_name || userToSave.name || 'Avor Investor',
-          phone_number: userToSave.phone_number || userToSave.phoneNumber || '',
-          email: userToSave.email || '',
-          country: userToSave.country || 'Uganda',
-          country_code: userToSave.country_code || '+256',
-          password_hash: userToSave.password_hash || userToSave.password || '',
-          referral_code: userToSave.referral_code || '',
-          referred_by: userToSave.referred_by || '',
-          balance: typeof userToSave.balance === 'number' ? userToSave.balance : REGISTRATION_REWARD_UGX,
-          wallet_balance: Number(userToSave.wallet_balance || 0),
-          available_wallet: Number(userToSave.available_wallet || 0),
-          has_bought_machine: Boolean(userToSave.has_bought_machine),
-          created_at: userToSave.created_at,
-          registered_date: (userToSave as any).registered_date || userToSave.created_at,
-          updated_at: (userToSave as any).updated_at || new Date().toISOString(),
-          user_details: (userToSave as any).user_details || {},
+        const safePhone = String(userToSave.phone_number || userToSave.phoneNumber || '+256700000000').slice(0, 40);
+        const safeName = String(userToSave.full_name || userToSave.name || 'Avor Investor').slice(0, 160);
+        const safeBal = Math.max(0, Math.round(typeof userToSave.balance === 'number' ? userToSave.balance : REGISTRATION_REWARD_UGX));
+        const safeWallet = Math.max(0, Math.round(Number(userToSave.wallet_balance || 0)));
+
+        const fields: Record<string, any> = {
+          id: { stringValue: cleanDocId },
+          name: { stringValue: safeName },
+          phone: { stringValue: safePhone },
+          email: { stringValue: String(userToSave.email || safePhone).slice(0, 160) },
+          balance: { integerValue: String(safeBal) },
+          wallet_balance: { integerValue: String(safeWallet) },
+          available_wallet: { integerValue: String(safeWallet) },
+          registration_bonus: { integerValue: String(REGISTRATION_REWARD_UGX) },
+          has_bought_machine: { booleanValue: Boolean(userToSave.has_bought_machine) },
+          role: { stringValue: userToSave.role === 'ADMIN' ? 'ADMIN' : 'INVESTOR' },
+          registered_date: { stringValue: String(regIso).slice(0, 60) },
+          date: { stringValue: String(regIso.split('T')[0]).slice(0, 60) },
+          created_at: { stringValue: String(userToSave.created_at || nowIso).slice(0, 60) },
+          updated_at: { stringValue: nowIso.slice(0, 60) },
+          status: { stringValue: 'VERIFIED' },
         };
+        const pwd = userToSave.password_hash || userToSave.password;
+        if (pwd && String(pwd).trim().length >= 1) {
+          fields.password = { stringValue: String(pwd).trim().slice(0, 160) };
+        }
+        if (userToSave.referral_code) {
+          fields.referral_code = { stringValue: String(userToSave.referral_code).slice(0, 60) };
+        }
+
         await fetch(commitUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -446,18 +889,8 @@ function saveRegisteredUserToDisk(userToSave: User & { password_hash: string }) 
             writes: [
               {
                 update: {
-                  name: `${baseDocsPath}/admin_messages/${docId}`,
-                  fields: {
-                    name: { stringValue: String(safeBackup.full_name).slice(0, 120) },
-                    item: { stringValue: JSON.stringify(safeBackup).slice(0, 990) },
-                    status: { stringValue: 'SUCCESS' },
-                    senderPhone: { stringValue: String(safeBackup.phone_number).slice(0, 40) },
-                    machineTitle: { stringValue: 'USER_ACCOUNT_BACKUP' },
-                    paymentMethod: { stringValue: String(safeBackup.country || 'Uganda').slice(0, 100) },
-                    paymentReference: { stringValue: String(safeBackup.referral_code || docId).slice(0, 120) },
-                    userId: { stringValue: String(safeBackup.id).slice(0, 128) },
-                    amount: { integerValue: String(Math.round(safeBackup.balance || 3000)) },
-                  },
+                  name: `${baseDocsPath}/users/${cleanDocId}`,
+                  fields,
                 },
                 updateTransforms: [
                   {
@@ -860,20 +1293,16 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     if (inv.user_id === user.id) return true;
     if (explicitUserId && inv.user_id === explicitUserId) return true;
     if (user.id !== 'usr-admin-owner' && inv.user_id === 'usr-admin-owner') return false;
-    return Boolean(
-      userPhoneTail &&
-        userPhoneTail.length >= 7 &&
-        ((inv as any).customer_phone || '').replace(/\D/g, '').slice(-9) === userPhoneTail
-    );
-  };
-
-  // Automatically advance Monday-Friday schedule for user's active machines before computing yields
-  const nowDate = new Date();
-  for (const inv of investments) {
-    if (doesInvBelongToUser(inv) && inv.status === 'ACTIVE') {
-      syncSingleActiveMachineAutoRun(inv, nowDate);
+    if (userPhoneTail && userPhoneTail.length >= 7) {
+      const custTail = ((inv as any).customer_phone || '').replace(/\D/g, '').slice(-9);
+      const uTail = ((inv as any).user_phone || '').replace(/\D/g, '').slice(-9);
+      const idTail = String(inv.user_id || '').replace(/\D/g, '').slice(-9);
+      if (custTail === userPhoneTail || uTail === userPhoneTail || (idTail.length >= 7 && idTail === userPhoneTail)) {
+        return true;
+      }
     }
-  }
+    return false;
+  };
 
   const userDeposits = transactions.filter((t) => doesTxBelongToUser(t, user, explicitUserId) && t.type === 'DEPOSIT');
   const confirmedDeposits = userDeposits
@@ -884,6 +1313,43 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
   // All non-rejected deposits (both PENDING and CONFIRMED/SUCCESS) immediately reflect on the user's Wallet
   const allWalletDeposits = confirmedDeposits + pendingDeposits;
+
+  // Automatically activate any PENDING machine investments if the user's deposit is already confirmed by Admin
+  // or if the investment was previously confirmed so it NEVER goes back to PENDING
+  const nowDate = new Date();
+  let autoActivatedAny = false;
+  for (const inv of investments) {
+    if (!doesInvBelongToUser(inv)) continue;
+    if (
+      inv.status === 'PENDING' &&
+      ((inv as any).approved_permanent ||
+        Boolean(inv.confirmed_at) ||
+        (confirmedDeposits > 0 && pendingDeposits === 0) ||
+        confirmedDeposits >= Number(inv.amount_invested || 0))
+    ) {
+      const monToFriOnly = isAv1OrAv2WeekdayMachine(inv);
+      inv.status = 'ACTIVE';
+      (inv as any).approved_permanent = true;
+      inv.confirmed_at = inv.confirmed_at || nowDate.toISOString();
+      inv.start_date = inv.start_date || nowDate.toISOString();
+      inv.end_date = computeMachineEndDate(new Date(inv.start_date), inv.duration_days || 32, monToFriOnly).toISOString();
+      inv.days_elapsed = Math.max(1, Number(inv.days_elapsed || 1));
+      user.has_bought_machine = true;
+      autoActivatedAny = true;
+      for (const ltx of transactions) {
+        if (ltx.investment_id === inv.id && ltx.status === 'PENDING') {
+          ltx.status = 'SUCCESS';
+          (ltx as any).approved_permanent = true;
+        }
+      }
+    }
+    if (inv.status === 'ACTIVE') {
+      syncSingleActiveMachineAutoRun(inv, nowDate);
+    }
+  }
+  if (autoActivatedAny) {
+    saveAppStateToDisk();
+  }
 
   // Ensure every registered investor has their 3,000 UGX Gateway Registration Bonus recorded in their statement
   if (user.id && user.id !== 'usr-admin-owner' && REGISTRATION_REWARD_UGX > 0) {
@@ -929,7 +1395,8 @@ function syncUserConfirmedFinances(user: User & { password_hash?: string }, expl
   const userConfirmedInvestments = investments.filter(
     (inv) => doesInvBelongToUser(inv) && (inv.status === 'ACTIVE' || inv.status === 'PAYOUT_COMPLETE')
   );
-  const hasBoughtMachine = userConfirmedInvestments.length > 0;
+  // Once a customer has an active/completed machine or has_bought_machine is true, keep it permanently unlocked so WhatsApp & locked planes never relock
+  const hasBoughtMachine = userConfirmedInvestments.length > 0 || Boolean(user.has_bought_machine);
 
   const deductedInvestments = investments
     .filter(
@@ -2238,6 +2705,7 @@ async function startServer() {
 
     machines.unshift(newMachine);
     saveAppStateToDisk();
+    void saveMachineToFirestoreCollection(newMachine);
     res.status(201).json(newMachine);
   });
 
@@ -2303,6 +2771,7 @@ async function startServer() {
     machine.total_return = machine.daily_yield * machine.duration_days;
     machine.estimated_return_pct = Math.round((machine.total_return / machine.total_cost) * 100);
     saveAppStateToDisk();
+    void saveMachineToFirestoreCollection(machine);
 
     res.json({ message: `Machine "${machine.title}" updated successfully!`, machine });
   });
@@ -2360,6 +2829,7 @@ async function startServer() {
 
     const deleted = machines.splice(index, 1)[0];
     saveAppStateToDisk();
+    void deleteMachineFromFirestoreCollection(machineId);
     res.json({ message: `Machine "${deleted.title}" removed successfully!`, id: machineId });
   });
 
@@ -2525,9 +2995,13 @@ async function startServer() {
     const endDate = computeMachineEndDate(startDate, machine.duration_days, monToFriOnly);
     const selectedChannel = payment_method || 'Wallet Balance';
 
-    // When customer clicks Buy, the system creates a Pending Order ("Wait for admin confirmation")
-    // and deducts the machine price from the customer's Wallet accordingly!
-    const requiresAdminConfirmation = true;
+    // If Admin has already confirmed the customer's deposit (confirmedWallet >= totalCost or no pending deposits),
+    // the machine starts running IMMEDIATELY in the Income Plane (ACTIVE) and unlocks WhatsApp & all locked planes!
+    const hasAdminConfirmedDeposit =
+      confirmedWallet >= totalCost ||
+      (computedWallet >= totalCost && pendingDeposits === 0) ||
+      Boolean(user.has_bought_machine);
+    const requiresAdminConfirmation = !hasAdminConfirmedDeposit;
 
     const refCode = `ORD-${Math.floor(100000 + Math.random() * 900000)}`;
 
@@ -2542,14 +3016,14 @@ async function startServer() {
       daily_yield: dailyYield,
       total_return: totalReturn,
       duration_days: machine.duration_days,
-      days_elapsed: 0,
+      days_elapsed: requiresAdminConfirmation ? 0 : 1,
       last_claim_at: startDate.toISOString(),
       unclaimed_earnings: 0,
       total_claimed: 0,
-      status: 'PENDING',
+      status: requiresAdminConfirmation ? 'PENDING' : 'ACTIVE',
       start_date: startDate.toISOString(),
       end_date: endDate.toISOString(),
-      confirmed_at: undefined,
+      confirmed_at: requiresAdminConfirmation ? undefined : startDate.toISOString(),
       machine,
       wallet_deducted: true,
       payment_method: selectedChannel,
@@ -2558,6 +3032,9 @@ async function startServer() {
     (newInvestment as any).customer_phone = phone_number || user.phone_number || '';
     (newInvestment as any).payment_reference = refCode;
     (newInvestment as any).work_days = monToFriOnly ? 'Mon – Friday' : 'Monday – Sunday';
+    if (!requiresAdminConfirmation) {
+      (newInvestment as any).approved_permanent = true;
+    }
 
     investments.unshift(newInvestment);
 
@@ -2581,7 +3058,7 @@ async function startServer() {
       investment_id: newInvestment.id,
       amount: totalCost,
       type: 'INVESTMENT',
-      status: 'PENDING',
+      status: requiresAdminConfirmation ? 'PENDING' : 'SUCCESS',
       payment_method: `Wallet (${selectedChannel}) • Machine: ${machine.title} (${units}x) • Phone: ${phone_number || user.phone_number || 'N/A'}`,
       payment_reference: refCode,
       machine_title: newInvestment.machine_title,
@@ -2591,6 +3068,9 @@ async function startServer() {
     (newTx as any).customer_phone = phone_number || user.phone_number || '';
     (newTx as any).user_phone = user.phone_number || phone_number || '';
     (newTx as any).wallet_credited = true;
+    if (!requiresAdminConfirmation) {
+      (newTx as any).approved_permanent = true;
+    }
     transactions.unshift(newTx);
 
     const updatedFinances = syncUserConfirmedFinances(user, user.id);
@@ -2710,12 +3190,41 @@ async function startServer() {
 
     const rewardNote = activateConfirmedMachineInvestment(newInvestment, 'Activated via Admin-approved wallet balance');
     const finalFinances = syncUserConfirmedFinances(user, user.id);
+
+    void saveOrderToFirestoreCollection(newInvestment, 'ACTIVE & DELIVERED');
+    void saveOrderToFirestoreOrdersCollection({
+      id: newInvestment.id,
+      customername: user.full_name || user.name || phone_number || user.phone_number || 'Avor Investor',
+      name: newInvestment.machine_title,
+      status: 'ACTIVE & DELIVERED',
+      user_id: user.id,
+      customer_name: user.full_name || user.name || 'Avor Investor',
+      customer_phone: phone_number || user.phone_number || '',
+      machine_id: String(newInvestment.machine_id),
+      machine_title: newInvestment.machine_title,
+      amount_invested: totalCost,
+      amount: totalCost,
+      daily_return: Number(newInvestment.daily_yield || 0),
+      duration_days: Number(newInvestment.duration_days || 32),
+      total_return: Number(newInvestment.total_return || 0),
+      days_elapsed: Math.max(1, Number(newInvestment.days_elapsed || 1)),
+      days_left: Math.max(0, Number(newInvestment.duration_days || 32) - Math.max(1, Number(newInvestment.days_elapsed || 1))),
+      units: Number(units || 1),
+      start_date: newInvestment.start_date,
+      end_date: newInvestment.end_date,
+      purchase_date: (newInvestment.start_date || new Date().toISOString()).split('T')[0],
+      ending_date: (newInvestment.end_date || new Date().toISOString()).split('T')[0],
+      payment_method: `Wallet (${selectedChannel})`,
+      payment_reference: refCode,
+    });
+
     notifyAllAdmins(
       `✅ Machine Purchased & Activated: ${newInvestment.machine_title}`,
       `Customer ${user.full_name || user.id} (${phone_number || user.phone_number || 'No Phone'}) purchased ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} using their Admin-confirmed wallet balance (Ref: ${refCode}).`,
       'PAYMENT',
       {
         transaction_id: newTx.id,
+        investment_id: newInvestment.id,
         customer_name: user.full_name || user.name || user.id,
         customer_phone: phone_number || user.phone_number || '',
         amount: totalCost,
@@ -2728,9 +3237,9 @@ async function startServer() {
       }
     );
     void ensureOrderSavedInFirestore({
-      docId: refCode.replace(/[^a-zA-Z0-9_-]/g, ''),
+      docId: newInvestment.id,
       name: user.full_name || user.name || phone_number || user.phone_number || 'Avor Investor',
-      item: `Bought ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} using Wallet Balance (${phone_number || user.phone_number || 'N/A'})`,
+      item: `Bought & Activated ${newInvestment.machine_title} for UGX ${totalCost.toLocaleString()} using Admin-Confirmed Wallet Balance (${phone_number || user.phone_number || 'N/A'})`,
       senderPhone: phone_number || user.phone_number || '',
       receiverPhone: RECEIVER_PHONE,
       receiverName: RECEIVER_NAME,
@@ -2740,10 +3249,30 @@ async function startServer() {
       paymentReference: refCode,
       status: 'CONFIRMED',
     });
+
+    broadcastRealtimeEvent({
+      type: 'WALLET_CONFIRMED_SYNC',
+      order_type: 'ORDER_CONFIRMED_SYNC',
+      investment: newInvestment,
+      investment_id: newInvestment.id,
+      status: 'ACTIVE',
+      firestore_status: 'ACTIVE & DELIVERED',
+      status_label: 'ACTIVE & DELIVERED',
+      user_id: user.id,
+      user_phone: user.phone_number || phone_number || '',
+      customer_phone: phone_number || user.phone_number || '',
+      wallet_balance: finalFinances.computedWallet,
+      available_wallet: finalFinances.computedWallet,
+      balance: user.balance,
+      has_bought_machine: true,
+      activated_investments: [newInvestment],
+      timestamp: new Date().toISOString(),
+    });
+
     saveAppStateToDisk();
 
     res.status(201).json({
-      message: `Successfully bought ${units} unit(s) of ${machine.title} using your wallet balance! Your machine is now ACTIVE (Day 1 of ${machine.duration_days}).${rewardNote}`,
+      message: `Successfully bought ${units} unit(s) of ${machine.title} using your wallet balance! Your machine is now ACTIVE & running in the Income Plane (Day 1 of ${machine.duration_days}).${rewardNote}`,
       investment: newInvestment,
       user_balance: user.balance,
       wallet_balance: finalFinances.computedWallet,
@@ -2756,7 +3285,14 @@ async function startServer() {
 
   // Helper to activate a PENDING machine investment once Admin confirms the Order
   const activateConfirmedMachineInvestment = (inv: Investment, adminNotes?: string): string => {
-    const user = Array.from(users.values()).find((u) => u.id === inv.user_id);
+    const user =
+      Array.from(users.values()).find((u) => u.id === inv.user_id) ||
+      findOrRestoreUser(inv.user_id, {
+        user_id: inv.user_id,
+        phone_number: (inv as any).customer_phone,
+        user_phone: (inv as any).customer_phone,
+        full_name: (inv as any).customer_name,
+      });
     const machine = machines.find((m) => m.id === inv.machine_id) || inv.machine;
     const now = new Date();
 
@@ -2769,12 +3305,16 @@ async function startServer() {
 
     const monToFriOnly = isAv1OrAv2WeekdayMachine(inv);
     inv.status = 'ACTIVE';
+    (inv as any).approved_permanent = true;
     inv.confirmed_at = now.toISOString();
     inv.start_date = now.toISOString();
     inv.end_date = computeMachineEndDate(now, inv.duration_days, monToFriOnly).toISOString();
     inv.last_claim_at = now.toISOString();
     inv.days_elapsed = monToFriOnly && !isWeekdayMonToFri(now) ? 0 : 1;
     syncSingleActiveMachineAutoRun(inv, now);
+
+    // Ensure Firestore `orders` document is also updated to "ACTIVE & DELIVERED" so it never reverts to pending
+    void updateOrderStatusInFirestoreOrdersCollection(inv.id, 'APPROVE', inv);
 
     if (user) {
       user.has_bought_machine = true;
@@ -3051,12 +3591,17 @@ async function startServer() {
       }
     });
 
-    // Check if current user has an active/completed machine (strictly false when 0 machines bought, true when user buys a machine)
-    const userInvestments = investments.filter((i) => i.user_id === userId || doesTxBelongToUser({ user_id: i.user_id } as any, user, userId));
+    // Check if current user has an active/completed machine (remains permanently true once a machine is bought & confirmed so WhatsApp & locked planes never relock)
+    const userInvestments = investments.filter(
+      (i) =>
+        i.user_id === user.id ||
+        i.user_id === userId ||
+        doesTxBelongToUser({ user_id: i.user_id, customer_phone: (i as any).customer_phone } as any, user, userId)
+    );
     const confirmedUserInvestments = userInvestments.filter(
       (i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE'
     );
-    const hasBoughtMachine = confirmedUserInvestments.length > 0;
+    const hasBoughtMachine = confirmedUserInvestments.length > 0 || Boolean(user.has_bought_machine);
     user.has_bought_machine = hasBoughtMachine;
 
     let pendingTeamIncome = 0;
@@ -4058,6 +4603,7 @@ async function startServer() {
         }
       );
 
+      void saveDepositToFirestoreCollection(newTx, 'pending');
       void ensureOrderSavedInFirestore({
         docId: transactionIdFromApi.replace(/[^a-zA-Z0-9_-]/g, ''),
         name: user?.full_name || finalPhone || finalUserId || 'Avor Investor',
@@ -4204,6 +4750,7 @@ async function startServer() {
       }
     );
 
+    void saveDepositToFirestoreCollection(newTx, 'pending');
     void ensureOrderSavedInFirestore({
       docId: refCode.replace(/[^a-zA-Z0-9_-]/g, ''),
       name: user.full_name || user.name || senderPhone || 'Avor Investor',
@@ -5349,13 +5896,8 @@ async function startServer() {
       return { duplicate: true };
     }
 
-    // Ignore any historical/cached Firestore documents created before the global system zero-reset
-    if (createdAt) {
-      const createdMs = new Date(createdAt).getTime();
-      if (!isNaN(createdMs) && createdMs < systemResetCutoffMs) {
-        return { duplicate: true };
-      }
-    }
+    // Preserve all Firestore documents permanently (never filter out by cutoff time)
+    void createdAt;
 
     // Ignore deleted historical demo/test documents or denied fake orders
     const alreadyDeniedTx = transactions.find(
@@ -6164,7 +6706,8 @@ async function startServer() {
       }
     });
 
-    // Update Firestore admin_messages document to status: 'SUCCESS' so it shows Successful everywhere
+    // Update Firestore deposits & admin_messages document to status: 'approved' / 'SUCCESS' so it shows Successful everywhere
+    void saveDepositToFirestoreCollection(tx, 'approved');
     void ensureOrderSavedInFirestore({
       docId: (tx as any).firebase_doc_id || tx.payment_reference || tx.id,
       name: primaryUser?.full_name || (tx as any).customer_name || 'Avor Investor',
@@ -6179,13 +6722,28 @@ async function startServer() {
       status: 'SUCCESS',
     });
 
-    // THING 2: Confirm Wallet funds so the customer can click Buy to place their Machine Order!
+    // THING 2: Confirm Wallet funds and immediately activate any PENDING machine orders for this customer!
     let latestWallet = Number(tx.amount || 0);
     let latestBalance = primaryUser?.balance ?? REGISTRATION_REWARD_UGX;
     const activatedInvestments: Investment[] = [];
 
     const syncedUserIds: string[] = [];
     for (const targetUser of matchedUsers.values()) {
+      const userPendingInvs = investments.filter(
+        (inv) =>
+          inv.status === 'PENDING' &&
+          (inv.user_id === targetUser.id ||
+            doesTxBelongToUser(
+              { user_id: inv.user_id, customer_phone: (inv as any).customer_phone } as any,
+              targetUser,
+              targetUser.id
+            ))
+      );
+      for (const pInv of userPendingInvs) {
+        activateConfirmedMachineInvestment(pInv, notes || 'Activated upon Admin deposit confirmation');
+        activatedInvestments.push(pInv);
+      }
+
       const fin = syncUserConfirmedFinances(targetUser, targetUser.id);
       latestWallet = fin.computedWallet;
       latestBalance = targetUser.balance;
@@ -6198,7 +6756,7 @@ async function startServer() {
           ? `✅ Payment Confirmed — ${activatedInvestments[0].machine_title} Cycle Started!`
           : '✅ Payment Confirmed by Admin — Ready to Buy Machine!',
         activatedInvestments.length > 0
-          ? `Admin has confirmed your payment of ${tx.amount.toLocaleString()} UGX! Your machine (${activatedInvestments[0].machine_title}) is now ACTIVE and counting Day 1 of ${activatedInvestments[0].duration_days} Days. ${notes || ''}`
+          ? `Admin has confirmed your payment of ${tx.amount.toLocaleString()} UGX! Your machine (${activatedInvestments[0].machine_title}) is now ACTIVE in the Income Plane and counting Day 1 of ${activatedInvestments[0].duration_days} Days. ${notes || ''}`
           : `Your deposit of ${tx.amount.toLocaleString()} UGX has been confirmed by Admin (Pending -> Successful). Your Wallet balance (${fin.computedWallet.toLocaleString()} UGX) is confirmed and ready to buy a machine and start your machine cycle! ${notes || ''}`,
         'PAYMENT'
       );
@@ -6223,6 +6781,7 @@ async function startServer() {
       wallet_balance: latestWallet,
       available_wallet: latestWallet,
       balance: latestBalance,
+      has_bought_machine: activatedInvestments.length > 0 ? true : undefined,
       activated_investments: activatedInvestments,
       timestamp: nowIso,
     });
@@ -6264,6 +6823,7 @@ async function startServer() {
     if ((tx as any).firebase_doc_id) DELETED_DEMO_IDS.add(String((tx as any).firebase_doc_id));
     saveDeletedIdsToDisk();
 
+    void saveDepositToFirestoreCollection(tx, 'rejected');
     void deleteOrderFromFirestore((tx as any).firebase_doc_id || tx.payment_reference || tx.id);
 
     const matchedUsers = new Map<string, User & { password_hash?: string }>();

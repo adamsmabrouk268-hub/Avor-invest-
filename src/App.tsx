@@ -17,7 +17,17 @@ import { LiveWallpaper } from './components/LiveWallpaper';
 import { IncomePlaneView } from './components/IncomePlaneView';
 import { checkAndSyncOwnerDevice } from './components/TopThreeDotMenu';
 import { DEFAULT_MACHINES } from './data/defaultMachines';
-import { subscribeToFirestoreOrders, FirestoreOrderRecord, applyLocalZeroReset } from './firebase';
+import {
+  subscribeToFirestoreOrders,
+  loadOrdersFromFirestore,
+  loadMachinesFromFirestore,
+  subscribeToFirestoreMachines,
+  loadUserFromFirestore,
+  saveUserToFirestore,
+  FirestoreOrderRecord,
+  applyLocalZeroReset,
+  confirmOrderInFirestore,
+} from './firebase';
 import { CheckCircle2, ArrowRight, Cpu, AlertCircle } from 'lucide-react';
 
 export default function App() {
@@ -91,7 +101,7 @@ export default function App() {
     return null;
   };
 
-  // User State — Automatically restored from localStorage so after first-time registration the Gateway never appears again
+  // User State — Automatically restored from localStorage & Firestore 'users' collection
   const [user, setUser] = useState<User | null>(() => getSavedRegisteredUser());
 
   // Machine Marketplace Data (Categorized into AV1, AV2, All Machines, and AVclasses)
@@ -122,6 +132,7 @@ export default function App() {
   const syncUserToStorage = (u: User | null) => {
     if (u) {
       setUser(u);
+      void saveUserToFirestore(u);
       try {
         localStorage.setItem('avor_invest_user', JSON.stringify(u));
         localStorage.setItem('avor_invest_has_account', 'true');
@@ -142,11 +153,40 @@ export default function App() {
   useEffect(() => {
     fetchMachines();
 
-    // After the first-time registration, restore the user immediately and never show the Gateway again
+    // Real-time listener on Firebase Firestore 'machines' collection on startup
+    const unsubMachines = subscribeToFirestoreMachines((fbMachines) => {
+      if (fbMachines.length > 0) {
+        setMachines((prev) => {
+          const map = new Map<string, Machine>();
+          for (const m of prev) map.set(m.id, m);
+          for (const fm of fbMachines) {
+            map.set(fm.id, { ...(map.get(fm.id) || {}), ...(fm as unknown as Machine) });
+          }
+          return Array.from(map.values());
+        });
+      }
+    });
+
+    // After the first-time registration, restore the user immediately and sync from Firestore 'users' collection
     const existingUser = getSavedRegisteredUser();
     if (existingUser) {
       setUser(existingUser);
       setIsGuestPreview(false);
+      void loadUserFromFirestore(existingUser.id, existingUser.phone_number).then((fbUser) => {
+        if (fbUser) {
+          const mergedUser: User = {
+            ...existingUser,
+            ...fbUser,
+            has_bought_machine: Boolean(existingUser.has_bought_machine || fbUser.has_bought_machine),
+          };
+          setUser(mergedUser);
+          try {
+            localStorage.setItem('avor_invest_user', JSON.stringify(mergedUser));
+          } catch {}
+        } else {
+          void saveUserToFirestore(existingUser);
+        }
+      });
     } else {
       // Check for referral code in URL only for first-time unregistered visitors
       const searchParams = new URLSearchParams(window.location.search);
@@ -188,6 +228,7 @@ export default function App() {
     };
     window.addEventListener('avor-system-reset-zero', onSystemZeroReset);
     return () => {
+      unsubMachines();
       window.removeEventListener('avor-system-reset-zero', onSystemZeroReset);
     };
   }, []);
@@ -196,6 +237,20 @@ export default function App() {
     if (!user?.id) return;
     fetchUserData();
     fetchUserPortfolio();
+    void loadOrdersFromFirestore().then((allOrders) => {
+      const myTail = (user.phone_number || '').replace(/\D/g, '').slice(-9);
+      const myOrders = allOrders.filter((ord) => {
+        if (ord.user_id && ord.user_id === user.id) return true;
+        if (myTail && myTail.length >= 7) {
+          const ordTail = (ord.customer_phone || '').replace(/\D/g, '').slice(-9);
+          if (ordTail === myTail) return true;
+        }
+        return false;
+      });
+      if (myOrders.length > 0) {
+        setFirestoreUserOrders(myOrders);
+      }
+    });
     const interval = setInterval(() => {
       fetchUserData();
       fetchUserPortfolio();
@@ -310,15 +365,26 @@ export default function App() {
             : typeof evData.available_wallet === 'number'
               ? evData.available_wallet
               : (user.wallet_balance || 0) + Number(evData.amount_added || 0);
+        const unlockedNow =
+          Boolean(user.has_bought_machine) ||
+          Boolean(evData.has_bought_machine) ||
+          Boolean(evData.activated_machine) ||
+          (Array.isArray(evData.activated_investments) && evData.activated_investments.length > 0);
+        if (unlockedNow && user.id) {
+          try {
+            localStorage.setItem(`avor_unlocked_${user.id}`, 'true');
+          } catch {}
+        }
         syncUserToStorage({
           ...user,
           wallet_balance: nextWallet,
           available_wallet: nextWallet,
           balance: typeof evData.balance === 'number' ? evData.balance : user.balance,
+          has_bought_machine: unlockedNow,
         });
         showNotification(
-          evData.activated_machine
-            ? `✅ Payment Confirmed! Your machine cycle (${evData.activated_machine.machine_title || 'Machine'}) has now started!`
+          evData.activated_machine || (Array.isArray(evData.activated_investments) && evData.activated_investments.length > 0)
+            ? `✅ Payment Confirmed! Your machine cycle (${evData.activated_machine?.machine_title || evData.activated_investments?.[0]?.machine_title || 'Machine'}) is now ACTIVE in the Income Plane!`
             : `✅ Payment Confirmed by Admin! Your Wallet balance (${Number(nextWallet).toLocaleString()} UGX) is confirmed — buy your machine now to start its cycle.`,
           'success'
         );
@@ -379,17 +445,45 @@ export default function App() {
     };
   }, [user?.id, user?.phone_number]);
 
-  // Merge Firestore 'orders' with backend portfolio in real-time
+  // Merge Firestore 'orders' with backend portfolio in real-time (never downgrade an ACTIVE machine back to PENDING)
   useEffect(() => {
     const mergedMap = new Map<string, Investment>();
+    const activeIdsKey = user?.id ? `avor_active_order_ids_${user.id}` : '';
+    let knownActiveIds = new Set<string>();
+    if (activeIdsKey) {
+      try {
+        const rawIds = JSON.parse(localStorage.getItem(activeIdsKey) || '[]');
+        if (Array.isArray(rawIds)) {
+          knownActiveIds = new Set(rawIds.map(String));
+        }
+      } catch {}
+    }
 
     for (const srvInv of serverInvestments) {
-      mergedMap.set(srvInv.id, srvInv);
+      const isKnownActive = knownActiveIds.has(srvInv.id);
+      const effectiveSrvStatus =
+        srvInv.status === 'PAYOUT_COMPLETE'
+          ? 'PAYOUT_COMPLETE'
+          : srvInv.status === 'ACTIVE' || isKnownActive
+            ? 'ACTIVE'
+            : srvInv.status;
+      if (effectiveSrvStatus === 'ACTIVE' || effectiveSrvStatus === 'PAYOUT_COMPLETE') {
+        knownActiveIds.add(srvInv.id);
+      }
+      mergedMap.set(srvInv.id, {
+        ...srvInv,
+        status: effectiveSrvStatus,
+        days_elapsed:
+          effectiveSrvStatus === 'ACTIVE'
+            ? Math.max(1, Number(srvInv.days_elapsed || 1))
+            : srvInv.days_elapsed,
+      });
     }
 
     for (const fbOrd of firestoreUserOrders) {
       if (fbOrd.status === 'DENIED' || fbOrd.raw_firestore_status === 'denied') {
         mergedMap.delete(fbOrd.id);
+        knownActiveIds.delete(fbOrd.id);
         continue;
       }
       const existing = mergedMap.get(fbOrd.id);
@@ -399,6 +493,49 @@ export default function App() {
           : fbOrd.status === 'PAYOUT_COMPLETE'
             ? 'PAYOUT_COMPLETE'
             : 'PENDING';
+
+      // Once an order is ACTIVE (on server, in Firestore, or in knownActiveIds), NEVER downgrade it back to PENDING
+      const resolvedStatus: 'PENDING' | 'ACTIVE' | 'PAYOUT_COMPLETE' =
+        existing?.status === 'PAYOUT_COMPLETE' || mappedStatus === 'PAYOUT_COMPLETE'
+          ? 'PAYOUT_COMPLETE'
+          : existing?.status === 'ACTIVE' || mappedStatus === 'ACTIVE' || knownActiveIds.has(fbOrd.id)
+            ? 'ACTIVE'
+            : 'PENDING';
+
+      if (resolvedStatus === 'ACTIVE' || resolvedStatus === 'PAYOUT_COMPLETE') {
+        knownActiveIds.add(fbOrd.id);
+      }
+
+      // If server knows the machine is ACTIVE but Firestore still had 'pending', upgrade Firestore automatically
+      if (resolvedStatus === 'ACTIVE' && mappedStatus === 'PENDING') {
+        void confirmOrderInFirestore(fbOrd.id, {
+          days_elapsed: Math.max(1, Number(existing?.days_elapsed || fbOrd.days_elapsed || 1)),
+          days_left: Math.max(0, Number(existing?.duration_days || fbOrd.duration_days || 32) - 1),
+          start_date: existing?.start_date || fbOrd.start_date,
+          end_date: existing?.end_date || fbOrd.end_date,
+        });
+      }
+
+      // If Firestore knows the machine is ACTIVE but server didn't have it as ACTIVE yet, sync server automatically
+      if (resolvedStatus === 'ACTIVE' && (!existing || existing.status === 'PENDING')) {
+        void fetch('/api/admin/orders/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            investment_id: fbOrd.id,
+            action: 'APPROVE',
+            user_id: fbOrd.user_id || user?.id,
+            customername: fbOrd.customername,
+            customer_phone: fbOrd.customer_phone || user?.phone_number,
+            machine_id: fbOrd.machine_id,
+            machine_title: fbOrd.machine_title || fbOrd.name,
+            amount_invested: fbOrd.amount_invested,
+            daily_return: fbOrd.daily_return,
+            duration_days: fbOrd.duration_days,
+            units: fbOrd.units,
+          }),
+        }).catch(() => {});
+      }
 
       mergedMap.set(fbOrd.id, {
         ...(existing || {}),
@@ -411,18 +548,28 @@ export default function App() {
         daily_yield: fbOrd.daily_return || fbOrd.daily_yield || existing?.daily_yield || 0,
         duration_days: fbOrd.duration_days || existing?.duration_days || 32,
         total_return: fbOrd.total_return || existing?.total_return || 0,
-        days_elapsed: fbOrd.days_elapsed ?? existing?.days_elapsed ?? (mappedStatus === 'ACTIVE' ? 1 : 0),
+        days_elapsed:
+          resolvedStatus === 'ACTIVE'
+            ? Math.max(1, Number(existing?.days_elapsed ?? fbOrd.days_elapsed ?? 1))
+            : fbOrd.days_elapsed ?? existing?.days_elapsed ?? 0,
         last_claim_at: existing?.last_claim_at || fbOrd.updated_at || fbOrd.created_at,
         unclaimed_earnings: existing?.unclaimed_earnings ?? 0,
         total_claimed: existing?.total_claimed ?? 0,
-        status: mappedStatus,
-        start_date: fbOrd.start_date || existing?.start_date || fbOrd.created_at,
-        end_date: fbOrd.end_date || existing?.end_date || fbOrd.created_at,
+        status: resolvedStatus,
+        start_date: existing?.start_date || fbOrd.start_date || fbOrd.created_at,
+        end_date: existing?.end_date || fbOrd.end_date || fbOrd.created_at,
         units: fbOrd.units || existing?.units || 1,
       });
     }
 
-    setInvestments(Array.from(mergedMap.values()));
+    const finalInvestments = Array.from(mergedMap.values());
+    if (activeIdsKey && knownActiveIds.size > 0) {
+      try {
+        localStorage.setItem(activeIdsKey, JSON.stringify(Array.from(knownActiveIds)));
+        localStorage.setItem(`avor_unlocked_${user?.id}`, 'true');
+      } catch {}
+    }
+    setInvestments(finalInvestments);
   }, [serverInvestments, firestoreUserOrders, user?.id]);
 
   const showNotification = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
@@ -430,10 +577,14 @@ export default function App() {
     setTimeout(() => setToast(null), 5000);
   };
 
-  // Unlock WhatsApp, Company PDF, Invite, and Manage once the user buys a machine
+  // Unlock WhatsApp, Company PDF, Invite, and Manage permanently once the user buys a machine
+  const isPersistedUnlocked = Boolean(
+    user?.id && typeof window !== 'undefined' && localStorage.getItem(`avor_unlocked_${user.id}`) === 'true'
+  );
   const hasBoughtMachine =
     investments.some((i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') ||
-    Boolean(user?.has_bought_machine);
+    Boolean(user?.has_bought_machine) ||
+    isPersistedUnlocked;
 
   const CLASS_INVITE_REQUIREMENTS: Record<string, number> = {
     'A class': 4,
@@ -485,6 +636,19 @@ export default function App() {
   };
 
   const fetchMachines = async () => {
+    try {
+      const fbMachines = await loadMachinesFromFirestore();
+      if (fbMachines.length > 0) {
+        setMachines((prev) => {
+          const map = new Map<string, Machine>();
+          for (const m of prev) map.set(m.id, m);
+          for (const fm of fbMachines) {
+            map.set(fm.id, { ...(map.get(fm.id) || {}), ...(fm as unknown as Machine) });
+          }
+          return Array.from(map.values());
+        });
+      }
+    } catch {}
     try {
       const res = await fetch('/api/machines');
       const ct = res.headers.get('content-type') || '';
@@ -550,7 +714,17 @@ export default function App() {
         if (typeof sumData.balance === 'number') mergedUser.balance = sumData.balance;
         if (typeof sumData.wallet_balance === 'number') mergedUser.wallet_balance = sumData.wallet_balance;
         if (typeof sumData.available_wallet === 'number') mergedUser.available_wallet = sumData.available_wallet;
-        if (typeof sumData.has_bought_machine === 'boolean') mergedUser.has_bought_machine = sumData.has_bought_machine;
+        const unlocked =
+          Boolean(user.has_bought_machine) ||
+          Boolean(mergedUser.has_bought_machine) ||
+          Boolean(sumData.has_bought_machine) ||
+          (user.id ? localStorage.getItem(`avor_unlocked_${user.id}`) === 'true' : false);
+        mergedUser.has_bought_machine = unlocked;
+        if (unlocked && user.id) {
+          try {
+            localStorage.setItem(`avor_unlocked_${user.id}`, 'true');
+          } catch {}
+        }
         if (
           Number(sumData.wallet_balance || 0) === 0 &&
           Number(sumData.deposit_details?.deposits_count || 0) === 0

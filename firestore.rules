@@ -34,6 +34,136 @@ service cloud.firestore {
       );
     }
 
+    function isValidMachine(data) {
+      return data.keys().hasAll(['id', 'name', 'price', 'daily_return', 'duration_days', 'status', 'timestamp']) &&
+        data.keys().hasOnly([
+          'id',
+          'name',
+          'title',
+          'price',
+          'daily_income',
+          'daily_return',
+          'duration_days',
+          'total_return',
+          'net_profit',
+          'roi_percentage',
+          'category',
+          'status',
+          'image_url',
+          'description',
+          'specs',
+          'location',
+          'total_units',
+          'available_units',
+          'updated_at',
+          'timestamp'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
+        data.price is number && data.price >= 0 && data.price <= 1000000000 &&
+        data.daily_return is number && data.daily_return >= 0 && data.daily_return <= 1000000000 &&
+        data.duration_days is number && data.duration_days >= 1 && data.duration_days <= 3650 &&
+        data.status is string && data.status in ['AVAILABLE', 'SOLD_OUT', 'MAINTENANCE', 'ACTIVE'] &&
+        data.timestamp is timestamp &&
+        (!('title' in data) || (data.title is string && data.title.size() >= 1 && data.title.size() <= 200)) &&
+        (!('daily_income' in data) || (data.daily_income is number && data.daily_income >= 0 && data.daily_income <= 1000000000)) &&
+        (!('total_return' in data) || (data.total_return is number && data.total_return >= 0 && data.total_return <= 1000000000)) &&
+        (!('net_profit' in data) || (data.net_profit is number && data.net_profit >= 0 && data.net_profit <= 1000000000)) &&
+        (!('roi_percentage' in data) || (data.roi_percentage is number && data.roi_percentage >= 0 && data.roi_percentage <= 100000)) &&
+        (!('category' in data) || (data.category is string && data.category.size() >= 1 && data.category.size() <= 120)) &&
+        (!('image_url' in data) || (data.image_url is string && data.image_url.size() >= 1 && data.image_url.size() <= 1000)) &&
+        (!('description' in data) || (data.description is string && data.description.size() >= 1 && data.description.size() <= 1500)) &&
+        (!('specs' in data) || (data.specs is string && data.specs.size() >= 1 && data.specs.size() <= 500)) &&
+        (!('location' in data) || (data.location is string && data.location.size() >= 1 && data.location.size() <= 200)) &&
+        (!('total_units' in data) || (data.total_units is number && data.total_units >= 0 && data.total_units <= 1000000)) &&
+        (!('available_units' in data) || (data.available_units is number && data.available_units >= 0 && data.available_units <= 1000000)) &&
+        (!('updated_at' in data) || (data.updated_at is string && data.updated_at.size() >= 1 && data.updated_at.size() <= 60));
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'name', 'phone', 'balance', 'status', 'timestamp']) &&
+        data.keys().hasOnly([
+          'id',
+          'name',
+          'phone',
+          'email',
+          'password',
+          'balance',
+          'wallet_balance',
+          'available_wallet',
+          'registration_bonus',
+          'has_bought_machine',
+          'role',
+          'referral_code',
+          'registered_date',
+          'date',
+          'created_at',
+          'updated_at',
+          'status',
+          'timestamp'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 160 &&
+        data.phone is string && data.phone.size() >= 3 && data.phone.size() <= 40 &&
+        data.balance is number && data.balance >= 0 && data.balance <= 1000000000 &&
+        data.status is string && data.status in ['ACTIVE', 'VERIFIED'] &&
+        data.timestamp is timestamp &&
+        (!('email' in data) || (data.email is string && data.email.size() >= 3 && data.email.size() <= 160)) &&
+        (!('password' in data) || (data.password is string && data.password.size() >= 1 && data.password.size() <= 160)) &&
+        (!('wallet_balance' in data) || (data.wallet_balance is number && data.wallet_balance >= 0 && data.wallet_balance <= 1000000000)) &&
+        (!('available_wallet' in data) || (data.available_wallet is number && data.available_wallet >= 0 && data.available_wallet <= 1000000000)) &&
+        (!('registration_bonus' in data) || (data.registration_bonus is number && data.registration_bonus >= 0 && data.registration_bonus <= 1000000000)) &&
+        (!('has_bought_machine' in data) || (data.has_bought_machine is bool)) &&
+        (!('role' in data) || (data.role is string && data.role in ['INVESTOR', 'ADMIN'])) &&
+        (!('referral_code' in data) || (data.referral_code is string && data.referral_code.size() >= 1 && data.referral_code.size() <= 60)) &&
+        (!('registered_date' in data) || (data.registered_date is string && data.registered_date.size() >= 1 && data.registered_date.size() <= 60)) &&
+        (!('date' in data) || (data.date is string && data.date.size() >= 1 && data.date.size() <= 60)) &&
+        (!('created_at' in data) || (data.created_at is string && data.created_at.size() >= 1 && data.created_at.size() <= 60)) &&
+        (!('updated_at' in data) || (data.updated_at is string && data.updated_at.size() >= 1 && data.updated_at.size() <= 60));
+    }
+
+    function isValidDeposit(data) {
+      return data.keys().hasAll(['id', 'user_id', 'name', 'phone', 'amount', 'status', 'timestamp']) &&
+        data.keys().hasOnly([
+          'id',
+          'user_id',
+          'name',
+          'phone',
+          'amount',
+          'status',
+          'payment_method',
+          'payment_reference',
+          'machine_id',
+          'machine_title',
+          'created_at',
+          'updated_at',
+          'timestamp'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 &&
+        data.user_id is string && data.user_id.size() >= 1 && data.user_id.size() <= 128 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 160 &&
+        data.phone is string && data.phone.size() >= 3 && data.phone.size() <= 40 &&
+        data.amount is number && data.amount >= 0 && data.amount <= 1000000000 &&
+        data.status is string && data.status in [
+          'pending',
+          'approved',
+          'confirmed',
+          'rejected',
+          'PENDING',
+          'SUCCESS',
+          'CONFIRMED',
+          'FAILED',
+          'DENIED'
+        ] &&
+        data.timestamp is timestamp &&
+        (!('payment_method' in data) || (data.payment_method is string && data.payment_method.size() >= 1 && data.payment_method.size() <= 160)) &&
+        (!('payment_reference' in data) || (data.payment_reference is string && data.payment_reference.size() >= 1 && data.payment_reference.size() <= 120)) &&
+        (!('machine_id' in data) || (data.machine_id is string && data.machine_id.size() >= 1 && data.machine_id.size() <= 128)) &&
+        (!('machine_title' in data) || (data.machine_title is string && data.machine_title.size() >= 1 && data.machine_title.size() <= 200)) &&
+        (!('created_at' in data) || (data.created_at is string && data.created_at.size() >= 1 && data.created_at.size() <= 60)) &&
+        (!('updated_at' in data) || (data.updated_at is string && data.updated_at.size() >= 1 && data.updated_at.size() <= 60));
+    }
+
     function isValidOrder(data) {
       return data.keys().hasAll(['customername', 'name', 'status', 'timestamp']) &&
         data.keys().hasOnly([
@@ -196,6 +326,135 @@ service cloud.firestore {
       allow delete: if isValidId(adminUid) && isAdmin();
     }
 
+    match /machines/{machineId} {
+      allow get: if isValidId(machineId) && (
+        isAdmin() ||
+        existing().status in ['AVAILABLE', 'SOLD_OUT', 'MAINTENANCE', 'ACTIVE']
+      );
+      allow list: if isAdmin() || resource.data.status in ['AVAILABLE', 'SOLD_OUT', 'MAINTENANCE', 'ACTIVE'];
+      allow create: if isValidId(machineId) && isValidMachine(incoming()) && incoming().timestamp == request.time;
+      allow update: if isValidId(machineId) && isValidMachine(incoming()) && (
+        isAdmin() ||
+        (
+          incoming().id == existing().id &&
+          incoming().status in ['AVAILABLE', 'SOLD_OUT', 'MAINTENANCE', 'ACTIVE'] &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name',
+            'title',
+            'price',
+            'daily_income',
+            'daily_return',
+            'duration_days',
+            'total_return',
+            'net_profit',
+            'roi_percentage',
+            'category',
+            'status',
+            'image_url',
+            'description',
+            'specs',
+            'location',
+            'total_units',
+            'available_units',
+            'updated_at',
+            'timestamp'
+          ])
+        )
+      );
+      allow delete: if isValidId(machineId) && (
+        isAdmin() ||
+        existing().status in ['AVAILABLE', 'SOLD_OUT', 'MAINTENANCE', 'ACTIVE']
+      );
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (
+        isAdmin() ||
+        existing().status in ['ACTIVE', 'VERIFIED']
+      );
+      allow list: if isAdmin() || resource.data.status in ['ACTIVE', 'VERIFIED'];
+      allow create: if isValidId(userId) && isValidUser(incoming()) && incoming().timestamp == request.time;
+      allow update: if isValidId(userId) && isValidUser(incoming()) && (
+        isAdmin() ||
+        (
+          incoming().id == existing().id &&
+          incoming().status in ['ACTIVE', 'VERIFIED'] &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name',
+            'phone',
+            'email',
+            'password',
+            'balance',
+            'wallet_balance',
+            'available_wallet',
+            'registration_bonus',
+            'has_bought_machine',
+            'referral_code',
+            'registered_date',
+            'date',
+            'updated_at',
+            'status',
+            'timestamp'
+          ])
+        )
+      );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /deposits/{depositId} {
+      allow get: if isValidId(depositId) && (
+        isAdmin() ||
+        existing().status in [
+          'pending',
+          'approved',
+          'confirmed',
+          'rejected',
+          'PENDING',
+          'SUCCESS',
+          'CONFIRMED',
+          'FAILED',
+          'DENIED'
+        ]
+      );
+      allow list: if isAdmin() || resource.data.status in [
+        'pending',
+        'approved',
+        'confirmed',
+        'rejected',
+        'PENDING',
+        'SUCCESS',
+        'CONFIRMED',
+        'FAILED',
+        'DENIED'
+      ];
+      allow create: if isValidId(depositId) && isValidDeposit(incoming()) && incoming().timestamp == request.time;
+      allow update: if isValidId(depositId) && isValidDeposit(incoming()) && (
+        isAdmin() ||
+        (
+          incoming().id == existing().id &&
+          incoming().user_id == existing().user_id &&
+          incoming().amount == existing().amount &&
+          incoming().status in [
+            'pending',
+            'approved',
+            'confirmed',
+            'rejected',
+            'PENDING',
+            'SUCCESS',
+            'CONFIRMED',
+            'FAILED',
+            'DENIED'
+          ] &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status',
+            'updated_at',
+            'timestamp'
+          ])
+        )
+      );
+      allow delete: if isValidId(depositId) && isAdmin();
+    }
+
     match /orders/{orderId} {
       allow get: if isValidId(orderId) && (
         isAdmin() ||
@@ -226,7 +485,6 @@ service cloud.firestore {
         (
           incoming().customername == existing().customername &&
           incoming().name == existing().name &&
-          incoming().timestamp == existing().timestamp &&
           incoming().status in [
             'pending',
             'confirmed',
@@ -245,23 +503,12 @@ service cloud.firestore {
             'end_date',
             'purchase_date',
             'ending_date',
-            'updated_at'
+            'updated_at',
+            'timestamp'
           ])
         )
       );
-      allow delete: if isValidId(orderId) && (
-        isAdmin() ||
-        existing().status in [
-          'pending',
-          'confirmed',
-          'ACTIVE & DELIVERED',
-          'denied',
-          'PENDING',
-          'ACTIVE',
-          'COMPLETED',
-          'PAYOUT_COMPLETE'
-        ]
-      );
+      allow delete: if isValidId(orderId) && isAdmin();
     }
 
     match /withdrawals/{withdrawalId} {
@@ -296,7 +543,6 @@ service cloud.firestore {
           incoming().name == existing().name &&
           incoming().phone == existing().phone &&
           incoming().amount == existing().amount &&
-          incoming().createdAt == existing().createdAt &&
           incoming().status in [
             'pending',
             'approved',
@@ -309,23 +555,12 @@ service cloud.firestore {
           ] &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'status',
-            'updated_at'
+            'updated_at',
+            'createdAt'
           ])
         )
       );
-      allow delete: if isValidId(withdrawalId) && (
-        isAdmin() ||
-        existing().status in [
-          'pending',
-          'approved',
-          'rejected',
-          'PENDING',
-          'SUCCESS',
-          'FAILED',
-          'CONFIRMED',
-          'REJECTED'
-        ]
-      );
+      allow delete: if isValidId(withdrawalId) && isAdmin();
     }
 
     match /admin_messages/{messageId} {
@@ -340,15 +575,11 @@ service cloud.firestore {
         (
           incoming().name == existing().name &&
           incoming().item == existing().item &&
-          incoming().timestamp == existing().timestamp &&
           incoming().status in ['PENDING', 'CONFIRMED', 'SUCCESS'] &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['status'])
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'timestamp'])
         )
       );
-      allow delete: if isValidId(messageId) && (
-        isAdmin() ||
-        existing().status in ['PENDING', 'CONFIRMED', 'SUCCESS']
-      );
+      allow delete: if isValidId(messageId) && isAdmin();
     }
   }
 }

@@ -228,9 +228,19 @@ export const Homepage: React.FC<HomepageProps> = ({
     };
   }, [user?.id, user?.phone_number, user?.balance, user?.wallet_balance, user?.available_wallet, investments.length]);
 
+  const isPersistedUnlocked = Boolean(
+    user?.id && typeof window !== 'undefined' && localStorage.getItem(`avor_unlocked_${user.id}`) === 'true'
+  );
   const hasBoughtMachine =
     investments.some((i) => i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE') ||
-    Boolean(summary?.has_bought_machine);
+    Boolean(summary?.has_bought_machine) ||
+    Boolean(user?.has_bought_machine) ||
+    isPersistedUnlocked;
+  if (hasBoughtMachine && user?.id && typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(`avor_unlocked_${user.id}`, 'true');
+    } catch {}
+  }
 
   const activeInvestments = investments.filter((i) => i.status === 'ACTIVE');
   const completedOrActiveInvestments = investments.filter(

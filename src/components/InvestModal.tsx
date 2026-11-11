@@ -18,7 +18,12 @@ import {
   Cpu,
 } from 'lucide-react';
 import { WhatsAppIcon } from './WhatsAppIcon';
-import { sendMessageToAdmin, createOrderInFirestore } from '../firebase';
+import {
+  sendMessageToAdmin,
+  createOrderInFirestore,
+  createDepositInFirestore,
+  saveUserToFirestore,
+} from '../firebase';
 
 interface InvestModalProps {
   machine: Machine | null;
@@ -325,6 +330,24 @@ export const InvestModal: React.FC<InvestModalProps> = ({
       if (!res.ok) {
         throw new Error(data.error || 'Failed to submit wallet deposit.');
       }
+
+      const depTxId = data.transaction?.id || `tx-dep-${Date.now()}`;
+      const depRef = data.transaction?.payment_reference || `DEP-${Date.now()}`;
+
+      // Save deposit immediately to Firebase Firestore 'deposits' collection using setDoc
+      await createDepositInFirestore({
+        id: depTxId,
+        user_id: user.id,
+        customer_name: user.full_name || phoneNumber.trim() || user.phone_number || 'Avor Investor',
+        customer_phone: phoneNumber.trim() || user.phone_number || '',
+        amount: totalCost,
+        status: 'PENDING',
+        payment_method: selectedChannel,
+        payment_reference: depRef,
+        receiver_phone: activeReceiver.phone_number || RECEIVER_PHONE,
+        receiver_name: activeReceiver.account_name || RECEIVER_NAME,
+      });
+
       try {
         const savedRefs: string[] = JSON.parse(localStorage.getItem('avor_my_deposit_refs') || '[]');
         const nextRefs = Array.from(
@@ -363,14 +386,14 @@ export const InvestModal: React.FC<InvestModalProps> = ({
         `Deposited UGX ${totalCost.toLocaleString()} via ${selectedChannel} from ${phoneNumber.trim()} to ${activeReceiver.phone_number || RECEIVER_PHONE} (${activeReceiver.account_name || RECEIVER_NAME}) (Pending Admin Confirmation)`,
         {
           userId: user.id,
-          transactionId: data.transaction?.id,
+          transactionId: depTxId,
           senderPhone: phoneNumber.trim() || user.phone_number,
           receiverPhone: activeReceiver.phone_number || RECEIVER_PHONE,
           receiverName: activeReceiver.account_name || RECEIVER_NAME,
           amount: totalCost,
           machineTitle: `Wallet Deposit (${machine.title})`,
           paymentMethod: selectedChannel,
-          paymentReference: data.transaction?.payment_reference || `DEP-${Date.now()}`,
+          paymentReference: depRef,
           status: 'PENDING',
         }
       );
@@ -426,38 +449,73 @@ export const InvestModal: React.FC<InvestModalProps> = ({
         }
         throw new Error(data.error || 'Failed to purchase machine.');
       }
-      if (typeof data.available_wallet === 'number') {
-        setLiveBalance(data.available_wallet);
-      } else if (typeof data.wallet_balance === 'number') {
-        setLiveBalance(data.wallet_balance);
-      } else {
-        setLiveBalance((prev) => Math.max(0, prev - totalCost));
-      }
+      const nextWalletAfterBuy =
+        typeof data.available_wallet === 'number'
+          ? data.available_wallet
+          : typeof data.wallet_balance === 'number'
+            ? data.wallet_balance
+            : Math.max(0, liveBalance - totalCost);
+      setLiveBalance(nextWalletAfterBuy);
       setConfirmedWallet((prev) => Math.max(0, prev - totalCost));
       setPendingDepositAmount((prev) => Math.max(0, prev - totalCost));
+      const isImmediatelyActive =
+        data.status === 'ACTIVE' ||
+        data.investment?.status === 'ACTIVE' ||
+        Boolean(data.has_bought_machine);
+
+      if (isImmediatelyActive && user.id) {
+        try {
+          localStorage.setItem(`avor_unlocked_${user.id}`, 'true');
+          const rawSavedUser = localStorage.getItem('avor_invest_user');
+          if (rawSavedUser) {
+            const parsedSaved = JSON.parse(rawSavedUser);
+            parsedSaved.has_bought_machine = true;
+            parsedSaved.wallet_balance = nextWalletAfterBuy;
+            parsedSaved.available_wallet = nextWalletAfterBuy;
+            localStorage.setItem('avor_invest_user', JSON.stringify(parsedSaved));
+          }
+        } catch {}
+      }
+
+      // Save updated user wallet & has_bought_machine status immediately to Firestore 'users' collection
+      void saveUserToFirestore({
+        ...user,
+        wallet_balance: nextWalletAfterBuy,
+        available_wallet: nextWalletAfterBuy,
+        has_bought_machine: Boolean(user.has_bought_machine || isImmediatelyActive),
+      });
+
       try {
         const bc = new BroadcastChannel('avor_realtime_wallet_sync');
-        bc.postMessage({ type: 'MACHINE_BOUGHT_WALLET_REDUCED', amount: totalCost });
+        bc.postMessage({
+          type: isImmediatelyActive ? 'WALLET_CONFIRMED_SYNC' : 'MACHINE_BOUGHT_WALLET_REDUCED',
+          amount: totalCost,
+          has_bought_machine: isImmediatelyActive ? true : undefined,
+          activated_machine: isImmediatelyActive ? data.investment : undefined,
+        });
         bc.close();
       } catch {}
       setSuccessData({
         message:
           data.message ||
-          `Order created for ${machine.title}! ${currencyInfo.format(totalCost)} has been deducted from your Wallet.`,
-        status: data.status || 'PENDING',
+          (isImmediatelyActive
+            ? `Successfully bought ${machine.title}! Your machine is now ACTIVE & running in the Income Plane.`
+            : `Order created for ${machine.title}! ${currencyInfo.format(totalCost)} has been deducted from your Wallet.`),
+        status: isImmediatelyActive ? 'ACTIVE' : 'PENDING',
       });
       const orderId = data.investment?.id || `inv-${Date.now()}`;
       const machineOrderName = `${machine.title} (${units} Unit${units > 1 ? 's' : ''})`;
       const customerNameStr = user.full_name || user.phone_number || 'Avor Investor';
       const dailyYieldVal = (machine.daily_yield || machine.daily_return || Math.round(totalCost * 0.07 / units)) * units;
       const durationVal = machine.duration_days || 32;
+      const elapsedDaysVal = isImmediatelyActive ? Math.max(1, Number(data.investment?.days_elapsed || 1)) : 0;
 
-      // Save order to real Firebase Firestore 'orders' collection with customername, name, status = "pending"
+      // Save order to real Firebase Firestore 'orders' collection (ACTIVE & DELIVERED if deposit was already confirmed by Admin)
       await createOrderInFirestore({
         id: orderId,
         customername: customerNameStr,
         name: machineOrderName,
-        status: 'pending',
+        status: isImmediatelyActive ? 'ACTIVE & DELIVERED' : 'pending',
         user_id: user.id,
         customer_name: customerNameStr,
         customer_phone: user.phone_number || phoneNumber,
@@ -468,8 +526,8 @@ export const InvestModal: React.FC<InvestModalProps> = ({
         daily_return: dailyYieldVal,
         duration_days: durationVal,
         total_return: (machine.total_return || dailyYieldVal * durationVal) * units,
-        days_elapsed: 0,
-        days_left: durationVal,
+        days_elapsed: elapsedDaysVal,
+        days_left: Math.max(0, durationVal - elapsedDaysVal),
         units,
         start_date: data.investment?.start_date || new Date().toISOString(),
         end_date:
@@ -481,7 +539,9 @@ export const InvestModal: React.FC<InvestModalProps> = ({
 
       await sendMessageToAdmin(
         customerNameStr,
-        `New Pending Machine Order: Bought ${machineOrderName} for UGX ${totalCost.toLocaleString()} using Wallet Balance (${user.phone_number || phoneNumber}) — Wait for admin confirmation in Pending Orders`,
+        isImmediatelyActive
+          ? `Machine Active in Income Plane: Bought ${machineOrderName} for UGX ${totalCost.toLocaleString()} using Admin-Confirmed Wallet Balance (${user.phone_number || phoneNumber})`
+          : `New Pending Machine Order: Bought ${machineOrderName} for UGX ${totalCost.toLocaleString()} using Wallet Balance (${user.phone_number || phoneNumber}) — Wait for admin confirmation in Pending Orders`,
         {
           senderPhone: user.phone_number || phoneNumber,
           receiverPhone: activeReceiver.phone_number || RECEIVER_PHONE,
@@ -490,7 +550,7 @@ export const InvestModal: React.FC<InvestModalProps> = ({
           machineTitle: machineOrderName,
           paymentMethod: 'Wallet Balance',
           paymentReference: orderId,
-          status: 'PENDING',
+          status: isImmediatelyActive ? 'CONFIRMED' : 'PENDING',
         }
       );
       if (onDepositSubmitted) {
