@@ -18,6 +18,8 @@ import {
   denyDepositInFirestore,
   confirmOrderInFirestore,
   denyOrderInFirestore,
+  deleteOrderFromFirestore,
+  saveUserToFirestore,
   approveWithdrawalInFirestore,
   rejectWithdrawalInFirestore,
   clearAllFirestoreOrdersAndMessages,
@@ -208,11 +210,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
   const [depositReceiverName, setDepositReceiverName] = useState<string>('');
   const [isSavingHomepage, setIsSavingHomepage] = useState<boolean>(false);
 
+  // Admin Editable Global Metrics State (Machines Sold, Total Cycles, Total Customers, Total System Wallet)
+  const [isEditingSystemMetrics, setIsEditingSystemMetrics] = useState<boolean>(false);
+  const [editTotalCustomers, setEditTotalCustomers] = useState<number>(0);
+  const [editMachinesSold, setEditMachinesSold] = useState<number>(0);
+  const [editTotalCycles, setEditTotalCycles] = useState<number>(0);
+  const [editActiveCycles, setEditActiveCycles] = useState<number>(0);
+  const [editCompletedCycles, setEditCompletedCycles] = useState<number>(0);
+  const [editTotalSystemWallet, setEditTotalSystemWallet] = useState<number>(0);
+  const [editTotalVerifiedInvestment, setEditTotalVerifiedInvestment] = useState<number>(0);
+  const [editTotalWithdrawn, setEditTotalWithdrawn] = useState<number>(0);
+  const [isSavingSystemMetrics, setIsSavingSystemMetrics] = useState<boolean>(false);
+
   // Security Form State
   const [currentAdminPass, setCurrentAdminPass] = useState<string>('');
   const [newAdminPass, setNewAdminPass] = useState<string>('');
   const [confirmAdminPass, setConfirmAdminPass] = useState<string>('');
   const [isChangingPass, setIsChangingPass] = useState<boolean>(false);
+
+  // Customer Management Edit State
+  const [editCustName, setEditCustName] = useState<string>('');
+  const [editCustPhone, setEditCustPhone] = useState<string>('');
+  const [editCustBalance, setEditCustBalance] = useState<number>(3000);
+  const [editCustWallet, setEditCustWallet] = useState<number>(0);
+  const [editCustHasMachine, setEditCustHasMachine] = useState<boolean>(false);
+  const [editCustRefCode, setEditCustRefCode] = useState<string>('');
+  const [editCustPassword, setEditCustPassword] = useState<string>('');
+  const [isSavingCustomerEdit, setIsSavingCustomerEdit] = useState<boolean>(false);
 
   // Handle Admin Login
   const handleAdminLogin = async (e: React.FormEvent) => {
@@ -278,6 +302,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         const data = await res.json();
 
         setStats(data);
+        if (!isEditingSystemMetrics) {
+          setEditTotalCustomers(Number(data.total_customers_count ?? data.machines_sold_count ?? 0));
+          setEditMachinesSold(Number(data.machines_sold_count ?? 0));
+          setEditTotalCycles(
+            Number(
+              data.total_cycles_count ??
+                (Number(data.active_cycles_count || 0) + Number(data.completed_cycles_count || 0))
+            )
+          );
+          setEditActiveCycles(Number(data.active_cycles_count ?? 0));
+          setEditCompletedCycles(Number(data.completed_cycles_count ?? 0));
+          setEditTotalSystemWallet(Number(data.total_system_wallet ?? data.total_deposited ?? 0));
+          setEditTotalVerifiedInvestment(Number(data.total_verified_investment ?? 0));
+          setEditTotalWithdrawn(Number(data.total_withdrawn ?? 0));
+        }
         setDeposits(data.deposits || []);
         setAdminMessages(data.admin_notifications || []);
         setServerWithdrawals(data.withdrawals || []);
@@ -628,12 +667,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     extraMeta?: Record<string, any>
   ) => {
     setStatusMessage(null);
+    const isWithdrawalTx =
+      String(transactionId || '').startsWith('tx-wdr-') ||
+      String(transactionId || '').startsWith('WDR-') ||
+      String(extraMeta?.payment_reference || '').startsWith('WDR-');
     try {
-      // Update Firestore 'deposits' collection immediately
-      if (action === 'APPROVE') {
-        void approveDepositInFirestore(transactionId);
+      // Update Firestore 'withdrawals' or 'deposits' collection immediately
+      if (isWithdrawalTx) {
+        if (action === 'APPROVE') {
+          void approveWithdrawalInFirestore(transactionId);
+        } else {
+          void rejectWithdrawalInFirestore(transactionId);
+        }
       } else {
-        void denyDepositInFirestore(transactionId);
+        if (action === 'APPROVE') {
+          void approveDepositInFirestore(transactionId, extraMeta);
+        } else {
+          void denyDepositInFirestore(transactionId, extraMeta);
+        }
       }
       const res = await fetch('/api/admin/deposits/action', {
         method: 'POST',
@@ -963,6 +1014,115 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
       if (!res.ok) throw new Error(data.error || 'Failed to update customer status.');
       setStatusMessage({ type: 'success', text: data.message });
       fetchAdminData();
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message });
+    }
+  };
+
+  // Populate Customer Management Edit Form when a user is selected
+  const selectCustomerForManagement = (u: User) => {
+    setSelectedUserId(u.id);
+    setEditCustName(u.full_name || u.name || '');
+    setEditCustPhone(u.phone_number || u.phoneNumber || '');
+    setEditCustBalance(Number(u.balance ?? 3000));
+    setEditCustWallet(Number(u.wallet_balance ?? u.available_wallet ?? 0));
+    setEditCustHasMachine(Boolean(u.has_bought_machine));
+    setEditCustRefCode(u.referral_code || '');
+    setEditCustPassword('');
+  };
+
+  // Handle Save Customer Management Edits (Server + Firestore "users" collection)
+  const handleSaveCustomerEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUserId) return;
+    setIsSavingCustomerEdit(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch('/api/admin/user/edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: selectedUserId,
+          full_name: editCustName,
+          phone_number: editCustPhone,
+          balance: Number(editCustBalance) || 0,
+          wallet_balance: Number(editCustWallet) || 0,
+          has_bought_machine: Boolean(editCustHasMachine),
+          referral_code: editCustRefCode,
+          password: editCustPassword.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update customer details.');
+
+      await saveUserToFirestore({
+        id: selectedUserId,
+        name: editCustName,
+        phone: editCustPhone,
+        balance: Number(editCustBalance) || 0,
+        wallet_balance: Number(editCustWallet) || 0,
+        available_wallet: Number(editCustWallet) || 0,
+        has_bought_machine: Boolean(editCustHasMachine),
+        referral_code: editCustRefCode,
+        ...(editCustPassword.trim() ? { password: editCustPassword.trim() } : {}),
+        status: 'VERIFIED',
+      });
+
+      setStatusMessage({
+        type: 'success',
+        text: data.message || 'Customer details updated in Customer Management & Firestore!',
+      });
+      setEditCustPassword('');
+      await fetchAdminData();
+      if (onDataChanged) onDataChanged();
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message });
+    } finally {
+      setIsSavingCustomerEdit(false);
+    }
+  };
+
+  // Handle Remove / Delete a Running Machine Cycle by Removing Machine
+  const handleRemoveMachineCycle = async (investmentId: string, invObj?: any) => {
+    setStatusMessage(null);
+    try {
+      // 1. Delete from Firestore 'orders' collection immediately
+      await deleteOrderFromFirestore(investmentId);
+
+      // 2. Remove from local state immediately so UI reflects removal right away
+      setFirestoreOrders((prev) => prev.filter((o) => o.id !== investmentId));
+      setServerInvestments((prev) => prev.filter((i) => i.id !== investmentId));
+      setInvestmentsLedger((prev) => prev.filter((i) => i.id !== investmentId));
+
+      // 3. Delete from backend server & update customer's machine state
+      const res = await fetch('/api/admin/investments/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          investment_id: investmentId,
+          user_id: invObj?.user_id,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to remove running machine cycle.');
+
+      try {
+        const bc = new BroadcastChannel('avor_realtime_wallet_sync');
+        bc.postMessage({
+          type: 'WALLET_CONFIRMED_SYNC',
+          order_type: 'ORDER_REMOVED_SYNC',
+          investment_id: investmentId,
+          timestamp: new Date().toISOString(),
+        });
+        bc.close();
+      } catch {}
+
+      setStatusMessage({
+        type: 'success',
+        text: data.message || `Removed machine & deleted running cycle (${investmentId})!`,
+      });
+      await fetchAdminData();
+      if (onDataChanged) onDataChanged();
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message });
     }
@@ -1509,6 +1669,68 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
     }
   };
 
+  // Handle Save Admin-Edited Global System Metrics (Machines Sold, Total Cycles, Total Customers, Total System Wallet)
+  const handleSaveSystemMetrics = async (e?: React.FormEvent, resetToAuto: boolean = false) => {
+    if (e) e.preventDefault();
+    setIsSavingSystemMetrics(true);
+    setStatusMessage(null);
+
+    try {
+      const payload = resetToAuto
+        ? { reset_to_auto: true }
+        : {
+            total_customers_count: Math.max(0, Number(editTotalCustomers) || 0),
+            machines_sold_count: Math.max(0, Number(editMachinesSold) || 0),
+            total_cycles_count: Math.max(0, Number(editTotalCycles) || 0),
+            active_cycles_count: Math.max(0, Number(editActiveCycles) || 0),
+            completed_cycles_count: Math.max(0, Number(editCompletedCycles) || 0),
+            total_system_wallet: Math.max(0, Number(editTotalSystemWallet) || 0),
+            total_verified_investment: Math.max(0, Number(editTotalVerifiedInvestment) || 0),
+            total_withdrawn: Math.max(0, Number(editTotalWithdrawn) || 0),
+          };
+
+      const res = await fetch('/api/admin/config/metrics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update system metrics.');
+
+      if (!resetToAuto) {
+        setStats((prev: any) =>
+          prev
+            ? {
+                ...prev,
+                total_customers_count: payload.total_customers_count,
+                machines_sold_count: payload.machines_sold_count,
+                total_cycles_count: payload.total_cycles_count,
+                active_cycles_count: payload.active_cycles_count,
+                completed_cycles_count: payload.completed_cycles_count,
+                total_system_wallet: payload.total_system_wallet,
+                total_verified_investment: payload.total_verified_investment,
+                total_withdrawn: payload.total_withdrawn,
+              }
+            : prev
+        );
+      }
+
+      setStatusMessage({
+        type: 'success',
+        text: resetToAuto
+          ? 'System metrics reset to automatic live calculation!'
+          : 'System metrics (Machines Sold, Total Cycles, Total Customers & Total System Wallet) saved permanently!',
+      });
+      setIsEditingSystemMetrics(false);
+      await fetchAdminData();
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message });
+    } finally {
+      setIsSavingSystemMetrics(false);
+    }
+  };
+
   // Handle Change Password
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1710,6 +1932,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
             <span>Reset System to 0</span>
           </button>
           <button
+            type="button"
+            onClick={() => {
+              if (!isEditingSystemMetrics && stats) {
+                setEditTotalCustomers(Number(stats.total_customers_count ?? stats.machines_sold_count ?? 0));
+                setEditMachinesSold(Number(stats.machines_sold_count ?? 0));
+                setEditTotalCycles(
+                  Number(
+                    stats.total_cycles_count ??
+                      (Number(stats.active_cycles_count || 0) + Number(stats.completed_cycles_count || 0))
+                  )
+                );
+                setEditActiveCycles(Number(stats.active_cycles_count ?? 0));
+                setEditCompletedCycles(Number(stats.completed_cycles_count ?? 0));
+                setEditTotalSystemWallet(Number(stats.total_system_wallet ?? stats.total_deposited ?? 0));
+                setEditTotalVerifiedInvestment(Number(stats.total_verified_investment ?? 0));
+                setEditTotalWithdrawn(Number(stats.total_withdrawn ?? 0));
+              }
+              setIsEditingSystemMetrics((prev) => !prev);
+            }}
+            className="px-4 py-2 bg-gradient-to-r from-cyan-700 to-blue-800 hover:from-cyan-600 hover:to-blue-700 text-white text-xs font-bold rounded-xl border border-cyan-400/50 flex items-center gap-2 cursor-pointer transition-all shrink-0 shadow-sm"
+          >
+            <Edit3 className="w-3.5 h-3.5 text-cyan-200" />
+            <span>{isEditingSystemMetrics ? 'Close Stats Editor' : 'Edit System Stats'}</span>
+          </button>
+          <button
             onClick={() => {
               fetchAdminData();
               fetchMachines();
@@ -1723,48 +1970,251 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
         </div>
       </div>
 
+      {/* Inline Editor for Machines Sold, Total Cycles, Total Customers & Total System Wallet */}
+      {isEditingSystemMetrics && (
+        <form
+          onSubmit={(e) => handleSaveSystemMetrics(e, false)}
+          className="shining-card border-2 border-cyan-500/60 bg-[#06132b] p-5 rounded-2xl shadow-2xl space-y-4 text-white"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-blue-900/70">
+            <div>
+              <h3 className="text-sm font-black text-cyan-300 uppercase tracking-wider flex items-center gap-2">
+                <Edit3 className="w-4 h-4 text-cyan-400" />
+                <span>Edit Global System Metrics (Permanent Cloud &amp; Server Save)</span>
+              </h3>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Customize <strong>Machines Sold</strong>, <strong>Total Cycles</strong> (Active &amp; Completed), <strong>Total Customers</strong>, and <strong>Total System Wallet</strong>.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={isSavingSystemMetrics}
+                onClick={() => handleSaveSystemMetrics(undefined, true)}
+                className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold border border-slate-600 cursor-pointer"
+              >
+                Reset to Auto Live Count
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsEditingSystemMetrics(false)}
+                className="p-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            <div>
+              <label className="block text-[11px] font-bold text-cyan-300 uppercase mb-1">
+                Total Customers
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={editTotalCustomers}
+                onChange={(e) => setEditTotalCustomers(Number(e.target.value))}
+                className="w-full px-3.5 py-2.5 bg-[#040a18] border border-cyan-500/40 rounded-xl text-sm font-mono font-black text-white focus:border-cyan-400 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-cyan-300 uppercase mb-1">
+                Machines Sold
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={editMachinesSold}
+                onChange={(e) => setEditMachinesSold(Number(e.target.value))}
+                className="w-full px-3.5 py-2.5 bg-[#040a18] border border-cyan-500/40 rounded-xl text-sm font-mono font-black text-white focus:border-cyan-400 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-teal-300 uppercase mb-1">
+                Total Cycles (Active + Completed)
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={editTotalCycles}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setEditTotalCycles(val);
+                  setEditActiveCycles(Math.max(0, val - editCompletedCycles));
+                }}
+                className="w-full px-3.5 py-2.5 bg-[#040a18] border border-teal-500/40 rounded-xl text-sm font-mono font-black text-teal-300 focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-sky-300 uppercase mb-1">
+                Total System Wallet (UGX)
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={editTotalSystemWallet}
+                onChange={(e) => setEditTotalSystemWallet(Number(e.target.value))}
+                className="w-full px-3.5 py-2.5 bg-[#040a18] border border-sky-500/40 rounded-xl text-sm font-mono font-black text-sky-300 focus:border-sky-400 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                Active Cycles (Running)
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={editActiveCycles}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setEditActiveCycles(val);
+                  setEditTotalCycles(val + editCompletedCycles);
+                }}
+                className="w-full px-3 py-2 bg-[#040a18] border border-blue-900/80 rounded-xl text-xs font-mono font-bold text-teal-300 focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                Completed Cycles (Finished)
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={editCompletedCycles}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setEditCompletedCycles(val);
+                  setEditTotalCycles(editActiveCycles + val);
+                }}
+                className="w-full px-3 py-2 bg-[#040a18] border border-blue-900/80 rounded-xl text-xs font-mono font-bold text-slate-200 focus:border-blue-400 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-emerald-300 uppercase mb-1">
+                Total Verified Investment (UGX)
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={editTotalVerifiedInvestment}
+                onChange={(e) => setEditTotalVerifiedInvestment(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-[#040a18] border border-blue-900/80 rounded-xl text-xs font-mono font-bold text-emerald-300 focus:border-emerald-400 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-emerald-300 uppercase mb-1">
+                Total Cashout Paid (UGX)
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={editTotalWithdrawn}
+                onChange={(e) => setEditTotalWithdrawn(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-[#040a18] border border-blue-900/80 rounded-xl text-xs font-mono font-bold text-emerald-300 focus:border-emerald-400 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button
+              type="submit"
+              disabled={isSavingSystemMetrics}
+              className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-xs font-black uppercase tracking-wider rounded-xl border border-emerald-400/50 flex items-center gap-2 cursor-pointer shadow-lg"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>{isSavingSystemMetrics ? 'Saving Metrics...' : 'Save System Metrics'}</span>
+            </button>
+          </div>
+        </form>
+      )}
+
       {/* Global Admin Metrics */}
       {stats && (
         <div className="space-y-3">
           <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-            <div className="shining-card border border-blue-950/80 p-4 rounded-xl shadow-md">
-              <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Customers</span>
+            <div
+              onClick={() => setIsEditingSystemMetrics(true)}
+              className="shining-card border border-blue-950/80 hover:border-cyan-500/50 p-4 rounded-xl shadow-md cursor-pointer transition-all group"
+              title="Click to edit Total Customers"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Customers</span>
+                <Edit3 className="w-3 h-3 text-slate-500 group-hover:text-cyan-400 transition-colors" />
+              </div>
               <span className="text-xl font-extrabold text-white font-mono mt-1 block">
                 {stats.total_customers_count ?? stats.machines_sold_count ?? 0}
               </span>
-              <span className="text-[10px] text-slate-500 block mt-0.5">Approved machine buyers</span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">Click to edit • Customers</span>
             </div>
 
-            <div className="shining-card border border-blue-950/80 p-4 rounded-xl shadow-md">
-              <span className="text-[10px] text-slate-400 font-bold uppercase block">Machines Sold</span>
+            <div
+              onClick={() => setIsEditingSystemMetrics(true)}
+              className="shining-card border border-blue-950/80 hover:border-cyan-500/50 p-4 rounded-xl shadow-md cursor-pointer transition-all group"
+              title="Click to edit Machines Sold"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Machines Sold</span>
+                <Edit3 className="w-3 h-3 text-slate-500 group-hover:text-cyan-400 transition-colors" />
+              </div>
               <span className="text-xl font-extrabold text-white font-mono mt-1 block">
                 {stats.machines_sold_count ?? 0}
               </span>
-              <span className="text-[10px] text-slate-500 block mt-0.5">Approved by Admin</span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">Click to edit • Approved</span>
             </div>
 
-            <div className="shining-card border border-blue-950/80 p-4 rounded-xl shadow-md col-span-2">
-              <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Verified Investment</span>
+            <div
+              onClick={() => setIsEditingSystemMetrics(true)}
+              className="shining-card border border-blue-950/80 hover:border-emerald-500/50 p-4 rounded-xl shadow-md col-span-2 cursor-pointer transition-all group"
+              title="Click to edit Total Verified Investment"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Verified Investment</span>
+                <Edit3 className="w-3 h-3 text-slate-500 group-hover:text-emerald-400 transition-colors" />
+              </div>
               <span className="text-xl font-extrabold text-emerald-400 font-mono mt-1 block">
                 UGX {(stats.total_verified_investment ?? 0).toLocaleString()}
               </span>
               <span className="text-[10px] text-emerald-400/70 block mt-0.5">Admin-approved machine capital</span>
             </div>
 
-            <div className="shining-card border border-blue-950/80 p-4 rounded-xl shadow-md">
-              <span className="text-[10px] text-slate-400 font-bold uppercase block">Active Cycles</span>
+            <div
+              onClick={() => setIsEditingSystemMetrics(true)}
+              className="shining-card border border-blue-950/80 hover:border-teal-500/50 p-4 rounded-xl shadow-md cursor-pointer transition-all group"
+              title="Click to edit Total & Active Cycles"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Total / Active Cycles</span>
+                <Edit3 className="w-3 h-3 text-slate-500 group-hover:text-teal-400 transition-colors" />
+              </div>
               <span className="text-xl font-extrabold text-teal-400 font-mono mt-1 block">
-                {stats.active_cycles_count ?? 0}
+                {stats.total_cycles_count ?? ((stats.active_cycles_count ?? 0) + (stats.completed_cycles_count ?? 0))}
               </span>
-              <span className="text-[10px] text-slate-500 block mt-0.5">Machines running</span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">
+                Active: {stats.active_cycles_count ?? 0} • Click to edit
+              </span>
             </div>
 
-            <div className="shining-card border border-blue-950/80 p-4 rounded-xl shadow-md">
-              <span className="text-[10px] text-slate-400 font-bold uppercase block">Completed Cycles</span>
+            <div
+              onClick={() => setIsEditingSystemMetrics(true)}
+              className="shining-card border border-blue-950/80 hover:border-cyan-500/50 p-4 rounded-xl shadow-md cursor-pointer transition-all group"
+              title="Click to edit Completed Cycles"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Completed Cycles</span>
+                <Edit3 className="w-3 h-3 text-slate-500 group-hover:text-cyan-400 transition-colors" />
+              </div>
               <span className="text-xl font-extrabold text-slate-300 font-mono mt-1 block">
                 {stats.completed_cycles_count ?? 0}
               </span>
-              <span className="text-[10px] text-slate-500 block mt-0.5">Finished active cycle</span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">Finished cycle • Click to edit</span>
             </div>
           </div>
 
@@ -1810,20 +2260,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
               <span className="text-[10px] text-slate-500 block">Awaiting Admin approval</span>
             </div>
 
-            <div className="shining-card border border-blue-950/80 p-3.5 rounded-xl shadow-md">
-              <span className="text-[10px] text-slate-400 font-bold uppercase block">Total System Wallet</span>
+            <div
+              onClick={() => setIsEditingSystemMetrics(true)}
+              className="shining-card border border-blue-950/80 hover:border-sky-500/50 p-3.5 rounded-xl shadow-md cursor-pointer transition-all group"
+              title="Click to edit Total System Wallet"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Total System Wallet</span>
+                <Edit3 className="w-3 h-3 text-slate-500 group-hover:text-sky-400 transition-colors" />
+              </div>
               <span className="text-base font-extrabold text-sky-400 font-mono mt-0.5 block">
                 UGX {(stats.total_system_wallet ?? stats.total_deposited ?? 0).toLocaleString()}
               </span>
-              <span className="text-[10px] text-slate-500 block">Approved by Admin</span>
+              <span className="text-[10px] text-slate-500 block">Click to edit • System Wallet</span>
             </div>
 
-            <div className="shining-card border border-blue-950/80 p-3.5 rounded-xl shadow-md">
-              <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Cashout Paid</span>
+            <div
+              onClick={() => setIsEditingSystemMetrics(true)}
+              className="shining-card border border-blue-950/80 hover:border-emerald-500/50 p-3.5 rounded-xl shadow-md cursor-pointer transition-all group"
+              title="Click to edit Total Cashout Paid"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Cashout Paid</span>
+                <Edit3 className="w-3 h-3 text-slate-500 group-hover:text-emerald-400 transition-colors" />
+              </div>
               <span className="text-base font-extrabold text-emerald-400 font-mono mt-0.5 block">
                 UGX {(stats.total_withdrawn ?? 0).toLocaleString()}
               </span>
-              <span className="text-[10px] text-slate-500 block">Approved by Admin</span>
+              <span className="text-[10px] text-slate-500 block">Click to edit • Approved</span>
             </div>
           </div>
         </div>
@@ -2297,14 +2761,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                                 >
                                   Deny / Refund
                                 </button>
+                                <button
+                                  onClick={() => handleRemoveMachineCycle(inv.id, inv)}
+                                  className="text-[11px] font-sans font-bold px-2.5 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-500/40 flex items-center gap-1 cursor-pointer transition-all"
+                                  title="Remove Machine & Delete Order"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>Remove Machine</span>
+                                </button>
                               </div>
                             ) : (
-                              <button
-                                onClick={() => handleToggleInvestmentStatus(inv.id)}
-                                className="text-[11px] font-sans font-bold px-2.5 py-1 rounded-lg underline text-slate-300 hover:text-emerald-400 cursor-pointer transition-all"
-                              >
-                                Toggle Status
-                              </button>
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  onClick={() => handleToggleInvestmentStatus(inv.id)}
+                                  className="text-[11px] font-sans font-bold px-2.5 py-1 rounded-lg underline text-slate-300 hover:text-emerald-400 cursor-pointer transition-all"
+                                >
+                                  Toggle Status
+                                </button>
+                                <button
+                                  onClick={() => handleRemoveMachineCycle(inv.id, inv)}
+                                  className="text-[11px] font-sans font-bold px-2.5 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-800 text-rose-200 border border-rose-500/40 flex items-center gap-1 cursor-pointer transition-all"
+                                  title="Remove Machine & Delete Running Cycle"
+                                >
+                                  <Trash2 className="w-3 h-3 text-rose-400" />
+                                  <span>Remove Machine / Delete Cycle</span>
+                                </button>
+                              </div>
                             )}
                           </td>
                         </tr>
@@ -4193,7 +4675,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                         className={`hover:bg-blue-950/40 cursor-pointer transition-colors ${
                           selectedUserId === u.id ? 'bg-[#09132e] border-l-2 border-blue-500' : ''
                         }`}
-                        onClick={() => setSelectedUserId(u.id)}
+                        onClick={() => selectCustomerForManagement(u)}
                       >
                         <td className="py-2.5 px-2 font-bold text-white">
                           <div>{u.full_name}</div>
@@ -4225,11 +4707,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setSelectedUserId(u.id);
+                                selectCustomerForManagement(u);
                               }}
-                              className="px-2 py-1 bg-[#09132e] hover:bg-[#0f2150] text-blue-300 text-[10px] font-bold rounded-lg border border-blue-900/50 cursor-pointer"
+                              className="px-2.5 py-1 bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 text-[10px] font-bold rounded-lg border border-cyan-500/40 flex items-center gap-1 cursor-pointer"
                             >
-                              Select
+                              <Edit3 className="w-3 h-3" />
+                              <span>Edit Customer</span>
                             </button>
                             <button
                               onClick={(e) => {
@@ -4252,34 +4735,228 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onMachineCreated, onData
                 </tbody>
               </table>
             </div>
+
+            {/* Selected Customer's Running Machine Cycles & Direct Machine Removal */}
+            {selectedUserId && (() => {
+              const selectedCustomer = userList.find((u) => u.id === selectedUserId);
+              const customerCycles = investmentsLedger.filter((inv) => {
+                if (inv.user_id === selectedUserId) return true;
+                const uDigits = String(selectedCustomer?.phone_number || '').replace(/\D/g, '').slice(-9);
+                const invDigits = String(inv.customer_phone || inv.user_id || '').replace(/\D/g, '').slice(-9);
+                return uDigits.length >= 7 && uDigits === invDigits;
+              });
+
+              return (
+                <div className="pt-4 border-t border-blue-950/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-black uppercase tracking-wider text-cyan-300 flex items-center gap-2">
+                      <Cpu className="w-4 h-4 text-cyan-400" />
+                      <span>
+                        Running Machine Cycles for {selectedCustomer?.full_name || selectedUserId} ({customerCycles.length})
+                      </span>
+                    </h4>
+                    <span className="text-[10px] text-slate-400">
+                      Click &quot;Remove Machine / Delete Cycle&quot; to stop &amp; remove any machine cycle
+                    </span>
+                  </div>
+
+                  {customerCycles.length === 0 ? (
+                    <div className="p-4 rounded-xl bg-[#050a18] border border-blue-950/70 text-xs text-slate-400 text-center">
+                      This customer currently has no running machine cycles.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {customerCycles.map((cyc) => (
+                        <div
+                          key={cyc.id}
+                          className="p-3 rounded-xl bg-[#050c1d] border border-blue-900/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                        >
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono font-bold text-sky-400">{cyc.id}</span>
+                              <span className="font-black text-white">{cyc.name || cyc.machine_title}</span>
+                              <span
+                                className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold uppercase ${
+                                  cyc.status === 'ACTIVE'
+                                    ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/40'
+                                    : cyc.status === 'PENDING'
+                                      ? 'bg-amber-950/80 text-amber-300 border border-amber-500/40'
+                                      : 'bg-slate-800 text-slate-300'
+                                }`}
+                              >
+                                {cyc.status}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-400 font-mono">
+                              Amount: UGX {Number(cyc.amount_invested || cyc.amount || 0).toLocaleString()} • Daily: UGX{' '}
+                              {Number(cyc.daily_return || cyc.daily_yield || 0).toLocaleString()} • {cyc.duration_days} Days
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleInvestmentStatus(cyc.id)}
+                              className="px-2.5 py-1.5 rounded-lg bg-[#09132e] hover:bg-[#0f2150] text-slate-200 border border-blue-800/60 text-[10px] font-bold cursor-pointer"
+                            >
+                              Toggle Status
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveMachineCycle(cyc.id, cyc)}
+                              className="px-3 py-1.5 rounded-lg bg-rose-950/90 hover:bg-rose-800 text-rose-200 border border-rose-500/50 text-[10px] font-black flex items-center gap-1 cursor-pointer shadow-sm"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                              <span>Remove Machine / Delete Cycle</span>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
-          <div className="shining-card border border-blue-950/80 rounded-2xl p-6 space-y-4 shadow-xl text-white">
+          <div className="shining-card border border-blue-950/80 rounded-2xl p-6 space-y-5 shadow-xl text-white">
+            {/* Edit Customer Management Details Form */}
+            <div className="space-y-3 pb-4 border-b border-blue-950/80">
+              <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                <Edit3 className="w-4 h-4 text-cyan-400" />
+                <span>Edit Customer Management</span>
+              </h3>
+
+              <form onSubmit={handleSaveCustomerEdit} className="space-y-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                    Select Customer to Edit
+                  </label>
+                  <select
+                    value={selectedUserId}
+                    onChange={(e) => {
+                      const u = userList.find((usr) => usr.id === e.target.value);
+                      if (u) selectCustomerForManagement(u);
+                      else setSelectedUserId(e.target.value);
+                    }}
+                    className="w-full px-3 py-2 bg-[#050a18] border border-blue-950/80 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
+                    required
+                  >
+                    <option value="">-- Select Customer --</option>
+                    {userList.map((u) => (
+                      <option key={u.id} value={u.id} className="bg-[#050a18] text-white">
+                        {u.full_name} ({u.phone_number}) - Bal: {u.balance.toLocaleString()} UGX
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
+                      Customer Name
+                    </label>
+                    <input
+                      type="text"
+                      value={editCustName}
+                      onChange={(e) => setEditCustName(e.target.value)}
+                      placeholder="Customer Full Name"
+                      className="w-full px-3 py-2 bg-[#050a18] border border-blue-950/80 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
+                      Phone Number
+                    </label>
+                    <input
+                      type="text"
+                      value={editCustPhone}
+                      onChange={(e) => setEditCustPhone(e.target.value)}
+                      placeholder="+2567..."
+                      className="w-full px-3 py-2 bg-[#050a18] border border-blue-950/80 rounded-xl text-xs font-mono text-emerald-300 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
+                      Account Balance (UGX)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editCustBalance}
+                      onChange={(e) => setEditCustBalance(Number(e.target.value))}
+                      className="w-full px-3 py-2 bg-[#050a18] border border-blue-950/80 rounded-xl text-xs font-mono font-bold text-white focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
+                      Wallet Balance (UGX)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editCustWallet}
+                      onChange={(e) => setEditCustWallet(Number(e.target.value))}
+                      className="w-full px-3 py-2 bg-[#050a18] border border-blue-950/80 rounded-xl text-xs font-mono font-bold text-sky-300 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
+                      Referral Code
+                    </label>
+                    <input
+                      type="text"
+                      value={editCustRefCode}
+                      onChange={(e) => setEditCustRefCode(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#050a18] border border-blue-950/80 rounded-xl text-xs font-mono text-white focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
+                      Reset Password (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={editCustPassword}
+                      onChange={(e) => setEditCustPassword(e.target.value)}
+                      placeholder="New password..."
+                      className="w-full px-3 py-2 bg-[#050a18] border border-blue-950/80 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 text-xs text-slate-200 cursor-pointer pt-1">
+                  <input
+                    type="checkbox"
+                    checked={editCustHasMachine}
+                    onChange={(e) => setEditCustHasMachine(e.target.checked)}
+                    className="rounded border-blue-800 bg-[#050a18] text-cyan-500"
+                  />
+                  <span>Machine Access Unlocked (WhatsApp, PDF, Invite, Manage Open)</span>
+                </label>
+
+                <button
+                  type="submit"
+                  disabled={isSavingCustomerEdit || !selectedUserId}
+                  className="w-full py-2.5 bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-500 hover:to-blue-600 text-white font-black text-xs rounded-xl shadow-md transition-all cursor-pointer disabled:opacity-50 border border-cyan-400/40"
+                >
+                  {isSavingCustomerEdit ? 'Saving Customer Changes...' : 'Save Customer Details'}
+                </button>
+              </form>
+            </div>
+
             <h3 className="text-base font-extrabold text-white flex items-center gap-2">
               <Send className="w-4 h-4 text-blue-400" />
-              <span>Credit / Deduct Wallet</span>
+              <span>Quick Credit / Deduct Balance</span>
             </h3>
 
             <form onSubmit={handleCreditUser} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-300 uppercase mb-1">
-                  Target Member
-                </label>
-                <select
-                  value={selectedUserId}
-                  onChange={(e) => setSelectedUserId(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#050a18] border border-blue-950/80 rounded-xl text-xs text-white focus:outline-none focus:border-blue-500"
-                  required
-                >
-                  <option value="">-- Select Member --</option>
-                  {userList.map((u) => (
-                    <option key={u.id} value={u.id} className="bg-[#050a18] text-white">
-                      {u.full_name} ({u.phone_number}) - Bal: {u.balance.toLocaleString()} UGX
-                    </option>
-                  ))}
-                </select>
-              </div>
-
               <div>
                 <label className="block text-xs font-bold text-slate-300 uppercase mb-1">
                   Adjustment Amount (UGX)

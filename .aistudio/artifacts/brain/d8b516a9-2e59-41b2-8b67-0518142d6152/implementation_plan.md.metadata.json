@@ -1,6 +1,0 @@
-{
-  "summary":  "Implementation plan to resolve the Vite WebSocket connection error (`Error: WebSocket closed without opened`) in the Express + Vite middleware server while preserving standalone PWA installation and all Avor invest features.",
-  "updatedAt":  "2026-10-28T21:05:10.510702475Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

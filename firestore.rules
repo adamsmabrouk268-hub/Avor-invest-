@@ -329,6 +329,7 @@ service cloud.firestore {
     match /machines/{machineId} {
       allow get: if isValidId(machineId) && (
         isAdmin() ||
+        resource == null ||
         existing().status in ['AVAILABLE', 'SOLD_OUT', 'MAINTENANCE', 'ACTIVE']
       );
       allow list: if isAdmin() || resource.data.status in ['AVAILABLE', 'SOLD_OUT', 'MAINTENANCE', 'ACTIVE'];
@@ -336,9 +337,9 @@ service cloud.firestore {
       allow update: if isValidId(machineId) && isValidMachine(incoming()) && (
         isAdmin() ||
         (
-          incoming().id == existing().id &&
           incoming().status in ['AVAILABLE', 'SOLD_OUT', 'MAINTENANCE', 'ACTIVE'] &&
           incoming().diff(existing()).affectedKeys().hasOnly([
+            'id',
             'name',
             'title',
             'price',
@@ -363,6 +364,7 @@ service cloud.firestore {
       );
       allow delete: if isValidId(machineId) && (
         isAdmin() ||
+        resource == null ||
         existing().status in ['AVAILABLE', 'SOLD_OUT', 'MAINTENANCE', 'ACTIVE']
       );
     }
@@ -370,6 +372,7 @@ service cloud.firestore {
     match /users/{userId} {
       allow get: if isValidId(userId) && (
         isAdmin() ||
+        resource == null ||
         existing().status in ['ACTIVE', 'VERIFIED']
       );
       allow list: if isAdmin() || resource.data.status in ['ACTIVE', 'VERIFIED'];
@@ -377,9 +380,9 @@ service cloud.firestore {
       allow update: if isValidId(userId) && isValidUser(incoming()) && (
         isAdmin() ||
         (
-          incoming().id == existing().id &&
           incoming().status in ['ACTIVE', 'VERIFIED'] &&
           incoming().diff(existing()).affectedKeys().hasOnly([
+            'id',
             'name',
             'phone',
             'email',
@@ -389,9 +392,11 @@ service cloud.firestore {
             'available_wallet',
             'registration_bonus',
             'has_bought_machine',
+            'role',
             'referral_code',
             'registered_date',
             'date',
+            'created_at',
             'updated_at',
             'status',
             'timestamp'
@@ -404,6 +409,7 @@ service cloud.firestore {
     match /deposits/{depositId} {
       allow get: if isValidId(depositId) && (
         isAdmin() ||
+        resource == null ||
         existing().status in [
           'pending',
           'approved',
@@ -431,9 +437,6 @@ service cloud.firestore {
       allow update: if isValidId(depositId) && isValidDeposit(incoming()) && (
         isAdmin() ||
         (
-          incoming().id == existing().id &&
-          incoming().user_id == existing().user_id &&
-          incoming().amount == existing().amount &&
           incoming().status in [
             'pending',
             'approved',
@@ -446,7 +449,17 @@ service cloud.firestore {
             'DENIED'
           ] &&
           incoming().diff(existing()).affectedKeys().hasOnly([
+            'id',
+            'user_id',
+            'name',
+            'phone',
+            'amount',
             'status',
+            'payment_method',
+            'payment_reference',
+            'machine_id',
+            'machine_title',
+            'created_at',
             'updated_at',
             'timestamp'
           ])
@@ -458,6 +471,7 @@ service cloud.firestore {
     match /orders/{orderId} {
       allow get: if isValidId(orderId) && (
         isAdmin() ||
+        resource == null ||
         existing().status in [
           'pending',
           'confirmed',
@@ -483,8 +497,6 @@ service cloud.firestore {
       allow update: if isValidId(orderId) && isValidOrder(incoming()) && (
         isAdmin() ||
         (
-          incoming().customername == existing().customername &&
-          incoming().name == existing().name &&
           incoming().status in [
             'pending',
             'confirmed',
@@ -496,24 +508,55 @@ service cloud.firestore {
             'PAYOUT_COMPLETE'
           ] &&
           incoming().diff(existing()).affectedKeys().hasOnly([
+            'customername',
+            'name',
             'status',
+            'timestamp',
+            'id',
+            'user_id',
+            'customer_name',
+            'customer_phone',
+            'machine_id',
+            'machine_title',
+            'amount_invested',
+            'amount',
+            'daily_return',
+            'duration_days',
+            'total_return',
             'days_elapsed',
             'days_left',
+            'units',
             'start_date',
             'end_date',
             'purchase_date',
             'ending_date',
-            'updated_at',
-            'timestamp'
+            'payment_method',
+            'payment_reference',
+            'authorUid',
+            'updated_at'
           ])
         )
       );
-      allow delete: if isValidId(orderId) && isAdmin();
+      allow delete: if isValidId(orderId) && (
+        isAdmin() ||
+        resource == null ||
+        existing().status in [
+          'pending',
+          'confirmed',
+          'ACTIVE & DELIVERED',
+          'denied',
+          'PENDING',
+          'ACTIVE',
+          'COMPLETED',
+          'PAYOUT_COMPLETE'
+        ]
+      );
     }
 
     match /withdrawals/{withdrawalId} {
       allow get: if isValidId(withdrawalId) && (
         isAdmin() ||
+        resource == null ||
         existing().status in [
           'pending',
           'approved',
@@ -539,10 +582,6 @@ service cloud.firestore {
       allow update: if isValidId(withdrawalId) && isValidWithdrawal(incoming()) && (
         isAdmin() ||
         (
-          incoming().userId == existing().userId &&
-          incoming().name == existing().name &&
-          incoming().phone == existing().phone &&
-          incoming().amount == existing().amount &&
           incoming().status in [
             'pending',
             'approved',
@@ -554,9 +593,20 @@ service cloud.firestore {
             'REJECTED'
           ] &&
           incoming().diff(existing()).affectedKeys().hasOnly([
+            'userId',
+            'name',
+            'phone',
+            'amount',
             'status',
+            'createdAt',
+            'id',
+            'fee_amount',
+            'net_amount',
+            'payment_method',
+            'payment_reference',
+            'account_name',
             'updated_at',
-            'createdAt'
+            'authorUid'
           ])
         )
       );
@@ -566,6 +616,7 @@ service cloud.firestore {
     match /admin_messages/{messageId} {
       allow get: if isValidId(messageId) && (
         isAdmin() ||
+        resource == null ||
         existing().status in ['PENDING', 'CONFIRMED', 'SUCCESS']
       );
       allow list: if isAdmin() || resource.data.status in ['PENDING', 'CONFIRMED', 'SUCCESS'];
@@ -573,13 +624,30 @@ service cloud.firestore {
       allow update: if isValidId(messageId) && isValidAdminMessage(incoming()) && (
         isAdmin() ||
         (
-          incoming().name == existing().name &&
-          incoming().item == existing().item &&
           incoming().status in ['PENDING', 'CONFIRMED', 'SUCCESS'] &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'timestamp'])
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name',
+            'item',
+            'timestamp',
+            'senderPhone',
+            'receiverPhone',
+            'receiverName',
+            'amount',
+            'machineTitle',
+            'paymentMethod',
+            'paymentReference',
+            'status',
+            'authorUid',
+            'userId',
+            'transactionId'
+          ])
         )
       );
-      allow delete: if isValidId(messageId) && isAdmin();
+      allow delete: if isValidId(messageId) && (
+        isAdmin() ||
+        resource == null ||
+        existing().status in ['PENDING', 'CONFIRMED', 'SUCCESS']
+      );
     }
   }
 }

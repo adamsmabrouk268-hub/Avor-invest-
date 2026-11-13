@@ -269,7 +269,7 @@ export async function saveMachineToFirestore(
   }
 
   try {
-    await setDoc(doc(db, 'machines', cleanId), payload);
+    await setDoc(doc(db, 'machines', cleanId), payload, { merge: true });
     return cleanId;
   } catch (error) {
     try {
@@ -497,7 +497,7 @@ export async function saveUserToFirestore(
   }
 
   try {
-    await setDoc(doc(db, 'users', cleanId), payload);
+    await setDoc(doc(db, 'users', cleanId), payload, { merge: true });
     return cleanId;
   } catch (error) {
     try {
@@ -725,7 +725,7 @@ export async function createDepositInFirestore(
   }
 
   try {
-    await setDoc(doc(db, 'deposits', cleanId), payload);
+    await setDoc(doc(db, 'deposits', cleanId), payload, { merge: true });
     return cleanId;
   } catch (error) {
     try {
@@ -736,15 +736,33 @@ export async function createDepositInFirestore(
   }
 }
 
-export async function approveDepositInFirestore(depositId: string): Promise<void> {
+export async function approveDepositInFirestore(
+  depositId: string,
+  extraMeta?: Record<string, any>
+): Promise<void> {
   const cleanId = depositId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
   if (!cleanId) return;
   const path = `deposits/${cleanId}`;
   try {
-    await updateDoc(doc(db, 'deposits', cleanId), {
-      status: 'approved',
-      updated_at: new Date().toISOString().slice(0, 40),
-    });
+    const ref = doc(db, 'deposits', cleanId);
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      await updateDoc(ref, {
+        status: 'approved',
+        updated_at: new Date().toISOString().slice(0, 40),
+      });
+    } else if (extraMeta) {
+      await createDepositInFirestore({
+        id: cleanId,
+        user_id: String(extraMeta.user_id || extraMeta.customer_phone || cleanId),
+        name: String(extraMeta.customer_name || extraMeta.name || 'Avor Investor'),
+        phone: String(extraMeta.customer_phone || extraMeta.phone || '+256700000000'),
+        amount: Number(extraMeta.amount || 0),
+        status: 'approved',
+        payment_method: extraMeta.payment_method,
+        payment_reference: extraMeta.payment_reference || cleanId,
+      });
+    }
   } catch (error) {
     try {
       handleFirestoreError(error, OperationType.UPDATE, path);
@@ -752,15 +770,33 @@ export async function approveDepositInFirestore(depositId: string): Promise<void
   }
 }
 
-export async function denyDepositInFirestore(depositId: string): Promise<void> {
+export async function denyDepositInFirestore(
+  depositId: string,
+  extraMeta?: Record<string, any>
+): Promise<void> {
   const cleanId = depositId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
   if (!cleanId) return;
   const path = `deposits/${cleanId}`;
   try {
-    await updateDoc(doc(db, 'deposits', cleanId), {
-      status: 'rejected',
-      updated_at: new Date().toISOString().slice(0, 40),
-    });
+    const ref = doc(db, 'deposits', cleanId);
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      await updateDoc(ref, {
+        status: 'rejected',
+        updated_at: new Date().toISOString().slice(0, 40),
+      });
+    } else if (extraMeta) {
+      await createDepositInFirestore({
+        id: cleanId,
+        user_id: String(extraMeta.user_id || extraMeta.customer_phone || cleanId),
+        name: String(extraMeta.customer_name || extraMeta.name || 'Avor Investor'),
+        phone: String(extraMeta.customer_phone || extraMeta.phone || '+256700000000'),
+        amount: Number(extraMeta.amount || 0),
+        status: 'rejected',
+        payment_method: extraMeta.payment_method,
+        payment_reference: extraMeta.payment_reference || cleanId,
+      });
+    }
   } catch (error) {
     try {
       handleFirestoreError(error, OperationType.UPDATE, path);
@@ -951,6 +987,7 @@ export async function createOrderInFirestore(
     status: safeStatus,
     customer_name: safeCustomerName,
     machine_title: safeName,
+    updated_at: new Date().toISOString().slice(0, 40),
     timestamp: serverTimestamp(),
   };
 
@@ -969,16 +1006,16 @@ export async function createOrderInFirestore(
     orderData.amount_invested >= 0 &&
     orderData.amount_invested <= 1000000000
   ) {
-    payload.amount_invested = orderData.amount_invested;
-    payload.amount = orderData.amount_invested;
+    payload.amount_invested = Math.round(orderData.amount_invested);
+    payload.amount = Math.round(orderData.amount_invested);
   } else if (
     typeof orderData.amount === 'number' &&
     !isNaN(orderData.amount) &&
     orderData.amount >= 0 &&
     orderData.amount <= 1000000000
   ) {
-    payload.amount = orderData.amount;
-    payload.amount_invested = orderData.amount;
+    payload.amount = Math.round(orderData.amount);
+    payload.amount_invested = Math.round(orderData.amount);
   }
   if (
     typeof orderData.daily_return === 'number' &&
@@ -986,7 +1023,7 @@ export async function createOrderInFirestore(
     orderData.daily_return >= 0 &&
     orderData.daily_return <= 1000000000
   ) {
-    payload.daily_return = orderData.daily_return;
+    payload.daily_return = Math.round(orderData.daily_return);
   }
   if (
     typeof orderData.duration_days === 'number' &&
@@ -994,7 +1031,7 @@ export async function createOrderInFirestore(
     orderData.duration_days >= 1 &&
     orderData.duration_days <= 3650
   ) {
-    payload.duration_days = orderData.duration_days;
+    payload.duration_days = Math.round(orderData.duration_days);
   }
   if (
     typeof orderData.total_return === 'number' &&
@@ -1002,7 +1039,7 @@ export async function createOrderInFirestore(
     orderData.total_return >= 0 &&
     orderData.total_return <= 1000000000
   ) {
-    payload.total_return = orderData.total_return;
+    payload.total_return = Math.round(orderData.total_return);
   }
   if (
     typeof orderData.days_elapsed === 'number' &&
@@ -1010,7 +1047,7 @@ export async function createOrderInFirestore(
     orderData.days_elapsed >= 0 &&
     orderData.days_elapsed <= 3650
   ) {
-    payload.days_elapsed = orderData.days_elapsed;
+    payload.days_elapsed = Math.round(orderData.days_elapsed);
   }
   if (
     typeof orderData.days_left === 'number' &&
@@ -1018,7 +1055,7 @@ export async function createOrderInFirestore(
     orderData.days_left >= 0 &&
     orderData.days_left <= 3650
   ) {
-    payload.days_left = orderData.days_left;
+    payload.days_left = Math.round(orderData.days_left);
   }
   if (
     typeof orderData.units === 'number' &&
@@ -1026,13 +1063,15 @@ export async function createOrderInFirestore(
     orderData.units >= 1 &&
     orderData.units <= 100
   ) {
-    payload.units = orderData.units;
+    payload.units = Math.round(orderData.units);
   }
   if (orderData.start_date && orderData.start_date.trim().length >= 1) {
     payload.start_date = orderData.start_date.trim().slice(0, 60);
+    payload.purchase_date = (orderData.purchase_date || orderData.start_date.split('T')[0]).trim().slice(0, 60);
   }
   if (orderData.end_date && orderData.end_date.trim().length >= 1) {
     payload.end_date = orderData.end_date.trim().slice(0, 60);
+    payload.ending_date = (orderData.ending_date || orderData.end_date.split('T')[0]).trim().slice(0, 60);
   }
   if (orderData.purchase_date && orderData.purchase_date.trim().length >= 1) {
     payload.purchase_date = orderData.purchase_date.trim().slice(0, 60);
@@ -1051,7 +1090,7 @@ export async function createOrderInFirestore(
   }
 
   try {
-    await setDoc(doc(db, 'orders', cleanOrderId), payload);
+    await setDoc(doc(db, 'orders', cleanOrderId), payload, { merge: true });
     return cleanOrderId;
   } catch (error) {
     try {
@@ -1117,6 +1156,26 @@ export async function confirmOrderInFirestore(
   const nowIso = new Date().toISOString().slice(0, 40);
 
   try {
+    const snap = await getDoc(orderRef);
+    if (!snap.exists()) {
+      await createOrderInFirestore({
+        id: cleanOrderId,
+        customername: String(extraUpdates?.customername || extraUpdates?.customer_name || 'Avor Investor'),
+        name: String(extraUpdates?.name || extraUpdates?.machine_title || 'Machine Order'),
+        status: 'ACTIVE & DELIVERED',
+        user_id: extraUpdates?.user_id,
+        customer_phone: extraUpdates?.customer_phone,
+        machine_id: extraUpdates?.machine_id ? String(extraUpdates.machine_id) : undefined,
+        amount_invested: Number(extraUpdates?.amount_invested || extraUpdates?.amount || 0),
+        daily_return: Number(extraUpdates?.daily_return || extraUpdates?.daily_yield || 0),
+        duration_days: Number(extraUpdates?.duration_days || 32),
+        days_elapsed: Math.max(1, Number(extraUpdates?.days_elapsed || 1)),
+        units: Number(extraUpdates?.units || 1),
+        start_date: extraUpdates?.start_date,
+        end_date: extraUpdates?.end_date,
+      });
+      return;
+    }
     await updateDoc(orderRef, {
       status: 'confirmed',
       updated_at: nowIso,
@@ -1157,6 +1216,8 @@ export async function denyOrderInFirestore(orderId: string, _extraMeta?: any): P
   const orderRef = doc(db, 'orders', cleanOrderId);
 
   try {
+    const snap = await getDoc(orderRef);
+    if (!snap.exists()) return;
     await updateDoc(orderRef, {
       status: 'denied',
       updated_at: new Date().toISOString().slice(0, 40),
@@ -1164,6 +1225,21 @@ export async function denyOrderInFirestore(orderId: string, _extraMeta?: any): P
   } catch (error) {
     try {
       handleFirestoreError(error, OperationType.UPDATE, path);
+    } catch {}
+  }
+}
+
+export async function deleteOrderFromFirestore(orderId: string): Promise<void> {
+  const cleanOrderId = orderId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+  if (!cleanOrderId) return;
+  const path = `orders/${cleanOrderId}`;
+  const orderRef = doc(db, 'orders', cleanOrderId);
+
+  try {
+    await deleteDoc(orderRef);
+  } catch (error) {
+    try {
+      handleFirestoreError(error, OperationType.DELETE, path);
     } catch {}
   }
 }
@@ -1426,7 +1502,7 @@ export async function createWithdrawalInFirestore(
   }
 
   try {
-    await setDoc(doc(db, 'withdrawals', cleanId), payload);
+    await setDoc(doc(db, 'withdrawals', cleanId), payload, { merge: true });
     return cleanId;
   } catch (error) {
     try {
@@ -1442,7 +1518,10 @@ export async function approveWithdrawalInFirestore(withdrawalId: string): Promis
   if (!cleanId) return;
   const path = `withdrawals/${cleanId}`;
   try {
-    await updateDoc(doc(db, 'withdrawals', cleanId), {
+    const ref = doc(db, 'withdrawals', cleanId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    await updateDoc(ref, {
       status: 'approved',
       updated_at: new Date().toISOString().slice(0, 40),
     });
@@ -1458,7 +1537,10 @@ export async function rejectWithdrawalInFirestore(withdrawalId: string): Promise
   if (!cleanId) return;
   const path = `withdrawals/${cleanId}`;
   try {
-    await updateDoc(doc(db, 'withdrawals', cleanId), {
+    const ref = doc(db, 'withdrawals', cleanId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    await updateDoc(ref, {
       status: 'rejected',
       updated_at: new Date().toISOString().slice(0, 40),
     });

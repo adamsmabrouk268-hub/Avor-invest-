@@ -779,6 +779,25 @@ async function hydrateRegisteredUsersFromFirestoreCloud() {
       }
     }
 
+    // 6. Hydrate Admin-edited system metrics from Firestore if present
+    try {
+      const metricsDocUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/admin_messages/system-metrics-config?key=${encodeURIComponent(apiKey)}`;
+      const metricsRes = await fetch(metricsDocUrl);
+      if (metricsRes.ok) {
+        const metricsDoc = await metricsRes.json();
+        const parsedMetrics = parseDocFields(metricsDoc?.fields);
+        if (parsedMetrics.item) {
+          try {
+            const jsonMetrics = JSON.parse(String(parsedMetrics.item));
+            if (jsonMetrics && typeof jsonMetrics === 'object') {
+              homepageConfig = { ...homepageConfig, ...jsonMetrics };
+              saveHomepageConfigToDisk(false);
+            }
+          } catch {}
+        }
+      }
+    } catch {}
+
     saveAppStateToDisk();
   } catch {}
 }
@@ -1528,7 +1547,7 @@ let depositRotationConfig: DepositRotationConfig = {
   rotation_history: [],
 };
 
-// Dynamic Homepage Configuration editable by Admin
+// Dynamic Homepage Configuration & System Metrics Overrides editable by Admin
 let homepageConfig: {
   announcement_badge: string;
   headline: string;
@@ -1540,6 +1559,14 @@ let homepageConfig: {
   rotation_mode: 'TIME_BASED' | 'ROUND_ROBIN' | 'ADMIN_MANUAL';
   active_rotation_hours: number;
   active_rotation_minutes?: number;
+  custom_total_customers?: number | null;
+  custom_machines_sold?: number | null;
+  custom_total_cycles?: number | null;
+  custom_active_cycles?: number | null;
+  custom_completed_cycles?: number | null;
+  custom_total_system_wallet?: number | null;
+  custom_total_verified_investment?: number | null;
+  custom_total_withdrawn?: number | null;
 } = {
   announcement_badge: 'Node Infrastructure Hardware',
   headline: 'Avor Invest Machine Marketplace',
@@ -1551,6 +1578,14 @@ let homepageConfig: {
   rotation_mode: 'TIME_BASED',
   active_rotation_hours: 0.0833,
   active_rotation_minutes: 5,
+  custom_total_customers: null,
+  custom_machines_sold: null,
+  custom_total_cycles: null,
+  custom_active_cycles: null,
+  custom_completed_cycles: null,
+  custom_total_system_wallet: null,
+  custom_total_verified_investment: null,
+  custom_total_withdrawn: null,
 };
 
 function loadHomepageConfigFromDisk() {
@@ -1569,7 +1604,7 @@ function loadHomepageConfigFromDisk() {
   }
 }
 
-function saveHomepageConfigToDisk() {
+function saveHomepageConfigToDisk(syncToCloud: boolean = true) {
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1579,6 +1614,53 @@ function saveHomepageConfigToDisk() {
       JSON.stringify({ homepageConfig, depositRotationConfig }, null, 2),
       'utf-8'
     );
+    if (syncToCloud) {
+      void (async () => {
+        try {
+          const projectId = firebaseAppletConfig.projectId;
+          const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+          const apiKey = firebaseAppletConfig.apiKey;
+          if (!projectId || !apiKey) return;
+          const baseDocsPath = `projects/${projectId}/databases/${databaseId}/documents`;
+          const commitUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:commit?key=${encodeURIComponent(apiKey)}`;
+          const metricsPayload = JSON.stringify({
+            custom_total_customers: homepageConfig.custom_total_customers ?? null,
+            custom_machines_sold: homepageConfig.custom_machines_sold ?? null,
+            custom_total_cycles: homepageConfig.custom_total_cycles ?? null,
+            custom_active_cycles: homepageConfig.custom_active_cycles ?? null,
+            custom_completed_cycles: homepageConfig.custom_completed_cycles ?? null,
+            custom_total_system_wallet: homepageConfig.custom_total_system_wallet ?? null,
+            custom_total_verified_investment: homepageConfig.custom_total_verified_investment ?? null,
+            custom_total_withdrawn: homepageConfig.custom_total_withdrawn ?? null,
+          }).slice(0, 950);
+          await fetch(commitUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              writes: [
+                {
+                  update: {
+                    name: `${baseDocsPath}/admin_messages/system-metrics-config`,
+                    fields: {
+                      name: { stringValue: 'SYSTEM_METRICS_CONFIG' },
+                      item: { stringValue: metricsPayload },
+                      machineTitle: { stringValue: 'USER_ACCOUNT_BACKUP' },
+                      status: { stringValue: 'CONFIRMED' },
+                    },
+                  },
+                  updateTransforms: [
+                    {
+                      fieldPath: 'timestamp',
+                      setToServerValue: 'REQUEST_TIME',
+                    },
+                  ],
+                },
+              ],
+            }),
+          });
+        } catch {}
+      })();
+    }
   } catch {}
 }
 
@@ -2247,13 +2329,37 @@ async function startServer() {
 
   // 1. Platform Global Stats Overview (No demo payments — starts at 0)
   app.get('/api/stats/overview', (req, res) => {
-    const totalInvested = investments.reduce((sum, inv) => sum + inv.amount_invested, 0);
-    const totalPayouts = investments.reduce((sum, inv) => sum + inv.total_claimed, 0);
+    const totalInvested =
+      typeof homepageConfig.custom_total_verified_investment === 'number'
+        ? homepageConfig.custom_total_verified_investment
+        : investments.reduce((sum, inv) => sum + inv.amount_invested, 0);
+    const totalPayouts =
+      typeof homepageConfig.custom_total_withdrawn === 'number'
+        ? homepageConfig.custom_total_withdrawn
+        : investments.reduce((sum, inv) => sum + inv.total_claimed, 0);
+    const machinesSoldCount =
+      typeof homepageConfig.custom_machines_sold === 'number'
+        ? homepageConfig.custom_machines_sold
+        : machines.length;
+    const totalCustomersCount =
+      typeof homepageConfig.custom_total_customers === 'number'
+        ? homepageConfig.custom_total_customers
+        : users.size;
     res.json({
       total_invested: totalInvested,
       total_payouts_delivered: totalPayouts,
-      active_machines_count: machines.length,
-      total_investors_count: users.size,
+      active_machines_count: machinesSoldCount,
+      total_investors_count: totalCustomersCount,
+      machines_sold_count: machinesSoldCount,
+      total_customers_count: totalCustomersCount,
+      total_cycles_count:
+        typeof homepageConfig.custom_total_cycles === 'number'
+          ? homepageConfig.custom_total_cycles
+          : investments.length,
+      total_system_wallet:
+        typeof homepageConfig.custom_total_system_wallet === 'number'
+          ? homepageConfig.custom_total_system_wallet
+          : 0,
       system_status: 'ONLINE_SECURE',
     });
   });
@@ -3991,17 +4097,159 @@ async function startServer() {
       notice_text,
       deposit_receiver_number,
       deposit_receiver_name,
+      custom_total_customers,
+      custom_machines_sold,
+      custom_total_cycles,
+      custom_active_cycles,
+      custom_completed_cycles,
+      custom_total_system_wallet,
+      custom_total_verified_investment,
+      custom_total_withdrawn,
     } = req.body;
 
-    if (announcement_badge) homepageConfig.announcement_badge = announcement_badge;
-    if (headline) homepageConfig.headline = headline;
-    if (subheadline) homepageConfig.subheadline = subheadline;
-    if (notice_text) homepageConfig.notice_text = notice_text;
-    if (deposit_receiver_number) homepageConfig.deposit_receiver_number = deposit_receiver_number;
-    if (deposit_receiver_name) homepageConfig.deposit_receiver_name = deposit_receiver_name;
+    if (announcement_badge !== undefined) homepageConfig.announcement_badge = announcement_badge;
+    if (headline !== undefined) homepageConfig.headline = headline;
+    if (subheadline !== undefined) homepageConfig.subheadline = subheadline;
+    if (notice_text !== undefined) homepageConfig.notice_text = notice_text;
+    if (deposit_receiver_number !== undefined) homepageConfig.deposit_receiver_number = deposit_receiver_number;
+    if (deposit_receiver_name !== undefined) homepageConfig.deposit_receiver_name = deposit_receiver_name;
+    if (custom_total_customers !== undefined) {
+      homepageConfig.custom_total_customers =
+        custom_total_customers === null || custom_total_customers === ''
+          ? null
+          : Math.max(0, Number(custom_total_customers) || 0);
+    }
+    if (custom_machines_sold !== undefined) {
+      homepageConfig.custom_machines_sold =
+        custom_machines_sold === null || custom_machines_sold === ''
+          ? null
+          : Math.max(0, Number(custom_machines_sold) || 0);
+    }
+    if (custom_total_cycles !== undefined) {
+      homepageConfig.custom_total_cycles =
+        custom_total_cycles === null || custom_total_cycles === ''
+          ? null
+          : Math.max(0, Number(custom_total_cycles) || 0);
+    }
+    if (custom_active_cycles !== undefined) {
+      homepageConfig.custom_active_cycles =
+        custom_active_cycles === null || custom_active_cycles === ''
+          ? null
+          : Math.max(0, Number(custom_active_cycles) || 0);
+    }
+    if (custom_completed_cycles !== undefined) {
+      homepageConfig.custom_completed_cycles =
+        custom_completed_cycles === null || custom_completed_cycles === ''
+          ? null
+          : Math.max(0, Number(custom_completed_cycles) || 0);
+    }
+    if (custom_total_system_wallet !== undefined) {
+      homepageConfig.custom_total_system_wallet =
+        custom_total_system_wallet === null || custom_total_system_wallet === ''
+          ? null
+          : Math.max(0, Number(custom_total_system_wallet) || 0);
+    }
+    if (custom_total_verified_investment !== undefined) {
+      homepageConfig.custom_total_verified_investment =
+        custom_total_verified_investment === null || custom_total_verified_investment === ''
+          ? null
+          : Math.max(0, Number(custom_total_verified_investment) || 0);
+    }
+    if (custom_total_withdrawn !== undefined) {
+      homepageConfig.custom_total_withdrawn =
+        custom_total_withdrawn === null || custom_total_withdrawn === ''
+          ? null
+          : Math.max(0, Number(custom_total_withdrawn) || 0);
+    }
     saveHomepageConfigToDisk();
 
-    res.json({ message: 'Homepage configuration updated successfully!', homepageConfig });
+    res.json({ message: 'Homepage & system metrics updated successfully!', homepageConfig });
+  });
+
+  // 8c. Admin Edit Global System Metrics (Machines Sold, Total Cycles, Total Customers, Total System Wallet)
+  app.post('/api/admin/config/metrics', (req, res) => {
+    const {
+      total_customers_count,
+      machines_sold_count,
+      total_cycles_count,
+      active_cycles_count,
+      completed_cycles_count,
+      total_system_wallet,
+      total_verified_investment,
+      total_withdrawn,
+      reset_to_auto,
+    } = req.body || {};
+
+    if (reset_to_auto) {
+      homepageConfig.custom_total_customers = null;
+      homepageConfig.custom_machines_sold = null;
+      homepageConfig.custom_total_cycles = null;
+      homepageConfig.custom_active_cycles = null;
+      homepageConfig.custom_completed_cycles = null;
+      homepageConfig.custom_total_system_wallet = null;
+      homepageConfig.custom_total_verified_investment = null;
+      homepageConfig.custom_total_withdrawn = null;
+      saveHomepageConfigToDisk();
+      return res.json({
+        message: 'System metrics reset to automatic live calculation.',
+        homepageConfig,
+      });
+    }
+
+    if (total_customers_count !== undefined) {
+      homepageConfig.custom_total_customers =
+        total_customers_count === null || total_customers_count === ''
+          ? null
+          : Math.max(0, Number(total_customers_count) || 0);
+    }
+    if (machines_sold_count !== undefined) {
+      homepageConfig.custom_machines_sold =
+        machines_sold_count === null || machines_sold_count === ''
+          ? null
+          : Math.max(0, Number(machines_sold_count) || 0);
+    }
+    if (total_cycles_count !== undefined) {
+      homepageConfig.custom_total_cycles =
+        total_cycles_count === null || total_cycles_count === ''
+          ? null
+          : Math.max(0, Number(total_cycles_count) || 0);
+    }
+    if (active_cycles_count !== undefined) {
+      homepageConfig.custom_active_cycles =
+        active_cycles_count === null || active_cycles_count === ''
+          ? null
+          : Math.max(0, Number(active_cycles_count) || 0);
+    }
+    if (completed_cycles_count !== undefined) {
+      homepageConfig.custom_completed_cycles =
+        completed_cycles_count === null || completed_cycles_count === ''
+          ? null
+          : Math.max(0, Number(completed_cycles_count) || 0);
+    }
+    if (total_system_wallet !== undefined) {
+      homepageConfig.custom_total_system_wallet =
+        total_system_wallet === null || total_system_wallet === ''
+          ? null
+          : Math.max(0, Number(total_system_wallet) || 0);
+    }
+    if (total_verified_investment !== undefined) {
+      homepageConfig.custom_total_verified_investment =
+        total_verified_investment === null || total_verified_investment === ''
+          ? null
+          : Math.max(0, Number(total_verified_investment) || 0);
+    }
+    if (total_withdrawn !== undefined) {
+      homepageConfig.custom_total_withdrawn =
+        total_withdrawn === null || total_withdrawn === ''
+          ? null
+          : Math.max(0, Number(total_withdrawn) || 0);
+    }
+
+    saveHomepageConfigToDisk();
+    res.json({
+      message: 'System metrics (Machines Sold, Total Cycles, Total Customers & Total System Wallet) updated!',
+      homepageConfig,
+    });
   });
 
   // =========================================================================
@@ -5239,9 +5487,42 @@ async function startServer() {
 
     const activeInfo = getActiveReceiver();
 
+    const effectiveTotalCustomers =
+      typeof homepageConfig.custom_total_customers === 'number'
+        ? homepageConfig.custom_total_customers
+        : approvedInvestments.length;
+    const effectiveMachinesSold =
+      typeof homepageConfig.custom_machines_sold === 'number'
+        ? homepageConfig.custom_machines_sold
+        : approvedInvestments.length;
+    const effectiveActiveCycles =
+      typeof homepageConfig.custom_active_cycles === 'number'
+        ? homepageConfig.custom_active_cycles
+        : activeCyclesCount;
+    const effectiveCompletedCycles =
+      typeof homepageConfig.custom_completed_cycles === 'number'
+        ? homepageConfig.custom_completed_cycles
+        : completedCyclesCount;
+    const effectiveTotalCycles =
+      typeof homepageConfig.custom_total_cycles === 'number'
+        ? homepageConfig.custom_total_cycles
+        : effectiveActiveCycles + effectiveCompletedCycles;
+    const effectiveTotalSystemWallet =
+      typeof homepageConfig.custom_total_system_wallet === 'number'
+        ? homepageConfig.custom_total_system_wallet
+        : totalSystemWallet;
+    const effectiveTotalVerifiedInvestment =
+      typeof homepageConfig.custom_total_verified_investment === 'number'
+        ? homepageConfig.custom_total_verified_investment
+        : totalVerifiedInvestment;
+    const effectiveTotalWithdrawn =
+      typeof homepageConfig.custom_total_withdrawn === 'number'
+        ? homepageConfig.custom_total_withdrawn
+        : totalWithdrawn;
+
     res.json({
-      total_users: approvedInvestments.length,
-      total_customers_count: approvedInvestments.length,
+      total_users: effectiveTotalCustomers,
+      total_customers_count: effectiveTotalCustomers,
       registered_users_count: userList.length,
       users: userList,
       withdrawals,
@@ -5251,14 +5532,15 @@ async function startServer() {
       pending_withdrawals_count: pendingWithdrawals.length,
       pending_deposits_count: pendingDeposits.length,
       total_deposited: totalDeposited,
-      total_system_wallet: totalSystemWallet,
-      total_withdrawn: totalWithdrawn,
-      total_investments_count: approvedInvestments.length,
-      machines_sold_count: approvedInvestments.length,
-      active_cycles_count: activeCyclesCount,
-      completed_cycles_count: completedCyclesCount,
+      total_system_wallet: effectiveTotalSystemWallet,
+      total_withdrawn: effectiveTotalWithdrawn,
+      total_investments_count: effectiveMachinesSold,
+      machines_sold_count: effectiveMachinesSold,
+      total_cycles_count: effectiveTotalCycles,
+      active_cycles_count: effectiveActiveCycles,
+      completed_cycles_count: effectiveCompletedCycles,
       pending_cycles_count: pendingCyclesCount,
-      total_verified_investment: totalVerifiedInvestment,
+      total_verified_investment: effectiveTotalVerifiedInvestment,
       homepage_config: homepageConfig,
       deposit_receiver_numbers: depositReceiverNumbers,
       deposit_rotation_config: depositRotationConfig,
@@ -6571,6 +6853,125 @@ async function startServer() {
         targetUser.is_suspended ? 'SUSPENDED' : 'ACTIVE'
       }.`,
       user: targetUser,
+    });
+  });
+
+  // Admin Edit Customer Management Details (Name, Phone, Balance, Wallet Balance, Machine Access Status, Referral Code, Password)
+  app.post('/api/admin/user/edit', (req, res) => {
+    const {
+      user_id,
+      full_name,
+      phone_number,
+      balance,
+      wallet_balance,
+      has_bought_machine,
+      referral_code,
+      password,
+    } = req.body || {};
+
+    const targetUser = Array.from(users.values()).find((u) => u.id === user_id);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Customer not found.' });
+    }
+
+    if (typeof full_name === 'string' && full_name.trim().length > 0) {
+      targetUser.full_name = full_name.trim();
+      targetUser.name = full_name.trim();
+    }
+    if (typeof phone_number === 'string' && phone_number.trim().length > 0) {
+      targetUser.phone_number = phone_number.trim();
+      targetUser.phoneNumber = phone_number.trim();
+      users.set(phone_number.trim(), targetUser);
+    }
+    if (balance !== undefined && !isNaN(Number(balance))) {
+      targetUser.balance = Math.max(0, Number(balance));
+    }
+    if (wallet_balance !== undefined && !isNaN(Number(wallet_balance))) {
+      const safeWallet = Math.max(0, Number(wallet_balance));
+      targetUser.wallet_balance = safeWallet;
+      targetUser.available_wallet = safeWallet;
+    }
+    if (typeof has_bought_machine === 'boolean') {
+      targetUser.has_bought_machine = has_bought_machine;
+    }
+    if (typeof referral_code === 'string' && referral_code.trim().length > 0) {
+      targetUser.referral_code = referral_code.trim();
+    }
+    if (typeof password === 'string' && password.trim().length > 0) {
+      targetUser.password = password.trim();
+      targetUser.password_hash = bcrypt.hashSync(password.trim(), 10);
+    }
+
+    saveRegisteredUserToDisk(targetUser);
+    saveAppStateToDisk();
+
+    return res.json({
+      message: `Customer ${targetUser.full_name} (${targetUser.phone_number}) updated and saved permanently!`,
+      user: targetUser,
+    });
+  });
+
+  // Admin Remove or Delete a Running Machine Cycle by Removing Machine
+  app.post('/api/admin/investments/remove', (req, res) => {
+    const { investment_id, user_id, refund_wallet } = req.body || {};
+    if (!investment_id) {
+      return res.status(400).json({ error: 'Machine cycle ID is required.' });
+    }
+
+    const invIdx = investments.findIndex((i) => i.id === investment_id);
+    const removedInv = invIdx >= 0 ? investments[invIdx] : null;
+    const ownerUserId = removedInv?.user_id || user_id;
+    const machineTitle = removedInv?.machine_title || 'Machine Cycle';
+
+    if (invIdx >= 0) {
+      investments.splice(invIdx, 1);
+    }
+
+    // Permanently block this removed cycle ID from re-hydrating
+    DELETED_DEMO_IDS.add(String(investment_id));
+    saveDeletedIdsToDisk();
+
+    // Update customer's active machine status if they have no other active/completed machines
+    const targetUser = ownerUserId
+      ? Array.from(users.values()).find((u) => u.id === ownerUserId)
+      : undefined;
+    if (targetUser) {
+      if (refund_wallet && removedInv && Number(removedInv.amount_invested) > 0) {
+        const refundAmt = Number(removedInv.amount_invested || 0);
+        targetUser.wallet_balance = Number(targetUser.wallet_balance || 0) + refundAmt;
+        targetUser.available_wallet = targetUser.wallet_balance;
+      }
+      const remainingActiveOrDone = investments.some(
+        (i) =>
+          i.user_id === targetUser.id &&
+          (i.status === 'ACTIVE' || i.status === 'PAYOUT_COMPLETE')
+      );
+      targetUser.has_bought_machine = remainingActiveOrDone;
+      saveRegisteredUserToDisk(targetUser);
+    }
+
+    saveAppStateToDisk();
+
+    // Also delete from Firestore `orders` collection via REST API
+    void (async () => {
+      try {
+        const projectId = firebaseAppletConfig.projectId;
+        const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
+        const apiKey = firebaseAppletConfig.apiKey;
+        if (!projectId || !apiKey) return;
+        const cleanOrderId = String(investment_id)
+          .replace(/[^a-zA-Z0-9_-]/g, '')
+          .slice(0, 120);
+        if (!cleanOrderId) return;
+        const deleteUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/orders/${encodeURIComponent(cleanOrderId)}?key=${encodeURIComponent(apiKey)}`;
+        await fetch(deleteUrl, { method: 'DELETE' });
+      } catch {}
+    })();
+
+    return res.json({
+      message: `Removed machine & deleted running cycle (${machineTitle} • ${investment_id})!`,
+      removed_id: investment_id,
+      user: targetUser || null,
     });
   });
 
