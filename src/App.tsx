@@ -160,7 +160,20 @@ export default function App() {
           const map = new Map<string, Machine>();
           for (const m of prev) map.set(m.id, m);
           for (const fm of fbMachines) {
-            map.set(fm.id, { ...(map.get(fm.id) || {}), ...(fm as unknown as Machine) });
+            const existing = map.get(fm.id) || ({} as Partial<Machine>);
+            const merged: Machine = { ...existing, ...(fm as unknown as Machine) };
+            if (merged.id === 'mach-avclass-i' || merged.category === 'AV_CLASS_I' || merged.series_tag === 'I class') {
+              if (merged.price === 9000000 || merged.total_cost === 9000000 || merged.total_return === 25000000) {
+                merged.price = 12000000;
+                merged.total_cost = 12000000;
+                merged.total_return = 30000000;
+                merged.daily_yield = 1428571;
+                merged.rewardAmount = 1428571;
+              }
+              merged.required_referral_buyers = 1200;
+              merged.referral_reward_ugx = 10000000;
+            }
+            map.set(fm.id, merged);
           }
           return Array.from(map.values());
         });
@@ -595,7 +608,7 @@ export default function App() {
     'F class': 120,
     'G class': 300,
     'H class': 5000,
-    'I class': 10000,
+    'I class': 1200,
   };
 
   const handleSelectMachineToBuy = (m: Machine) => {

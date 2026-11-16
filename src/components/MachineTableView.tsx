@@ -20,7 +20,7 @@ const DEFAULT_CLASS_INVITES: Record<string, number> = {
   'F class': 120,
   'G class': 300,
   'H class': 5000,
-  'I class': 10000,
+  'I class': 1200,
 };
 
 export const MachineTableView: React.FC<MachineTableViewProps> = ({

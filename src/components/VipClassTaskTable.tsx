@@ -20,7 +20,7 @@ export const VIP_CLASS_REQUIREMENTS: VipClassRequirement[] = [
   { classLevel: 'F', name: 'F class', requiredInvites: 120, rewardUGX: 850000, tag: 'Class F' },
   { classLevel: 'G', name: 'G class', requiredInvites: 300, rewardUGX: 1200000, tag: 'Class G' },
   { classLevel: 'H', name: 'H class', requiredInvites: 5000, rewardUGX: 3000000, tag: 'Class H' },
-  { classLevel: 'I', name: 'I class', requiredInvites: 10000, rewardUGX: 8500000, tag: 'Class I' },
+  { classLevel: 'I', name: 'I class', requiredInvites: 1200, rewardUGX: 10000000, tag: 'Class I' },
 ];
 
 interface VipClassTaskTableProps {

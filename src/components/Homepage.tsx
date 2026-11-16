@@ -795,7 +795,7 @@ export const Homepage: React.FC<HomepageProps> = ({
               </span>
             </div>
             <p className="text-[11px] text-slate-300 leading-snug">
-              <strong>30,000 – 9,000,000 UGX</strong> • <strong>21 Days</strong> • Counts throughout the week returning up to <strong>25,000,000 UGX</strong>.
+              <strong>30,000 – 12,000,000 UGX</strong> • <strong>21 Days</strong> • Counts throughout the week returning up to <strong>30,000,000 UGX</strong>.
             </p>
             <div className="flex items-center justify-between pt-1 text-[10px] font-mono text-emerald-300">
               <span>Counts Throughout Week</span>
@@ -1495,7 +1495,7 @@ export const Homepage: React.FC<HomepageProps> = ({
                         <span>• Class F (120 Customers → 850k Reward): 900,000 UGX → 1,900,000 UGX</span><br />
                         <span>• Class G (300 Customers → 1.2M Reward): 1,300,000 UGX → 3,000,000 UGX</span><br />
                         <span>• Class H (5,000 Customers → 3M Reward): 3,100,000 UGX → 7,000,000 UGX</span><br />
-                        <span>• Class I (10,000 Customers → 8.5M Reward): 9,000,000 UGX → 25,000,000 UGX</span>
+                        <span>• Class I (1,200 Customers → 10M Reward): 12,000,000 UGX → 30,000,000 UGX</span>
                       </div>
                     </div>
                   </div>

@@ -190,10 +190,17 @@ function loadAppStateFromDisk() {
             return {
               ...m,
               description: def.description,
+              total_cost: m.id === 'mach-avclass-i' ? def.total_cost : (m.total_cost || def.total_cost),
+              price: m.id === 'mach-avclass-i' ? def.price : (m.price || def.price),
+              daily_yield: m.id === 'mach-avclass-i' ? def.daily_yield : (m.daily_yield || def.daily_yield),
+              rewardAmount: m.id === 'mach-avclass-i' ? def.rewardAmount : (m.rewardAmount || def.rewardAmount),
+              estimated_return_pct: m.id === 'mach-avclass-i' ? def.estimated_return_pct : (m.estimated_return_pct || def.estimated_return_pct),
               total_return: def.total_return,
               runs_everyday: def.runs_everyday,
               runs_on_weekends: def.runs_on_weekends,
               running_schedule_text: def.running_schedule_text,
+              required_referral_buyers: def.required_referral_buyers ?? m.required_referral_buyers,
+              referral_reward_ugx: def.referral_reward_ugx ?? m.referral_reward_ugx,
             };
           }
           return m;
@@ -3844,7 +3851,7 @@ async function startServer() {
       F: { required: 120, reward: 850000, name: 'F class (120 Customers)' },
       G: { required: 300, reward: 1200000, name: 'G class (300 Customers)' },
       H: { required: 5000, reward: 3000000, name: 'H class (5000 Customers)' },
-      I: { required: 10000, reward: 8500000, name: 'I class (10000 Customers)' },
+      I: { required: 1200, reward: 10000000, name: 'I class (1200 Customers)' },
     };
 
     const tierKey = (tier || '').toString().toUpperCase();

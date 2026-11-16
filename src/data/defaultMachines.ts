@@ -595,7 +595,7 @@ export const DEFAULT_MACHINES: Machine[] = [
     created_at: new Date().toISOString(),
   },
 
-  // Class I: 10,000 customers -> Reward 8,500,000 | Cost: 9,000,000 | 21 days | Returns: 25,000,000
+  // Class I: 1,200 customers -> Reward 10,000,000 | Cost: 12,000,000 | 21 days | Returns: 30,000,000
   {
     id: 'mach-avclass-i',
     title: 'Avor Invest AV Class I Supreme Genesis',
@@ -603,24 +603,24 @@ export const DEFAULT_MACHINES: Machine[] = [
     category: 'AV_CLASS_I',
     series_tag: 'I class',
     series: 'AVclasses I class',
-    description: 'Unlocked after bringing 10,000 customers who joined using your shared link and bought a machine. Reward: 8,500,000 UGX credited to account. Cost: 9,000,000 UGX - 21 days giving back 25,000,000 UGX. Counts throughout the week. Wallet only.',
-    total_cost: 9000000,
-    price: 9000000,
+    description: 'Unlocked after bringing 1,200 customers who joined using your shared link and bought a machine. Reward: 10,000,000 UGX credited to account. Cost: 12,000,000 UGX - 21 days giving back 30,000,000 UGX. Counts throughout the week. Wallet only.',
+    total_cost: 12000000,
+    price: 12000000,
     funded_amount: 0,
-    estimated_return_pct: 278,
-    daily_yield: 1190476, // 25,000,000 / 21
-    rewardAmount: 1190476,
+    estimated_return_pct: 250,
+    daily_yield: 1428571, // 30,000,000 / 21
+    rewardAmount: 1428571,
     duration_days: 21,
     lockDurationMinutes: 21 * 24 * 60,
-    total_return: 25000000,
+    total_return: 30000000,
     status: 'FUNDING',
     hashrate_or_capacity: '50.0 GH/s AV Class I',
     power_consumption: '25000W Hypergrid',
     expected_usage: 'Counts throughout the week. Wallet only purchase.',
     available_units: 3,
     vip_level_required: 0,
-    required_referral_buyers: 10000,
-    referral_reward_ugx: 8500000,
+    required_referral_buyers: 1200,
+    referral_reward_ugx: 10000000,
     is_av_class: true,
     runs_everyday: true,
     runs_on_weekends: true,

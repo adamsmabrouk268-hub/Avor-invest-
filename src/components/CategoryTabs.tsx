@@ -23,7 +23,7 @@ const CLASS_SUB_TABS: Array<{ id: MachineCategory; label: string; requiredInvite
   { id: 'AV_CLASS_F', label: 'F class', requiredInvites: 120 },
   { id: 'AV_CLASS_G', label: 'G class', requiredInvites: 300 },
   { id: 'AV_CLASS_H', label: 'H class', requiredInvites: 5000 },
-  { id: 'AV_CLASS_I', label: 'I class', requiredInvites: 10000 },
+  { id: 'AV_CLASS_I', label: 'I class', requiredInvites: 1200 },
 ];
 
 export const CategoryTabs: React.FC<CategoryTabsProps> = ({
